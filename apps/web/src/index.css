@@ -1,0 +1,144 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  font-family: 'Outfit', sans-serif;
+  overflow-x: clip;
+  line-height: 1.625;
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+  -webkit-font-smoothing: antialiased;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+@layer base {
+  :root {
+    /* Calm, clean, welcoming design system */
+    --background: 60 20% 98%; /* Warm off-white */
+    --foreground: 220 20% 20%; /* Slate gray for text, softer than black */
+    
+    --primary: 173 40% 40%; /* Calm Teal / Sage */
+    --primary-foreground: 0 0% 100%;
+    
+    --secondary: 40 20% 92%; /* Warm beige/sand */
+    --secondary-foreground: 220 20% 25%;
+    
+    --destructive: 15 80% 55%; /* Softer orange-red */
+    --destructive-foreground: 0 0% 100%;
+    
+    --muted: 60 10% 94%; /* Very light grayish yellow */
+    --muted-foreground: 220 15% 45%;
+    
+    --accent: 173 40% 40%;
+    --accent-foreground: 0 0% 100%;
+    
+    --card: 0 0% 100%;
+    --card-foreground: 220 20% 20%;
+    
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 20% 20%;
+    
+    --border: 60 15% 90%;
+    --input: 60 15% 90%;
+    --ring: 173 40% 40%;
+    
+    --radius: 0.5rem;
+  }
+  
+  .dark {
+    /* Muted dark mode, avoiding pure black */
+    --background: 220 15% 10%;
+    --foreground: 60 15% 90%;
+    
+    --primary: 173 35% 50%;
+    --primary-foreground: 220 15% 10%;
+    
+    --secondary: 220 15% 16%;
+    --secondary-foreground: 60 15% 90%;
+    
+    --destructive: 15 70% 60%;
+    --destructive-foreground: 220 15% 10%;
+    
+    --muted: 220 15% 14%;
+    --muted-foreground: 220 10% 65%;
+    
+    --accent: 173 35% 50%;
+    --accent-foreground: 220 15% 10%;
+    
+    --card: 220 15% 12%;
+    --card-foreground: 60 15% 90%;
+    
+    --popover: 220 15% 12%;
+    --popover-foreground: 60 15% 90%;
+    
+    --border: 220 15% 18%;
+    --input: 220 15% 18%;
+    --ring: 173 35% 50%;
+  }
+
+  /* Typography defaults for visual rhythm */
+  h1, h2, h3, h4, h5, h6 {
+    text-wrap: balance;
+    font-weight: 500;
+    line-height: 1.2;
+    letter-spacing: 0;
+    color: hsl(var(--foreground));
+  }
+
+  h1 { font-size: 2.5rem; }
+  h2 { font-size: 1.75rem; }
+  h3 { font-size: 1.25rem; }
+}
+
+@layer components {
+  .page-container {
+    @apply max-w-5xl mx-auto px-4 sm:px-6 lg:px-8;
+  }
+  
+  .section-spacing {
+    @apply py-12 md:py-20;
+  }
+  
+  .card-hover {
+    @apply transition-all duration-300 border border-border shadow-sm bg-card;
+  }
+  
+  .card-hover:hover {
+    @apply -translate-y-1 shadow-md border-primary/20;
+  }
+
+  *:focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
+}
+
+@layer utilities {
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .low-stimulation .card-hover,
+  .low-stimulation .shadow-sm,
+  .low-stimulation .shadow-md,
+  .low-stimulation .shadow-lg {
+    box-shadow: none !important;
+  }
+
+  .low-stimulation .bg-primary,
+  .low-stimulation .text-primary,
+  .low-stimulation .border-primary,
+  .low-stimulation .bg-destructive,
+  .low-stimulation .text-destructive {
+    filter: saturate(0.7);
+  }
+
+  .low-stimulation .secondary-badge {
+    display: none;
+  }
+}

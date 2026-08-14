@@ -1,0 +1,21 @@
+# dependencies
+node_modules/
+
+# build outputs
+dist/
+coverage/
+*.log
+
+# env and secrets
+.env
+**/.env
+**/.env.*
+
+# runtime data
+apps/pocketbase/pb_data/
+apps/pocketbase/pb_data_dev/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
