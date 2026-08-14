@@ -27,6 +27,7 @@ import Header from '@/components/Header.jsx';
 import Sidebar from '@/components/Sidebar.jsx';
 import MobileNav from '@/components/MobileNav.jsx';
 import TaskCard from '@/components/TaskCard.jsx';
+import TaskModal from '@/components/TaskModal.jsx';
 import ManualTimeDialog from '@/components/ManualTimeDialog.jsx';
 import { useTaskContext } from '@/hooks/useTaskContext.js';
 import { Card, CardContent } from '@/components/ui/card';
@@ -215,7 +216,7 @@ const FILE_PROVIDER_OPTIONS = [
 ];
 
 export default function ProjectsPage() {
-  const { tasks, completeTask, reopenTask, updateTask } = useTaskContext();
+  const { tasks, addTask, completeTask, reopenTask, updateTask } = useTaskContext();
 
   const [selectedProject, setSelectedProject] = useState(null);
   const [activeTab, setActiveTab] = useState('visao-geral');
@@ -236,6 +237,7 @@ export default function ProjectsPage() {
   const [isManualTimeOpen, setIsManualTimeOpen] = useState(false);
   const [isDeleteSessionDialogOpen, setIsDeleteSessionDialogOpen] = useState(false);
   const [sessionToDelete, setSessionToDelete] = useState(null);
+  const [isCreateTaskDialogOpen, setIsCreateTaskDialogOpen] = useState(false);
   const [isReopenTaskDialogOpen, setIsReopenTaskDialogOpen] = useState(false);
   const [reopenTaskTarget, setReopenTaskTarget] = useState(null);
   const [isGenericDeleteDialogOpen, setIsGenericDeleteDialogOpen] = useState(false);
@@ -1202,6 +1204,24 @@ export default function ProjectsPage() {
     });
   };
 
+  const handleCreateTaskForProject = async (taskPayload) => {
+    if (!selectedProject) return;
+
+    try {
+      await addTask({
+        ...taskPayload,
+        project: selectedProject
+      });
+      setTaskFilter('abertas');
+      setIsCreateTaskDialogOpen(false);
+      refreshWorkspaceData(selectedProject);
+      toast.success('Tarefa criada no projeto.');
+    } catch (error) {
+      console.error(error);
+      toast.error('Nao foi possivel criar a tarefa neste projeto.');
+    }
+  };
+
   const togglePasswordVisibility = (id) => {
     setVisiblePasswords((current) => ({ ...current, [id]: !current[id] }));
   };
@@ -1918,15 +1938,20 @@ export default function ProjectsPage() {
                         <CardContent className="p-6 space-y-4">
                           <div className="flex flex-wrap items-center justify-between gap-3">
                             <h2 className="text-xl font-medium">Tarefas relacionadas ao projeto</h2>
-                            <Select value={taskFilter} onValueChange={setTaskFilter}>
-                              <SelectTrigger className="w-[220px]"><SelectValue /></SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="abertas">Abertas</SelectItem>
-                                <SelectItem value="concluidas">Concluídas</SelectItem>
-                                <SelectItem value="arquivadas">Arquivadas</SelectItem>
-                                <SelectItem value="todas">Todas</SelectItem>
-                              </SelectContent>
-                            </Select>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Select value={taskFilter} onValueChange={setTaskFilter}>
+                                <SelectTrigger className="w-[220px]"><SelectValue /></SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="abertas">Abertas</SelectItem>
+                                  <SelectItem value="concluidas">Concluídas</SelectItem>
+                                  <SelectItem value="arquivadas">Arquivadas</SelectItem>
+                                  <SelectItem value="todas">Todas</SelectItem>
+                                </SelectContent>
+                              </Select>
+                              <Button onClick={() => setIsCreateTaskDialogOpen(true)}>
+                                <Plus className="w-4 h-4 mr-2" /> Adicionar tarefa
+                              </Button>
+                            </div>
                           </div>
 
                           {projectTasksForFilter.length === 0 ? (
@@ -2518,6 +2543,27 @@ export default function ProjectsPage() {
           tasks={projectAllTasks}
           onSaved={() => refreshWorkspaceData(selectedProject)}
         />
+
+        <Dialog open={isCreateTaskDialogOpen} onOpenChange={setIsCreateTaskDialogOpen}>
+          <DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Nova tarefa do projeto</DialogTitle>
+              <DialogDescription>
+                Cadastre uma tarefa sem sair da área do projeto.
+              </DialogDescription>
+            </DialogHeader>
+            <TaskModal
+              task={{
+                project: selectedProject || '',
+                taskType: 'Desenvolvimento',
+                periodoSugerido: 'manhã',
+                energiaNecessaria: 'Média'
+              }}
+              onSubmit={handleCreateTaskForProject}
+              onCancel={() => setIsCreateTaskDialogOpen(false)}
+            />
+          </DialogContent>
+        </Dialog>
 
         <Dialog open={isNewFolderDialogOpen} onOpenChange={setIsNewFolderDialogOpen}>
           <DialogContent className="max-w-md">

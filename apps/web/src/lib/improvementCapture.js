@@ -67,6 +67,8 @@ export async function saveImprovementForLater({
   const scheduleDate = getScheduledDateByReview(reviewWhen);
   const priorityFields = getPriorityFields(priority);
   const includeNow = Boolean(includeInToday);
+  const suggestedPeriod = includeNow ? 'manhã' : 'tarde';
+  const executionDifficulty = includeNow ? 'Direta' : 'Tem atrito';
 
   const fullDescription = [
     cleanDescription,
@@ -89,9 +91,11 @@ export async function saveImprovementForLater({
     urgency: priorityFields.urgency,
     scheduledDate: includeNow ? formatDateToIso(new Date()) : scheduleDate,
     dataSugeridaExecucao: includeNow ? formatDateToIso(new Date()) : scheduleDate,
+    periodoSugerido: suggestedPeriod,
+    scheduledPeriod: suggestedPeriod,
     timeEstimate: includeNow ? 30 : 45,
     energiaNecessaria: includeNow ? 'Média' : 'Baixa',
-    executionDifficulty: includeNow ? 'direta' : 'atrito'
+    executionDifficulty
   };
 
   return addTask(taskPayload);
