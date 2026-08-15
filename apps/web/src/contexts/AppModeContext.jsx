@@ -12,7 +12,7 @@ import {
 
 const AppModeContext = createContext();
 
-export const DAILY_MODE_NAV_PATHS = ['/', '/descarregar-mente', '/aguardando-retorno', '/projects', '/relatorios'];
+export const DAILY_MODE_NAV_PATHS = ['/', '/descarregar-mente', '/aguardando-retorno', '/projects', '/relatorios', '/guia'];
 
 const DAILY_ALLOWED_PATHS = new Set([
   '/',
@@ -20,6 +20,7 @@ const DAILY_ALLOWED_PATHS = new Set([
   '/aguardando-retorno',
   '/projects',
   '/relatorios',
+  '/guia',
   '/foco'
 ]);
 

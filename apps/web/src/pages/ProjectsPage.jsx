@@ -2556,7 +2556,6 @@ export default function ProjectsPage() {
               task={{
                 project: selectedProject || '',
                 taskType: 'Desenvolvimento',
-                periodoSugerido: 'manhã',
                 energiaNecessaria: 'Média'
               }}
               onSubmit={handleCreateTaskForProject}

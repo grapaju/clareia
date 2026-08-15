@@ -10,7 +10,25 @@ import { generateMicrotasks } from '@/lib/microtaskRules';
 import MicrotaskList from './MicrotaskList.jsx';
 import { normalizeMicrotasks } from '@/lib/taskExecution.js';
 
+function getTodayIso() {
+  return new Date().toISOString().split('T')[0];
+}
+
+function getSuggestedPeriodByNow() {
+  const hour = new Date().getHours();
+  if (hour < 12) return 'manhã';
+  if (hour < 18) return 'tarde';
+  return 'noite';
+}
+
+function resolveSuggestedPeriod(dateIso, explicitPeriod) {
+  if (explicitPeriod) return explicitPeriod;
+  if (dateIso === getTodayIso()) return getSuggestedPeriodByNow();
+  return 'manhã';
+}
+
 export default function TaskModal({ task, onSubmit, onCancel }) {
+  const today = getTodayIso();
   const [formData, setFormData] = useState({
     title: '',
     project: '',
@@ -18,8 +36,8 @@ export default function TaskModal({ task, onSubmit, onCancel }) {
     nextAction: '',
     timeEstimate: '',
     dueDate: '',
-    dataSugeridaExecucao: new Date().toISOString().split('T')[0],
-    periodoSugerido: 'manhã',
+    dataSugeridaExecucao: today,
+    periodoSugerido: getSuggestedPeriodByNow(),
     energiaNecessaria: 'Média',
     status: 'pendente',
     microtarefas: []
@@ -27,6 +45,7 @@ export default function TaskModal({ task, onSubmit, onCancel }) {
 
   useEffect(() => {
     if (task) {
+      const scheduledDate = task.dataSugeridaExecucao ? task.dataSugeridaExecucao.split('T')[0] : today;
       setFormData({
         title: task.title || '',
         project: task.project || '',
@@ -34,18 +53,28 @@ export default function TaskModal({ task, onSubmit, onCancel }) {
         nextAction: task.nextAction || '',
         timeEstimate: task.timeEstimate || '',
         dueDate: task.dueDate ? task.dueDate.split('T')[0] : '',
-        dataSugeridaExecucao: task.dataSugeridaExecucao ? task.dataSugeridaExecucao.split('T')[0] : new Date().toISOString().split('T')[0],
-        periodoSugerido: task.periodoSugerido || 'manhã',
+        dataSugeridaExecucao: scheduledDate,
+        periodoSugerido: resolveSuggestedPeriod(scheduledDate, task.periodoSugerido),
         energiaNecessaria: task.energiaNecessaria || 'Média',
         status: task.status || 'pendente',
         microtarefas: normalizeMicrotasks(task.microtarefas || [], task.id || '')
       });
     }
-  }, [task]);
+  }, [task, today]);
 
   const handleChange = (field, value) => {
     setFormData(prev => {
       const updated = { ...prev, [field]: value };
+
+      if (field === 'dataSugeridaExecucao') {
+        const previousDate = prev.dataSugeridaExecucao;
+        const previousPeriod = prev.periodoSugerido;
+        const previousWasAuto = previousDate === getTodayIso() ? previousPeriod === getSuggestedPeriodByNow() : previousPeriod === 'manhã';
+
+        if (previousWasAuto) {
+          updated.periodoSugerido = value === getTodayIso() ? getSuggestedPeriodByNow() : 'manhã';
+        }
+      }
       
       // Auto-generate microtasks if time > 60 or specific keywords found in title
       if (field === 'title' || field === 'timeEstimate' || field === 'taskType') {

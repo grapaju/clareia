@@ -29,6 +29,33 @@ const STATUSES = ['pendente', 'em_andamento', 'pausada', 'concluida', 'aguardand
 const EXECUTION_DIFFICULTIES = ['Rápida', 'Direta', 'Exige foco', 'Tem atrito', 'Grande demais'];
 const RECURRENCE_FREQUENCIES = ['Nenhuma', 'Semanal', 'Mensal'];
 
+function getTodayIso() {
+  return new Date().toISOString().split('T')[0];
+}
+
+function getSuggestedPeriodByNow() {
+  const hour = new Date().getHours();
+  if (hour < 12) return 'Manhã';
+  if (hour < 18) return 'Tarde';
+  return 'Noite';
+}
+
+function normalizePeriodValue(value, scheduledDate) {
+  const text = String(value || '').trim().toLocaleLowerCase('pt-BR');
+  if (text.includes('manh')) return 'Manhã';
+  if (text.includes('tard')) return 'Tarde';
+  if (text.includes('noit')) return 'Noite';
+  if (text.includes('hor')) return 'Horário específico';
+
+  if (scheduledDate === getTodayIso()) return getSuggestedPeriodByNow();
+  return 'Manhã';
+}
+
+function getAutoPeriodForDate(dateIso) {
+  if (dateIso === getTodayIso()) return getSuggestedPeriodByNow();
+  return 'Manhã';
+}
+
 export default function EditTaskModal({ task, isOpen, onClose }) {
   const { updateTask, deleteTask, refreshTasks } = useTaskContext();
   const [formData, setFormData] = useState({});
@@ -38,6 +65,10 @@ export default function EditTaskModal({ task, isOpen, onClose }) {
 
   useEffect(() => {
     if (task && isOpen) {
+      const scheduledDate = (task.scheduledDate || task.dataSugeridaExecucao)
+        ? (task.scheduledDate || task.dataSugeridaExecucao).split('T')[0]
+        : getTodayIso();
+
       setFormData({
         title: task.title || '',
         project: task.project || '',
@@ -45,8 +76,8 @@ export default function EditTaskModal({ task, isOpen, onClose }) {
         nextAction: task.nextAction || '',
         timeEstimate: task.timeEstimate || '',
         dueDate: task.dueDate ? task.dueDate.split('T')[0] : '',
-        dataSugeridaExecucao: (task.scheduledDate || task.dataSugeridaExecucao) ? (task.scheduledDate || task.dataSugeridaExecucao).split('T')[0] : new Date().toISOString().split('T')[0],
-        periodoSugerido: task.scheduledPeriod || task.periodoSugerido || 'Manhã',
+        dataSugeridaExecucao: scheduledDate,
+        periodoSugerido: normalizePeriodValue(task.scheduledPeriod || task.periodoSugerido, scheduledDate),
         energiaNecessaria: task.energiaNecessaria || 'Média',
         importance: task.importance || 'Média',
         urgency: task.urgency || 'Média',
@@ -61,7 +92,19 @@ export default function EditTaskModal({ task, isOpen, onClose }) {
   }, [task, isOpen]);
 
   const handleChange = (field, value) => {
-    setFormData(prev => ({ ...prev, [field]: value }));
+    setFormData(prev => {
+      const updated = { ...prev, [field]: value };
+
+      if (field === 'dataSugeridaExecucao') {
+        const previousDate = prev.dataSugeridaExecucao;
+        const previousWasAuto = prev.periodoSugerido === getAutoPeriodForDate(previousDate);
+        if (previousWasAuto) {
+          updated.periodoSugerido = getAutoPeriodForDate(value);
+        }
+      }
+
+      return updated;
+    });
     setIsDirty(true);
   };
 

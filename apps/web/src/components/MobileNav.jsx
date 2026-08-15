@@ -1,7 +1,7 @@
 
 import React from 'react';
 import { useLocation, Link } from 'react-router-dom';
-import { Home, Sparkles, FolderKanban, Settings, NotebookPen, Clock3, BarChart3, CalendarDays } from 'lucide-react';
+import { Home, Sparkles, FolderKanban, Settings, NotebookPen, Clock3, BarChart3, CalendarDays, BookOpen } from 'lucide-react';
 import { Repeat } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAppMode } from '@/contexts/AppModeContext.jsx';
@@ -16,6 +16,7 @@ const navItems = [
   { icon: FolderKanban, label: 'Projetos', path: '/projects' },
   { icon: BarChart3, label: 'Relat.', path: '/relatorios' },
   { icon: Settings, label: 'Config.', path: '/configuracoes' },
+  { icon: BookOpen, label: 'Guia', path: '/guia' },
 ];
 
 export default function MobileNav() {

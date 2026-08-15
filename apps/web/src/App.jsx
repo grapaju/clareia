@@ -22,6 +22,7 @@ import WaitingReturnPage from './pages/WaitingReturnPage.jsx';
 import RoutinesPage from './pages/RoutinesPage.jsx';
 import ReportsPage from './pages/ReportsPage.jsx';
 import CalendarPage from './pages/CalendarPage.jsx';
+import GuidePage from './pages/GuidePage.jsx';
 
 function App() {
   const withProtectedMode = (element) => (
@@ -53,6 +54,7 @@ function App() {
                 <Route path="/foco" element={withProtectedMode(<FocusPage />)} />
                 <Route path="/calendario" element={withProtectedMode(<CalendarPage />)} />
                 <Route path="/relatorios" element={withProtectedMode(<ReportsPage />)} />
+                <Route path="/guia" element={withProtectedMode(<GuidePage />)} />
                 <Route path="/configuracoes" element={withProtectedMode(<SettingsPage />)} />
                 
                 <Route path="*" element={withProtectedMode(<HomePage />)} />

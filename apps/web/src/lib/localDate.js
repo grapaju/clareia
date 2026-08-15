@@ -2,7 +2,8 @@ export function parseLocalDate(value) {
   if (value instanceof Date) return new Date(value.getFullYear(), value.getMonth(), value.getDate());
 
   if (typeof value === 'string') {
-    const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    // Treat any ISO-like date string by its calendar date part to avoid TZ shifts.
+    const match = value.match(/^(\d{4})-(\d{2})-(\d{2})(?:$|[T\s].*)/);
     if (match) {
       const year = Number(match[1]);
       const month = Number(match[2]) - 1;
