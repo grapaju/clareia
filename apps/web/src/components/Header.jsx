@@ -226,6 +226,9 @@ export default function Header({ notificationCount = 0, onOpenNotifications }) {
                     <DropdownMenuItem onClick={() => navigate('/configuracoes')}>
                       Ajustar regras de desenvolvimento
                     </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => navigate('/conta')}>
+                      Minha conta
+                    </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
 

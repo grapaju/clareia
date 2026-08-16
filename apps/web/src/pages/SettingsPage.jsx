@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Helmet } from 'react-helmet';
+import { useNavigate } from 'react-router-dom';
 import { Settings, RotateCcw } from 'lucide-react';
 import Header from '@/components/Header.jsx';
 import Sidebar from '@/components/Sidebar.jsx';
@@ -28,6 +29,7 @@ const WEEK_DAYS = [
 ];
 
 export default function SettingsPage() {
+  const navigate = useNavigate();
   const { clearDailyCheckIn } = useTaskContext();
   const { lowStimulationMode, toggleLowStimulationMode } = useTheme();
   const { developmentLock, updateDevelopmentLock } = useAppMode();
@@ -242,6 +244,18 @@ export default function SettingsPage() {
                       </div>
                     </div>
                   )}
+                </CardContent>
+              </Card>
+
+              <Card className="bg-card border-border shadow-sm mb-6">
+                <CardContent className="p-6 space-y-4">
+                  <div>
+                    <h2 className="text-lg font-medium text-foreground mb-2">Integração com Google Drive</h2>
+                    <p className="text-sm text-muted-foreground">Abra o fluxo guiado de OAuth para conectar a conta Google e ativar sincronização automática de documentos.</p>
+                  </div>
+                  <Button variant="outline" onClick={() => navigate('/integracoes/google-drive-oauth')}>
+                    Abrir guia de conexão OAuth
+                  </Button>
                 </CardContent>
               </Card>
 

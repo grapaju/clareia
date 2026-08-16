@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Helmet } from 'react-helmet';
 import {
   ArrowLeft,
@@ -74,6 +75,13 @@ import {
   renameProjectDriveConfig,
   saveProjectDriveConfig
 } from '@/services/projectDriveConfigService.js';
+import {
+  bootstrapGoogleDriveProjectFolders,
+  getGoogleDriveAuthUrl,
+  getGoogleDriveProjectFolderConfig,
+  getGoogleDriveStatus,
+  syncGoogleDriveDocument
+} from '@/services/googleDriveIntegrationService.js';
 import { createProjectLink, deleteProjectLink, getProjectLinkTypes, listFavoriteProjectLinks, listProjectLinks, updateProjectLink } from '@/services/projectLinkService.js';
 import { createProjectAccess, deleteProjectAccess, listProjectAccesses, updateProjectAccess } from '@/services/projectAccessService.js';
 import { createProjectNote, deleteProjectNote, listProjectNotes, listRecentProjectNotes, updateProjectNote } from '@/services/projectNoteService.js';
@@ -217,6 +225,7 @@ const FILE_PROVIDER_OPTIONS = [
 
 export default function ProjectsPage() {
   const { tasks, addTask, completeTask, reopenTask, updateTask } = useTaskContext();
+  const navigate = useNavigate();
 
   const [selectedProject, setSelectedProject] = useState(null);
   const [activeTab, setActiveTab] = useState('visao-geral');
@@ -265,6 +274,10 @@ export default function ProjectsPage() {
   const [isAdvancedDetailsOpen, setIsAdvancedDetailsOpen] = useState(false);
   const [editingMaterialId, setEditingMaterialId] = useState(null);
   const [projectDriveConfig, setProjectDriveConfig] = useState(null);
+  const [driveConnectionStatus, setDriveConnectionStatus] = useState({ connected: false });
+  const [isConnectingDrive, setIsConnectingDrive] = useState(false);
+  const [isBootstrappingDriveFolders, setIsBootstrappingDriveFolders] = useState(false);
+  const [isSyncingDriveMaterial, setIsSyncingDriveMaterial] = useState(false);
   const [driveConfigForm, setDriveConfigForm] = useState({
     folderName: '',
     driveFolderUrl: '',
@@ -284,6 +297,7 @@ export default function ProjectsPage() {
     provider: 'external_link',
     driveFileId: '',
     driveFolderId: '',
+    autoSyncDrive: false,
     storageProvider: 'local',
     relatedTaskId: 'none',
     favorite: false
@@ -328,6 +342,18 @@ export default function ProjectsPage() {
     setProfiles(readProjectProfiles());
   }, []);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const url = new URL(window.location.href);
+    if (url.searchParams.get('driveConnected') !== '1') return;
+
+    toast.success('Google Drive conectado com sucesso.');
+    url.searchParams.delete('driveConnected');
+    url.searchParams.delete('driveProject');
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+  }, []);
+
   const projectsSet = useMemo(() => {
     const set = new Set([
       ...tasks.map((item) => normalizeText(item.project)).filter(Boolean),
@@ -341,25 +367,74 @@ export default function ProjectsPage() {
   const selectedProfile = useMemo(() => profiles.find((item) => item.name === selectedProject) || null, [profiles, selectedProject]);
 
   useEffect(() => {
-    if (!selectedProject) {
-      setProjectDriveConfig(null);
-      setDriveConfigForm({
-        folderName: '',
-        driveFolderUrl: '',
-        driveFolderId: '',
-        status: 'conectado manualmente'
-      });
-      return;
-    }
+    let isMounted = true;
 
-    const config = getProjectDriveConfig(selectedProject);
-    setProjectDriveConfig(config);
-    setDriveConfigForm({
-      folderName: config?.folderName || selectedProject,
-      driveFolderUrl: config?.driveFolderUrl || '',
-      driveFolderId: config?.driveFolderId || '',
-      status: config?.status || 'conectado manualmente'
-    });
+    const loadDriveConfig = async () => {
+      if (!selectedProject) {
+        if (!isMounted) return;
+        setProjectDriveConfig(null);
+        setDriveConnectionStatus({ connected: false });
+        setDriveConfigForm({
+          folderName: '',
+          driveFolderUrl: '',
+          driveFolderId: '',
+          status: 'conectado manualmente'
+        });
+        return;
+      }
+
+      const localConfig = getProjectDriveConfig(selectedProject);
+      if (!isMounted) return;
+
+      setProjectDriveConfig(localConfig);
+      setDriveConfigForm({
+        folderName: localConfig?.folderName || selectedProject,
+        driveFolderUrl: localConfig?.driveFolderUrl || '',
+        driveFolderId: localConfig?.driveFolderId || '',
+        status: localConfig?.status || 'conectado manualmente'
+      });
+
+      try {
+        const [status, apiConfig] = await Promise.all([
+          getGoogleDriveStatus(),
+          getGoogleDriveProjectFolderConfig(selectedProject)
+        ]);
+
+        if (!isMounted) return;
+
+        setDriveConnectionStatus(status || { connected: false });
+
+        if (apiConfig?.rootFolderUrl) {
+          const syncedConfig = saveProjectDriveConfig({
+            projectId: selectedProject,
+            driveFolderUrl: apiConfig.rootFolderUrl,
+            driveFolderId: apiConfig.rootFolderId,
+            folderName: apiConfig.projectName || selectedProject,
+            status: status?.connected ? 'conectado automaticamente' : 'conectado manualmente',
+            connectionType: status?.connected ? 'oauth' : 'manual'
+          });
+
+          if (!isMounted) return;
+
+          setProjectDriveConfig(syncedConfig);
+          setDriveConfigForm({
+            folderName: syncedConfig?.folderName || selectedProject,
+            driveFolderUrl: syncedConfig?.driveFolderUrl || '',
+            driveFolderId: syncedConfig?.driveFolderId || '',
+            status: syncedConfig?.status || 'conectado automaticamente'
+          });
+        }
+      } catch {
+        if (!isMounted) return;
+        setDriveConnectionStatus({ connected: false });
+      }
+    };
+
+    loadDriveConfig();
+
+    return () => {
+      isMounted = false;
+    };
   }, [selectedProject]);
 
   const projectTasks = useMemo(
@@ -905,6 +980,40 @@ export default function ProjectsPage() {
   const handleCreateDriveDefaultSubfolders = () => {
     if (!selectedProject) return;
 
+    if (driveConnectionStatus?.connected) {
+      setIsBootstrappingDriveFolders(true);
+      bootstrapGoogleDriveProjectFolders({
+        projectId: selectedProject,
+        projectName: selectedProject,
+        projectType: selectedProfile?.projectType || 'Administrativo',
+        parentFolderId: normalizeText(driveConfigForm.driveFolderId) || undefined
+      }).then((result) => {
+        if (result?.rootFolderUrl) {
+          const synced = saveProjectDriveConfig({
+            projectId: selectedProject,
+            driveFolderUrl: result.rootFolderUrl,
+            driveFolderId: result.rootFolderId,
+            folderName: result.projectName || selectedProject,
+            status: 'conectado automaticamente',
+            connectionType: 'oauth'
+          });
+
+          setProjectDriveConfig(synced);
+          setDriveConfigForm((current) => ({
+            ...current,
+            folderName: synced?.folderName || selectedProject,
+            driveFolderUrl: synced?.driveFolderUrl || current.driveFolderUrl,
+            driveFolderId: synced?.driveFolderId || current.driveFolderId,
+            status: synced?.status || 'conectado automaticamente'
+          }));
+        }
+      }).catch((error) => {
+        toast.error(error?.message || 'Nao foi possivel criar subpastas no Google Drive.');
+      }).finally(() => {
+        setIsBootstrappingDriveFolders(false);
+      });
+    }
+
     const foldersToCreate = getDriveDefaultSubfoldersByType(selectedProfile?.projectType || 'Administrativo');
     const existingNames = new Set(listProjectFolders(selectedProject).map((item) => String(item.name || '').toLocaleLowerCase('pt-BR')));
 
@@ -930,9 +1039,65 @@ export default function ProjectsPage() {
     toast.success(`${created.length} subpasta(s) criada(s).`);
   };
 
-  const handleFutureDriveUpload = () => {
-    // FUTURO: integrar com OAuth Google, criacao/listagem de arquivos e upload automatico.
-    toast.info('Integracao automatica com Google Drive sera adicionada depois. Por enquanto, salve o arquivo no Drive e cole o link aqui.');
+  const handleConnectGoogleDriveAutomatic = async () => {
+    if (!selectedProject) return;
+
+    try {
+      setIsConnectingDrive(true);
+
+      const response = await getGoogleDriveAuthUrl({
+        projectId: selectedProject,
+        projectName: selectedProject,
+        projectType: selectedProfile?.projectType || 'Administrativo',
+        returnTo: '/projects'
+      });
+
+      if (!response?.authUrl) {
+        toast.error('Nao foi possivel iniciar a conexao com Google Drive.');
+        return;
+      }
+
+      window.location.href = response.authUrl;
+    } catch (error) {
+      toast.error(error?.message || 'Falha ao iniciar a autenticacao no Google Drive.');
+    } finally {
+      setIsConnectingDrive(false);
+    }
+  };
+
+  const handleFutureDriveUpload = async () => {
+    if (!driveConnectionStatus?.connected) {
+      toast.info('Conecte o Google Drive primeiro para habilitar automacao.');
+      await handleConnectGoogleDriveAutomatic();
+      return;
+    }
+
+    toast.info('Conexao automatica ativa. O upload de arquivos sera o proximo passo do fluxo.');
+  };
+
+  const buildDriveDocumentContent = () => {
+    const sections = [];
+    const cleanDescription = normalizeText(fileForm.description);
+    const cleanOrigin = normalizeText(fileForm.origin);
+    const cleanTags = toArray(fileForm.tags);
+
+    if (cleanDescription) {
+      sections.push(`Descricao: ${cleanDescription}`);
+    }
+
+    if (cleanOrigin) {
+      sections.push(`Origem: ${cleanOrigin}`);
+    }
+
+    if (cleanTags.length) {
+      sections.push(`Tags: ${cleanTags.join(', ')}`);
+    }
+
+    if (!sections.length) {
+      sections.push(`Material do projeto ${selectedProject}.`);
+    }
+
+    return sections.join('\n\n');
   };
 
   const handleAddFolder = () => {
@@ -1018,7 +1183,7 @@ export default function ProjectsPage() {
     setCurrentFolderId(current?.parentId || null);
   };
 
-  const handleSaveMaterial = () => {
+  const handleSaveMaterial = async () => {
     if (!selectedProject) return;
 
     const topFolderSuggestion = folderSuggestions[0] || null;
@@ -1028,6 +1193,41 @@ export default function ProjectsPage() {
     const inferredFolder = fileForm.folder || topFolderSuggestion?.folder || '';
     const provider = fileForm.provider || (fileForm.materialType === 'google_drive' ? 'google_drive' : 'external_link');
     const driveFolderIdFromUrl = extractDriveFolderId(fileForm.externalLink);
+    const shouldSyncInDrive =
+      (provider === 'google_drive' || provider === 'google_drive_upload_future')
+      && Boolean(fileForm.autoSyncDrive);
+
+    let driveSyncResult = null;
+
+    if (shouldSyncInDrive) {
+      if (!driveConnectionStatus?.connected) {
+        toast.error('Conecte o Google Drive antes de criar/atualizar documentos automaticamente.');
+        return;
+      }
+
+      if (!normalizeText(fileForm.name)) {
+        toast.error('Informe o nome do material para sincronizar no Google Drive.');
+        return;
+      }
+
+      try {
+        setIsSyncingDriveMaterial(true);
+        driveSyncResult = await syncGoogleDriveDocument({
+          projectId: selectedProject,
+          projectName: selectedProject,
+          projectType: selectedProfile?.projectType || 'Administrativo',
+          driveFolderId: normalizeText(fileForm.driveFolderId) || normalizeText(projectDriveConfig?.driveFolderId) || undefined,
+          driveFileId: normalizeText(fileForm.driveFileId) || undefined,
+          fileName: normalizeText(fileForm.name),
+          content: buildDriveDocumentContent(),
+        });
+      } catch (error) {
+        toast.error(error?.message || 'Nao foi possivel sincronizar o documento no Google Drive.');
+        return;
+      } finally {
+        setIsSyncingDriveMaterial(false);
+      }
+    }
 
     const payload = {
       ...fileForm,
@@ -1041,14 +1241,15 @@ export default function ProjectsPage() {
       type: fileForm.type || fileForm.materialType,
       provider,
       storageProvider: provider,
-      driveFileId: fileForm.driveFileId,
+      driveFileId: driveSyncResult?.driveFileId || fileForm.driveFileId,
       driveFolderId:
+        driveSyncResult?.driveFolderId ||
         fileForm.driveFolderId ||
         projectDriveConfig?.driveFolderId ||
         driveFolderIdFromUrl ||
         '',
-      url: fileForm.externalLink,
-      externalLink: fileForm.externalLink
+      url: driveSyncResult?.webViewLink || fileForm.externalLink,
+      externalLink: driveSyncResult?.webViewLink || fileForm.externalLink
     };
 
     const created = editingMaterialId
@@ -1072,6 +1273,7 @@ export default function ProjectsPage() {
       provider: 'external_link',
       driveFileId: '',
       driveFolderId: '',
+      autoSyncDrive: false,
       storageProvider: 'local',
       relatedTaskId: 'none',
       favorite: false
@@ -1083,6 +1285,9 @@ export default function ProjectsPage() {
 
     const baseAction = editingMaterialId ? 'Material atualizado' : 'Material cadastrado';
     let historyDetails = created.name;
+    if (driveSyncResult?.driveFileId) {
+      historyDetails = `${historyDetails} | Google Drive: ${driveSyncResult.updated ? 'documento atualizado' : 'documento criado'}`;
+    }
     if (autoSuggestionApplied && topFolderSuggestion) {
       const confidenceLabel = topFolderSuggestion.confidence === 'alta'
         ? 'alta'
@@ -1108,6 +1313,7 @@ export default function ProjectsPage() {
       provider: material.provider || material.storageProvider || 'external_link',
       driveFileId: material.driveFileId || '',
       driveFolderId: material.driveFolderId || '',
+      autoSyncDrive: Boolean(material.driveFileId),
       storageProvider: material.storageProvider || 'local',
       relatedTaskId: material.relatedTaskId || material.relatedTaskIds?.[0] || 'none',
       favorite: Boolean(material.favorite)
@@ -2645,7 +2851,12 @@ export default function ProjectsPage() {
                 <Label>Modo de cadastro</Label>
                 <Select
                   value={fileForm.provider}
-                  onValueChange={(value) => setFileForm((current) => ({ ...current, provider: value, storageProvider: value }))}
+                  onValueChange={(value) => setFileForm((current) => ({
+                    ...current,
+                    provider: value,
+                    storageProvider: value,
+                    autoSyncDrive: value === 'google_drive' || value === 'google_drive_upload_future'
+                  }))}
                 >
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -2677,6 +2888,14 @@ export default function ProjectsPage() {
                       onChange={(event) => setFileForm((current) => ({ ...current, driveFolderId: event.target.value }))}
                       placeholder="ID da pasta no Drive"
                     />
+                  </div>
+                  <div className="space-y-2 md:col-span-2 flex items-center gap-2 rounded-lg border border-border px-3 py-2">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(fileForm.autoSyncDrive)}
+                      onChange={(event) => setFileForm((current) => ({ ...current, autoSyncDrive: event.target.checked }))}
+                    />
+                    <p className="text-sm text-muted-foreground">Criar/atualizar documento automaticamente no Google Drive ao salvar</p>
                   </div>
                 </>
               )}
@@ -2754,40 +2973,44 @@ export default function ProjectsPage() {
               </div>
               <div className="md:col-span-2 rounded-lg border border-dashed border-border p-3 text-sm text-muted-foreground space-y-2">
                 <p>
-                  FUTURO: envio automatico para Google Drive com OAuth, permissao de acesso, upload e listagem de arquivos.
+                  Integracao com Google Drive ativa por OAuth. Ao marcar sincronizacao automatica, o Clareia cria ou atualiza um documento de texto no Drive e salva o link no material.
                 </p>
                 <Button size="sm" variant="outline" onClick={handleFutureDriveUpload}>
-                  Enviar para Google Drive
+                  Conectar ou validar Google Drive
                 </Button>
               </div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setIsMaterialDialogOpen(false)}>Cancelar</Button>
-              <Button onClick={handleSaveMaterial}>{editingMaterialId ? 'Salvar alteracoes' : 'Adicionar material'}</Button>
+              <Button onClick={handleSaveMaterial} disabled={isSyncingDriveMaterial}>
+                {isSyncingDriveMaterial ? 'Sincronizando...' : editingMaterialId ? 'Salvar alteracoes' : 'Adicionar material'}
+              </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
 
         <Dialog open={isDriveDialogOpen} onOpenChange={setIsDriveDialogOpen}>
-          <DialogContent className="max-w-lg">
+          <DialogContent className="w-[calc(100vw-1.5rem)] max-w-lg overflow-hidden">
             <DialogHeader>
               <DialogTitle>{projectDriveConfig ? 'Alterar conexao do Google Drive' : 'Conectar Google Drive'}</DialogTitle>
               <DialogDescription>
-                Configure uma unica vez por projeto. Integracao automatica com Google Drive sera adicionada depois.
+                Configure uma unica vez por projeto. Voce pode conectar manualmente ou usar a conexao automatica via OAuth.
               </DialogDescription>
             </DialogHeader>
-            <div className="space-y-3">
-              <div className="space-y-2">
-                <Label>Nome da pasta principal</Label>
+            <div className="space-y-3 min-w-0">
+              <div className="space-y-2 min-w-0">
+                <Label className="break-words">Nome da pasta principal</Label>
                 <Input
+                  className="w-full min-w-0"
                   value={driveConfigForm.folderName}
                   onChange={(event) => setDriveConfigForm((current) => ({ ...current, folderName: event.target.value }))}
                   placeholder="Ex.: Expocentro"
                 />
               </div>
-              <div className="space-y-2">
-                <Label>Link da pasta do Google Drive</Label>
+              <div className="space-y-2 min-w-0">
+                <Label className="break-words">Link da pasta do Google Drive</Label>
                 <Input
+                  className="w-full min-w-0"
                   value={driveConfigForm.driveFolderUrl}
                   onChange={(event) => {
                     const nextUrl = event.target.value;
@@ -2801,23 +3024,40 @@ export default function ProjectsPage() {
                   placeholder="https://drive.google.com/drive/folders/..."
                 />
               </div>
-              <div className="space-y-2">
-                <Label>driveFolderId</Label>
+              <div className="space-y-2 min-w-0">
+                <Label className="break-words">driveFolderId</Label>
                 <Input
+                  className="w-full min-w-0"
                   value={driveConfigForm.driveFolderId}
                   onChange={(event) => setDriveConfigForm((current) => ({ ...current, driveFolderId: event.target.value }))}
                   placeholder="Extraido da URL quando possivel"
                 />
               </div>
-              <div className="space-y-2">
-                <Label>Status</Label>
-                <Input value={driveConfigForm.status || 'conectado manualmente'} readOnly className="bg-muted/40" />
+              <div className="space-y-2 min-w-0">
+                <Label className="break-words">Status</Label>
+                <Input value={driveConfigForm.status || 'conectado manualmente'} readOnly className="w-full min-w-0 bg-muted/40" />
               </div>
             </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={handleCreateDriveDefaultSubfolders}>Criar subpastas padrao</Button>
-              <Button variant="outline" onClick={() => setIsDriveDialogOpen(false)}>Fechar</Button>
+            <DialogFooter className="gap-2 sm:justify-end sm:flex-wrap">
+              <Button className="w-full sm:w-auto" variant="outline" onClick={handleCreateDriveDefaultSubfolders} disabled={isBootstrappingDriveFolders}>
+                {isBootstrappingDriveFolders ? 'Criando...' : 'Criar subpastas padrao'}
+              </Button>
+              <Button className="w-full sm:w-auto" variant="outline" onClick={handleConnectGoogleDriveAutomatic} disabled={isConnectingDrive}>
+                {isConnectingDrive ? 'Conectando...' : 'Conectar automatico'}
+              </Button>
               <Button
+                className="w-full sm:w-auto"
+                variant="outline"
+                onClick={() => {
+                  setIsDriveDialogOpen(false);
+                  navigate('/integracoes/google-drive-oauth');
+                }}
+              >
+                Ver guia OAuth
+              </Button>
+              <Button className="w-full sm:w-auto" variant="outline" onClick={() => setIsDriveDialogOpen(false)}>Fechar</Button>
+              <Button
+                className="w-full sm:w-auto"
                 onClick={() => {
                   const ok = handleSaveProjectDriveConfig();
                   if (ok) setIsDriveDialogOpen(false);

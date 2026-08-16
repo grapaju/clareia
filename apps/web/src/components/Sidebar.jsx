@@ -1,7 +1,7 @@
 
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { Home, FolderKanban, Sparkles, Settings, NotebookPen, Clock3, BarChart3, CalendarDays, BookOpen } from 'lucide-react';
+import { Home, FolderKanban, Sparkles, Settings, NotebookPen, Clock3, BarChart3, CalendarDays, BookOpen, UserRound } from 'lucide-react';
 import { Repeat } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAppMode } from '@/contexts/AppModeContext.jsx';
@@ -16,6 +16,7 @@ const navItems = [
   { icon: FolderKanban, label: 'Projetos', path: '/projects' },
   { icon: BarChart3, label: 'Relatórios', path: '/relatorios' },
   { icon: Settings, label: 'Configurações', path: '/configuracoes' },
+  { icon: UserRound, label: 'Conta', path: '/conta' },
   { icon: BookOpen, label: 'Guia de uso', path: '/guia' },
 ];
 

@@ -50,11 +50,38 @@ export function AuthProvider({ children }) {
     toast.success('Sessão encerrada com sucesso.');
   };
 
+  const changePassword = async ({ currentPassword, newPassword, newPasswordConfirm }) => {
+    const userId = currentUser?.id;
+
+    if (!userId) {
+      return { success: false, error: 'Sessao invalida. Faca login novamente.' };
+    }
+
+    try {
+      await pb.collection('users').update(userId, {
+        oldPassword: currentPassword,
+        password: newPassword,
+        passwordConfirm: newPasswordConfirm,
+      }, { $autoCancel: false });
+
+      const refreshed = await pb.collection('users').authRefresh({ $autoCancel: false });
+      setCurrentUser(refreshed?.record || pb.authStore.model);
+
+      return { success: true };
+    } catch (error) {
+      console.error(error);
+      const fallbackMessage = 'Nao foi possivel alterar a senha. Verifique a senha atual e tente novamente.';
+      const parsedMessage = error?.response?.message || error?.message;
+      return { success: false, error: parsedMessage || fallbackMessage };
+    }
+  };
+
   const value = {
     currentUser,
     isAuthenticated: pb.authStore.isValid,
     login,
     signup,
+    changePassword,
     logout,
     isLoading
   };

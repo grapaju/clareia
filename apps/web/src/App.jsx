@@ -18,6 +18,8 @@ import PrioritiesPage from './pages/PrioritiesPage.jsx';
 import ProjectsPage from './pages/ProjectsPage.jsx';
 import FocusPage from './pages/FocusPage.jsx';
 import SettingsPage from './pages/SettingsPage.jsx';
+import AccountPage from './pages/AccountPage.jsx';
+import GoogleDriveOAuthPage from './pages/GoogleDriveOAuthPage.jsx';
 import WaitingReturnPage from './pages/WaitingReturnPage.jsx';
 import RoutinesPage from './pages/RoutinesPage.jsx';
 import ReportsPage from './pages/ReportsPage.jsx';
@@ -56,6 +58,8 @@ function App() {
                 <Route path="/relatorios" element={withProtectedMode(<ReportsPage />)} />
                 <Route path="/guia" element={withProtectedMode(<GuidePage />)} />
                 <Route path="/configuracoes" element={withProtectedMode(<SettingsPage />)} />
+                <Route path="/conta" element={withProtectedMode(<AccountPage />)} />
+                <Route path="/integracoes/google-drive-oauth" element={withProtectedMode(<GoogleDriveOAuthPage />)} />
                 
                 <Route path="*" element={withProtectedMode(<HomePage />)} />
               </Routes>
