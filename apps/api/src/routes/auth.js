@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { runQuery } from '../db/postgres.js';
 import { pocketbaseAuth } from '../middleware/pocketbase-auth.js';
@@ -46,11 +47,12 @@ router.post('/signup', async (req, res) => {
   }
 
   const passwordHash = await bcrypt.hash(password, 10);
+  const userId = crypto.randomUUID();
   const created = await runQuery(
-    `INSERT INTO users (email, password_hash, name)
-     VALUES ($1, $2, $3)
+    `INSERT INTO users (id, email, password_hash, name)
+     VALUES ($1, $2, $3, $4)
      RETURNING id, email, name, current_account_id, created_at, updated_at`,
-    [email, passwordHash, name]
+    [userId, email, passwordHash, name]
   );
 
   const user = sanitizeUser(created.rows[0]);
