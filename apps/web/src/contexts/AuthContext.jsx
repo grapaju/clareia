@@ -1,26 +1,67 @@
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import pb from '@/lib/pocketbaseClient.js';
 import { toast } from 'sonner';
+import {
+  changePasswordWithApi,
+  clearAuthSession,
+  getMeFromApi,
+  getStoredAuthToken,
+  getStoredAuthUser,
+  loginWithApi,
+  saveAuthSession,
+  signupWithApi,
+} from '@/services/authApiService.js';
 
 const AuthContext = createContext();
 
 export function AuthProvider({ children }) {
-  const [currentUser, setCurrentUser] = useState(pb.authStore.model);
+  const [currentUser, setCurrentUser] = useState(() => getStoredAuthUser());
+  const [token, setToken] = useState(() => getStoredAuthToken());
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = pb.authStore.onChange((token, model) => {
-      setCurrentUser(model);
-    });
-    setIsLoading(false);
-    return () => unsubscribe();
+    let mounted = true;
+
+    const bootstrap = async () => {
+      if (!token) {
+        if (mounted) setIsLoading(false);
+        return;
+      }
+
+      try {
+        const result = await getMeFromApi();
+        if (mounted && result?.user) {
+          setCurrentUser(result.user);
+          saveAuthSession({ token, user: result.user });
+        }
+      } catch {
+        clearAuthSession();
+        if (mounted) {
+          setCurrentUser(null);
+          setToken('');
+        }
+      } finally {
+        if (mounted) setIsLoading(false);
+      }
+    };
+
+    bootstrap();
+
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   const login = async (email, password) => {
     try {
-      const authData = await pb.collection('users').authWithPassword(email, password, { $autoCancel: false });
-      setCurrentUser(authData.record);
+      const authData = await loginWithApi({ email, password });
+      if (!authData?.token || !authData?.user) {
+        return { success: false, error: 'Resposta de login invalida.' };
+      }
+
+      saveAuthSession({ token: authData.token, user: authData.user });
+      setToken(authData.token);
+      setCurrentUser(authData.user);
       return { success: true };
     } catch (error) {
       console.error(error);
@@ -30,13 +71,19 @@ export function AuthProvider({ children }) {
 
   const signup = async (email, password, passwordConfirm) => {
     try {
-      await pb.collection('users').create({
+      const authData = await signupWithApi({
         email,
         password,
         passwordConfirm,
-      }, { $autoCancel: false });
-      
-      await login(email, password);
+      });
+
+      if (!authData?.token || !authData?.user) {
+        return { success: false, error: 'Resposta de cadastro invalida.' };
+      }
+
+      saveAuthSession({ token: authData.token, user: authData.user });
+      setToken(authData.token);
+      setCurrentUser(authData.user);
       return { success: true };
     } catch (error) {
       console.error(error);
@@ -45,27 +92,29 @@ export function AuthProvider({ children }) {
   };
 
   const logout = () => {
-    pb.authStore.clear();
+    clearAuthSession();
+    setToken('');
     setCurrentUser(null);
     toast.success('Sessão encerrada com sucesso.');
   };
 
   const changePassword = async ({ currentPassword, newPassword, newPasswordConfirm }) => {
-    const userId = currentUser?.id;
-
-    if (!userId) {
+    if (!currentUser?.id) {
       return { success: false, error: 'Sessao invalida. Faca login novamente.' };
     }
 
     try {
-      await pb.collection('users').update(userId, {
-        oldPassword: currentPassword,
-        password: newPassword,
-        passwordConfirm: newPasswordConfirm,
-      }, { $autoCancel: false });
+      await changePasswordWithApi({
+        currentPassword,
+        newPassword,
+        newPasswordConfirm,
+      });
 
-      const refreshed = await pb.collection('users').authRefresh({ $autoCancel: false });
-      setCurrentUser(refreshed?.record || pb.authStore.model);
+      const refreshed = await getMeFromApi();
+      if (refreshed?.user) {
+        setCurrentUser(refreshed.user);
+        saveAuthSession({ token, user: refreshed.user });
+      }
 
       return { success: true };
     } catch (error) {
@@ -78,7 +127,7 @@ export function AuthProvider({ children }) {
 
   const value = {
     currentUser,
-    isAuthenticated: pb.authStore.isValid,
+    isAuthenticated: Boolean(token && currentUser?.id),
     login,
     signup,
     changePassword,

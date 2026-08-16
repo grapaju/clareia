@@ -2,12 +2,14 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
+import path from 'node:path';
 
 import routes from './routes/index.js';
 import { errorMiddleware } from './middleware/error.js';
 import { globalRateLimit } from './middleware/global-rate-limit.js';
 import logger from './utils/logger.js';
 import { BodyLimit } from './constants/common.js';
+import { ensurePostgresSchema } from './db/init.js';
 
 const app = express();
 
@@ -49,6 +51,7 @@ app.use(express.urlencoded({
 	extended: true,
 	limit: BodyLimit,
 }));
+app.use('/uploads', express.static(path.resolve(process.cwd(), 'uploads')));
 
 app.use('/', routes());
 
@@ -60,8 +63,15 @@ app.use((req, res) => {
 
 const port = process.env.PORT || 3005;
 
-app.listen(port, () => {
-	logger.info(`🚀 API Server running on http://localhost:${port}`);
-});
+ensurePostgresSchema()
+	.then(() => {
+		app.listen(port, () => {
+			logger.info(`🚀 API Server running on http://localhost:${port}`);
+		});
+	})
+	.catch((error) => {
+		logger.error('Falha ao inicializar schema PostgreSQL:', error);
+		process.exit(1);
+	});
 
 export default app;

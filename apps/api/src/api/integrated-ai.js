@@ -1,8 +1,11 @@
 import process from 'node:process';
+import path from 'node:path';
+import fs from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { PassThrough, Readable } from 'node:stream';
 import { NodeEnv } from '../constants/common.js';
 import logger from '../utils/logger.js';
-import pocketbaseClient from '../utils/pocketbaseClient.js';
+import { runQuery } from '../db/postgres.js';
 
 const MessageRole = Object.freeze({
 	User: 'user',
@@ -146,22 +149,30 @@ const SquashableSSEEventTypes = new Set([
  */
 
 /**
- * Uploads images to PocketBase and returns their URLs.
+ * Uploads images locally and returns public URLs served by the API.
  *
  * @param {{ files: Express.Multer.File[] }} params
  * @returns {Promise<string[]>}
  */
 export async function uploadImagesToPocketBase({ images }) {
+	const uploadsDir = path.resolve(process.cwd(), 'uploads', 'integrated-ai');
+	await fs.mkdir(uploadsDir, { recursive: true });
+
 	const uploadPromises = images.map(async (file) => {
-		const formData = new FormData();
-		const blob = new Blob([file.buffer], { type: file.mimetype });
-		formData.append('file', blob, file.originalname);
+		const extension = path.extname(file.originalname || '') || '.bin';
+		const filename = `${Date.now()}-${randomUUID().slice(0, 8)}${extension}`;
+		const absolutePath = path.join(uploadsDir, filename);
 
-		const record = await pocketbaseClient.collection('_integratedAiImages').create(formData);
+		await fs.writeFile(absolutePath, file.buffer);
 
-		const url = pocketbaseClient.files.getURL(record, record.file);
+		const relativePath = `integrated-ai/${filename}`;
+		const publicPath = `/hcgi/api/uploads/${relativePath}`;
 
-		return url.replace('http://localhost:8090', `https://${process.env.WEBSITE_DOMAIN}/hcgi/platform`);
+		if (process.env.WEBSITE_DOMAIN) {
+			return `https://${process.env.WEBSITE_DOMAIN}${publicPath}`;
+		}
+
+		return publicPath;
 	});
 
 	return Promise.all(uploadPromises);
@@ -169,7 +180,7 @@ export async function uploadImagesToPocketBase({ images }) {
 
 /**
  * Sends a message to the AI proxy and pipes SSE events to the client.
- * Assistant message is saved to PocketBase when the stream ends.
+ * Assistant message is saved to PostgreSQL when the stream ends.
  * This method should be used for text/text, image/text, image/image, text/image combinations.
  *
  * @param {{ userId: string, systemPrompt: string, userMessage: ContentBlock[] }} params
@@ -220,7 +231,7 @@ export async function stream({ userId, systemPrompt, userMessage }) {
 
 /**
  * Consumes an SSE stream branch, parses history-relevant events,
- * and saves the assistant message to PocketBase.
+ * and saves the assistant message to PostgreSQL.
  *
  * @param {{ userId: string, stream: ReadableStream, userMessage: ContentBlock[] }} params
  * @returns {Promise<void>}
@@ -290,15 +301,13 @@ async function parseSSEEvents({ stream }) {
  * @returns {Promise<object>}
  */
 async function saveMessages({ userId, messages }) {
-	const batch = pocketbaseClient.createBatch();
-
-	messages.map(message => batch.collection('_integratedAiMessages').create({
-		...(userId && { userId }),
-		role: message.role,
-		content: message.content,
-	}));
-
-	await batch.send();
+	for (const message of messages) {
+		await runQuery(
+			`INSERT INTO integrated_ai_messages (user_id, role, content)
+			 VALUES ($1::uuid, $2, $3::jsonb)`,
+			[userId || null, message.role, JSON.stringify(message.content)]
+		);
+	}
 }
 
 /**
@@ -312,10 +321,15 @@ export async function getHistory({ userId }) {
 		return [];
 	}
 
-	const records = await pocketbaseClient.collection('_integratedAiMessages').getFullList({
-		sort: 'created',
-		...(userId && { filter: pocketbaseClient.filter('userId = {:userId}', { userId }) }),
-	});
+	const result = await runQuery(
+		`SELECT role, content
+		 FROM integrated_ai_messages
+		 WHERE user_id = $1::uuid
+		 ORDER BY created_at ASC`,
+		[userId]
+	);
+
+	const records = result.rows.map((row) => ({ role: row.role, content: row.content }));
 
 	/** @type {HistoryMessage[]} */
 	const historyMessages = [];

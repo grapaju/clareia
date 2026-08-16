@@ -3,10 +3,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { google } from 'googleapis';
-import pocketbaseClient from '../utils/pocketbaseClient.js';
+import { runQuery } from '../db/postgres.js';
 
-const GOOGLE_DRIVE_CONNECTIONS_COLLECTION = 'googleDriveConnections';
-const GOOGLE_DRIVE_PROJECTS_COLLECTION = 'googleDriveProjectFolders';
 const GOOGLE_DRIVE_FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
 const GOOGLE_DRIVE_TEXT_FILE_MIME_TYPE = 'text/plain';
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
@@ -237,58 +235,112 @@ function buildDocumentBody(content) {
 }
 
 async function getConnectionByUserId(userId) {
-	try {
-		return await pocketbaseClient.collection(GOOGLE_DRIVE_CONNECTIONS_COLLECTION).getFirstListItem(
-			pocketbaseClient.filter('userId = {:userId}', { userId }),
-		);
-	} catch (error) {
-		if (String(error?.message || '').includes('no rows in result set')) {
-			return null;
-		}
+	const result = await runQuery(
+		`SELECT user_id, email, scope, encrypted_refresh_token, connected_at, status
+		 FROM google_drive_connections
+		 WHERE user_id = $1
+		 LIMIT 1`,
+		[userId]
+	);
 
-		throw error;
+	const row = result.rows[0];
+	if (!row) {
+		return null;
 	}
+
+	return {
+		userId: row.user_id,
+		email: row.email,
+		scope: row.scope,
+		encryptedRefreshToken: row.encrypted_refresh_token,
+		connectedAt: row.connected_at,
+		status: row.status,
+	};
 }
 
 async function getProjectFolderByUserAndProjectId({ userId, projectId }) {
-	try {
-		return await pocketbaseClient.collection(GOOGLE_DRIVE_PROJECTS_COLLECTION).getFirstListItem(
-			pocketbaseClient.filter('userId = {:userId} && projectId = {:projectId}', { userId, projectId }),
-		);
-	} catch (error) {
-		if (String(error?.message || '').includes('no rows in result set')) {
-			return null;
-		}
+	const result = await runQuery(
+		`SELECT user_id, project_id, project_name, project_type, root_folder_id, root_folder_url, subfolders_json, last_synced_at
+		 FROM google_drive_project_folders
+		 WHERE user_id = $1 AND project_id = $2
+		 LIMIT 1`,
+		[userId, projectId]
+	);
 
-		throw error;
+	const row = result.rows[0];
+	if (!row) {
+		return null;
 	}
+
+	return {
+		userId: row.user_id,
+		projectId: row.project_id,
+		projectName: row.project_name,
+		projectType: row.project_type,
+		rootFolderId: row.root_folder_id,
+		rootFolderUrl: row.root_folder_url,
+		subfoldersJson: JSON.stringify(row.subfolders_json || []),
+		lastSyncedAt: row.last_synced_at,
+	};
 }
 
 async function upsertConnectionByUserId({ userId, payload }) {
-	const existing = await getConnectionByUserId(userId);
-
-	if (!existing) {
-		return pocketbaseClient.collection(GOOGLE_DRIVE_CONNECTIONS_COLLECTION).create({
+	await runQuery(
+		`INSERT INTO google_drive_connections (user_id, email, scope, encrypted_refresh_token, connected_at, status, updated_at)
+		 VALUES ($1, $2, $3, $4, $5::timestamptz, $6, now())
+		 ON CONFLICT (user_id)
+		 DO UPDATE SET
+			email = EXCLUDED.email,
+			scope = EXCLUDED.scope,
+			encrypted_refresh_token = EXCLUDED.encrypted_refresh_token,
+			connected_at = EXCLUDED.connected_at,
+			status = EXCLUDED.status,
+			updated_at = now()`,
+		[
 			userId,
-			...payload,
-		});
-	}
-
-	return pocketbaseClient.collection(GOOGLE_DRIVE_CONNECTIONS_COLLECTION).update(existing.id, payload);
+			normalizeText(payload.email),
+			normalizeText(payload.scope),
+			normalizeText(payload.encryptedRefreshToken),
+			normalizeText(payload.connectedAt) || null,
+			normalizeText(payload.status) || 'connected',
+		]
+	);
 }
 
 async function upsertProjectFolder({ userId, projectId, payload }) {
-	const existing = await getProjectFolderByUserAndProjectId({ userId, projectId });
-
-	if (!existing) {
-		return pocketbaseClient.collection(GOOGLE_DRIVE_PROJECTS_COLLECTION).create({
+	await runQuery(
+		`INSERT INTO google_drive_project_folders (
+			user_id,
+			project_id,
+			project_name,
+			project_type,
+			root_folder_id,
+			root_folder_url,
+			subfolders_json,
+			last_synced_at,
+			updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::timestamptz, now())
+		ON CONFLICT (user_id, project_id)
+		DO UPDATE SET
+			project_name = EXCLUDED.project_name,
+			project_type = EXCLUDED.project_type,
+			root_folder_id = EXCLUDED.root_folder_id,
+			root_folder_url = EXCLUDED.root_folder_url,
+			subfolders_json = EXCLUDED.subfolders_json,
+			last_synced_at = EXCLUDED.last_synced_at,
+			updated_at = now()`,
+		[
 			userId,
 			projectId,
-			...payload,
-		});
-	}
-
-	return pocketbaseClient.collection(GOOGLE_DRIVE_PROJECTS_COLLECTION).update(existing.id, payload);
+			normalizeText(payload.projectName),
+			normalizeText(payload.projectType),
+			normalizeText(payload.rootFolderId),
+			normalizeText(payload.rootFolderUrl),
+			normalizeText(payload.subfoldersJson) || '[]',
+			normalizeText(payload.lastSyncedAt) || null,
+		]
+	);
 }
 
 export function getGoogleDriveAuthUrl({ userId, projectId, projectName, projectType, returnTo }) {
@@ -437,7 +489,7 @@ export async function disconnectGoogleDrive({ userId }) {
 		return { disconnected: true };
 	}
 
-	await pocketbaseClient.collection(GOOGLE_DRIVE_CONNECTIONS_COLLECTION).delete(connection.id);
+	await runQuery('DELETE FROM google_drive_connections WHERE user_id = $1', [userId]);
 
 	return { disconnected: true };
 }

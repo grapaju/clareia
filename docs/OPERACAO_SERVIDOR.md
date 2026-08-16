@@ -61,9 +61,13 @@ PB_SUPERUSER_PASSWORD=uma-senha-forte-e-exclusiva
 ```env
 PB_SUPERUSER_EMAIL=admin@seu-dominio.com
 PB_SUPERUSER_PASSWORD=uma-senha-forte-e-exclusiva
+DATABASE_URL=postgresql://usuario:senha@host:5432/clareia
+JWT_SECRET=chave-longa-e-aleatoria
 ```
 
 A API usa essas credenciais para autenticar no PocketBase. Os valores precisam ser os mesmos configurados no serviço PocketBase.
+
+Para o modo com PostgreSQL (migração em andamento), `DATABASE_URL` e `JWT_SECRET` são obrigatórios para autenticação e tarefas.
 
 ## Primeira instalação
 
@@ -75,6 +79,16 @@ npm run build --prefix apps/web
 ```
 
 Na primeira inicialização, o PocketBase aplica automaticamente as migrações em `apps/pocketbase/pb_migrations/`.
+
+### PostgreSQL local (modo sem PocketBase para auth/tarefas)
+
+Para subir o banco local rapidamente:
+
+```powershell
+docker compose -f docker-compose.postgres.yml up -d
+```
+
+Depois inicie a API (`npm run dev --prefix apps/api`). Ela cria o schema automaticamente na primeira execução.
 
 ## Iniciar em desenvolvimento
 

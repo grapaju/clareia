@@ -1,6 +1,11 @@
 const API_SERVER_URL = '/hcgi/api';
 
 function getPocketbaseToken() {
+	const jwtToken = localStorage.getItem('clareia_auth_token');
+	if (jwtToken) {
+		return jwtToken;
+	}
+
 	const pocketbaseToken = localStorage.getItem('pocketbase_auth');
 
 	if (pocketbaseToken) {

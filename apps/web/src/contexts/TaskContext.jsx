@@ -1,9 +1,17 @@
 
 import React, { createContext, useState, useEffect } from 'react';
-import pb from '@/lib/pocketbaseClient.js';
-import { getCurrentAccountId } from '@/lib/pocketbaseClient.js';
 import { useAuth } from '@/contexts/AuthContext.jsx';
 import { toast } from 'sonner';
+import {
+  createFocusSessionInApi,
+  createTaskInApi,
+  createTaskNoteInApi,
+  deleteTaskInApi,
+  listFocusSessionsFromApi,
+  listTaskNotesFromApi,
+  listTasksFromApi,
+  updateTaskInApi,
+} from '@/services/tasksApiService.js';
 import { getNextRecurringDate, getStatusForScheduledDate, resetMicrotasks } from '@/lib/recurrenceLogic.js';
 import { appendProjectHistory } from '@/services/projectHistoryService.js';
 import { addTaskHistoryEvent } from '@/services/taskHistoryService.js';
@@ -92,10 +100,7 @@ export function TaskProvider({ children }) {
     if (!currentUser) return;
     setIsLoading(true);
     try {
-      const records = await pb.collection('tasks').getFullList({
-        sort: '-created',
-        $autoCancel: false
-      });
+      const records = await listTasksFromApi();
       setTasks(records.map((record) => normalizeTaskRecord(record)));
     } catch (error) {
       console.error("Erro ao buscar tarefas:", error);
@@ -199,16 +204,14 @@ export function TaskProvider({ children }) {
 
   const addTask = async (taskData) => {
     try {
-      const accountId = currentUser?.currentAccountId || getCurrentAccountId();
+      const accountId = currentUser?.currentAccountId || '';
       const payload = normalizeTaskPayload({
         ...taskData,
         status: taskData?.status || TASK_STATUS.PENDENTE,
         userId: currentUser?.id,
         ...(accountId ? { accountId } : {})
       });
-      const record = await pb.collection('tasks').create({
-        ...payload
-      }, { $autoCancel: false });
+      const record = await createTaskInApi(payload);
       const normalized = normalizeTaskRecord(record);
       setTasks(prev => [normalized, ...prev]);
       if (record?.project) {
@@ -231,7 +234,7 @@ export function TaskProvider({ children }) {
   const updateTask = async (id, updates) => {
     try {
       const payload = normalizeTaskPayload(updates, id);
-      const record = await pb.collection('tasks').update(id, payload, { $autoCancel: false });
+      const record = await updateTaskInApi(id, payload);
       const normalized = normalizeTaskRecord(record);
       setTasks(prev => prev.map(t => t.id === id ? normalized : t));
       if (Object.keys(updates || {}).length > 0) {
@@ -252,7 +255,7 @@ export function TaskProvider({ children }) {
 
   const deleteTask = async (id) => {
     try {
-      await pb.collection('tasks').delete(id, { $autoCancel: false });
+      await deleteTaskInApi(id);
       setTasks(prev => prev.filter(t => t.id !== id));
     } catch (error) {
       console.error(error);
@@ -537,38 +540,27 @@ export function TaskProvider({ children }) {
   };
 
   const getTaskNotes = async (taskId) => {
-    return pb.collection('taskNotes').getFullList({
-      filter: `taskId = "${taskId}"`,
-      sort: '-created',
-      $autoCancel: false
-    });
+    return listTaskNotesFromApi(taskId);
   };
 
   const addTaskNote = async (taskId, content) => {
-    const accountId = currentUser?.currentAccountId || getCurrentAccountId();
-    return pb.collection('taskNotes').create({
-      taskId,
+    const accountId = currentUser?.currentAccountId || '';
+    return createTaskNoteInApi(taskId, {
       content,
-      userId: currentUser?.id,
       ...(accountId ? { accountId } : {})
-    }, { $autoCancel: false });
-  };
-
-  const getFocusSessions = async (taskId) => {
-    return pb.collection('focusSessions').getFullList({
-      filter: `taskId = "${taskId}"`,
-      sort: '-created',
-      $autoCancel: false
     });
   };
 
+  const getFocusSessions = async (taskId) => {
+    return listFocusSessionsFromApi(taskId);
+  };
+
   const recordFocusSession = async (session) => {
-    const accountId = currentUser?.currentAccountId || getCurrentAccountId();
-    return pb.collection('focusSessions').create({
+    const accountId = currentUser?.currentAccountId || '';
+    return createFocusSessionInApi(session?.taskId, {
       ...session,
-      userId: currentUser?.id,
       ...(accountId ? { accountId } : {})
-    }, { $autoCancel: false });
+    });
   };
 
   return (
