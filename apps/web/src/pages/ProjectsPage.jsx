@@ -71,15 +71,14 @@ import {
   deleteProjectDriveConfig,
   extractDriveFolderId,
   getDriveDefaultSubfoldersByType,
-  getProjectDriveConfig,
-  renameProjectDriveConfig,
-  saveProjectDriveConfig
+  renameProjectDriveConfig
 } from '@/services/projectDriveConfigService.js';
 import {
   bootstrapGoogleDriveProjectFolders,
   getGoogleDriveAuthUrl,
   getGoogleDriveProjectFolderConfig,
   getGoogleDriveStatus,
+  saveGoogleDriveProjectFolderConfig,
   syncGoogleDriveDocument
 } from '@/services/googleDriveIntegrationService.js';
 import { createProjectLink, deleteProjectLink, getProjectLinkTypes, listFavoriteProjectLinks, listProjectLinks, updateProjectLink } from '@/services/projectLinkService.js';
@@ -282,6 +281,7 @@ export default function ProjectsPage() {
   const [isSyncingDriveMaterial, setIsSyncingDriveMaterial] = useState(false);
   const [driveConfigForm, setDriveConfigForm] = useState({
     folderName: '',
+    parentFolderUrl: '',
     driveFolderUrl: '',
     driveFolderId: '',
     status: 'conectado manualmente'
@@ -378,6 +378,7 @@ export default function ProjectsPage() {
         setDriveConnectionStatus({ connected: false });
         setDriveConfigForm({
           folderName: '',
+          parentFolderUrl: '',
           driveFolderUrl: '',
           driveFolderId: '',
           status: 'conectado manualmente'
@@ -385,42 +386,50 @@ export default function ProjectsPage() {
         return;
       }
 
-      const localConfig = getProjectDriveConfig(selectedProject);
       if (!isMounted) return;
 
-      setProjectDriveConfig(localConfig);
+      setProjectDriveConfig(null);
       setDriveConfigForm({
-        folderName: localConfig?.folderName || selectedProject,
-        driveFolderUrl: localConfig?.driveFolderUrl || '',
-        driveFolderId: localConfig?.driveFolderId || '',
-        status: localConfig?.status || 'conectado manualmente'
+        folderName: selectedProject,
+        parentFolderUrl: '',
+        driveFolderUrl: '',
+        driveFolderId: '',
+        status: 'conectado manualmente'
       });
 
+      let status = { connected: false };
       try {
-        const [status, apiConfig] = await Promise.all([
-          getGoogleDriveStatus(),
-          getGoogleDriveProjectFolderConfig(selectedProject)
-        ]);
+        status = await getGoogleDriveStatus();
 
         if (!isMounted) return;
 
         setDriveConnectionStatus(status || { connected: false });
+      } catch {
+        if (!isMounted) return;
+        setDriveConnectionStatus({ connected: false });
+      }
+
+      try {
+        const apiConfig = await getGoogleDriveProjectFolderConfig(selectedProject);
+
+        if (!isMounted) return;
 
         if (apiConfig?.rootFolderUrl) {
-          const syncedConfig = saveProjectDriveConfig({
+          const syncedConfig = {
             projectId: selectedProject,
-            driveFolderUrl: apiConfig.rootFolderUrl,
-            driveFolderId: apiConfig.rootFolderId,
             folderName: apiConfig.projectName || selectedProject,
+            driveFolderId: apiConfig.rootFolderId,
+            driveFolderUrl: apiConfig.rootFolderUrl,
             status: status?.connected ? 'conectado automaticamente' : 'conectado manualmente',
             connectionType: status?.connected ? 'oauth' : 'manual'
-          });
+          };
 
           if (!isMounted) return;
 
           setProjectDriveConfig(syncedConfig);
           setDriveConfigForm({
             folderName: syncedConfig?.folderName || selectedProject,
+            parentFolderUrl: '',
             driveFolderUrl: syncedConfig?.driveFolderUrl || '',
             driveFolderId: syncedConfig?.driveFolderId || '',
             status: syncedConfig?.status || 'conectado automaticamente'
@@ -428,7 +437,6 @@ export default function ProjectsPage() {
         }
       } catch {
         if (!isMounted) return;
-        setDriveConnectionStatus({ connected: false });
       }
     };
 
@@ -931,7 +939,7 @@ export default function ProjectsPage() {
     toast.success('Dados do projeto atualizados.');
   };
 
-  const handleSaveProjectDriveConfig = () => {
+  const handleSaveProjectDriveConfig = async () => {
     if (!selectedProject) return;
 
     const driveFolderUrl = normalizeText(driveConfigForm.driveFolderUrl);
@@ -942,16 +950,34 @@ export default function ProjectsPage() {
       return false;
     }
 
-    const saved = saveProjectDriveConfig({
-      projectId: selectedProject,
-      driveFolderUrl,
-      driveFolderId,
-      folderName: normalizeText(driveConfigForm.folderName) || selectedProject,
-      status: 'conectado manualmente',
-      connectionType: 'manual'
-    });
+    let saved = null;
+    try {
+      const persisted = await saveGoogleDriveProjectFolderConfig({
+        projectId: selectedProject,
+        projectName: normalizeText(driveConfigForm.folderName) || selectedProject,
+        projectType: selectedProfile?.projectType || 'Administrativo',
+        rootFolderId: driveFolderId,
+        rootFolderUrl: driveFolderUrl,
+      });
 
-    if (!saved) {
+      if (!persisted?.rootFolderUrl) {
+        throw new Error('Nao foi possivel persistir configuracao da pasta no servidor.');
+      }
+
+      saved = {
+        projectId: selectedProject,
+        folderName: persisted.projectName || selectedProject,
+        driveFolderId: persisted.rootFolderId || driveFolderId,
+        driveFolderUrl: persisted.rootFolderUrl,
+        status: 'conectado manualmente',
+        connectionType: 'manual'
+      };
+    } catch (error) {
+      toast.error(error?.message || 'Nao foi possivel salvar a configuracao do Drive no servidor.');
+      return false;
+    }
+
+    if (!saved?.driveFolderUrl) {
       toast.error('Nao foi possivel salvar a configuracao do Drive.');
       return false;
     }
@@ -991,14 +1017,14 @@ export default function ProjectsPage() {
         parentFolderId: normalizeText(driveConfigForm.driveFolderId) || undefined
       }).then((result) => {
         if (result?.rootFolderUrl) {
-          const synced = saveProjectDriveConfig({
+          const synced = {
             projectId: selectedProject,
             driveFolderUrl: result.rootFolderUrl,
             driveFolderId: result.rootFolderId,
             folderName: result.projectName || selectedProject,
             status: 'conectado automaticamente',
             connectionType: 'oauth'
-          });
+          };
 
           setProjectDriveConfig(synced);
           setDriveConfigForm((current) => ({
@@ -2294,7 +2320,7 @@ export default function ProjectsPage() {
                                   <p className="text-sm text-muted-foreground">Nenhuma pasta do Google Drive conectada.</p>
                                   <Button size="sm" onClick={() => setIsDriveDialogOpen(true)}>Conectar Drive</Button>
                                 </div>
-                              ) : projectDriveConfig.connectionType === 'oauth' && !driveConnectionStatus?.connected ? (
+                              ) : !driveConnectionStatus?.connected ? (
                                 <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                                   <p className="text-sm text-amber-800 truncate">
                                     A conexao com o Google Drive foi encerrada. Reconecte para continuar usando a pasta{' '}
@@ -3128,8 +3154,8 @@ export default function ProjectsPage() {
                       <Button
                         className="w-full sm:w-auto"
                         variant="outline"
-                        onClick={() => {
-                          const ok = handleSaveProjectDriveConfig();
+                        onClick={async () => {
+                          const ok = await handleSaveProjectDriveConfig();
                           if (ok) setIsDriveDialogOpen(false);
                         }}
                       >

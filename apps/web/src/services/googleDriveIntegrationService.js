@@ -44,6 +44,18 @@ export async function getGoogleDriveProjectFolderConfig(projectId) {
   return response?.config || null;
 }
 
+export async function saveGoogleDriveProjectFolderConfig(payload = {}) {
+  const response = await integratedAiClient.fetch('/google-drive/project-folder', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  });
+
+  return response?.config || null;
+}
+
 export async function bootstrapGoogleDriveProjectFolders(payload = {}) {
   return integratedAiClient.fetch('/google-drive/projects/bootstrap', {
     method: 'POST',

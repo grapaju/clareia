@@ -349,6 +349,14 @@ async function upsertProjectFolder({ userId, projectId, payload }) {
 	);
 }
 
+async function deleteProjectFolderByUserAndProjectId({ userId, projectId }) {
+	await runQuery(
+		`DELETE FROM google_drive_project_folders
+		 WHERE user_id = $1 AND project_id = $2`,
+		[userId, projectId]
+	);
+}
+
 export function getGoogleDriveAuthUrl({ userId, projectId, projectName, projectType, returnTo }) {
 	const oauthClient = createOAuthClient();
 	const state = createOAuthState({
@@ -608,6 +616,16 @@ export async function getGoogleDriveProjectFolderConfig({ userId, projectId }) {
 		return null;
 	}
 
+	try {
+		const { drive } = await createDriveClientForUser(userId);
+		if (record.rootFolderId && !(await driveFolderExists({ drive, folderId: record.rootFolderId }))) {
+			await deleteProjectFolderByUserAndProjectId({ userId, projectId: normalizedProjectId });
+			return null;
+		}
+	} catch {
+		// Se usuario estiver desconectado, mantemos o registro para reaproveitar apos reconexao.
+	}
+
 	return {
 		projectId: record.projectId,
 		projectName: record.projectName,
@@ -617,6 +635,38 @@ export async function getGoogleDriveProjectFolderConfig({ userId, projectId }) {
 		subfolders: JSON.parse(record.subfoldersJson || '[]'),
 		lastSyncedAt: record.lastSyncedAt,
 	};
+}
+
+export async function saveGoogleDriveProjectFolderConfig({ userId, projectId, projectName, projectType, rootFolderId, rootFolderUrl }) {
+	const normalizedProjectId = normalizeText(projectId);
+	const normalizedProjectName = normalizeText(projectName) || normalizedProjectId;
+	const normalizedProjectType = normalizeText(projectType) || 'Administrativo';
+	const normalizedRootFolderId = normalizeText(rootFolderId);
+	const normalizedRootFolderUrl = normalizeText(rootFolderUrl)
+		|| (normalizedRootFolderId ? `https://drive.google.com/drive/folders/${normalizedRootFolderId}` : '');
+
+	if (!normalizedProjectId || !normalizedProjectName) {
+		throw createError('projectId e projectName sao obrigatorios.', 400);
+	}
+
+	if (!normalizedRootFolderId && !normalizedRootFolderUrl) {
+		throw createError('rootFolderId ou rootFolderUrl e obrigatorio.', 400);
+	}
+
+	await upsertProjectFolder({
+		userId,
+		projectId: normalizedProjectId,
+		payload: {
+			projectName: normalizedProjectName,
+			projectType: normalizedProjectType,
+			rootFolderId: normalizedRootFolderId,
+			rootFolderUrl: normalizedRootFolderUrl,
+			subfoldersJson: '[]',
+			lastSyncedAt: new Date().toISOString(),
+		},
+	});
+
+	return getGoogleDriveProjectFolderConfig({ userId, projectId: normalizedProjectId });
 }
 
 async function resolveTargetFolderId({ userId, projectId, projectName, projectType, driveFolderId }) {

@@ -8,6 +8,7 @@ import {
 	getGoogleDriveProjectFolderConfig,
 	getGoogleDriveStatus,
 	handleGoogleDriveOAuthCallback,
+	saveGoogleDriveProjectFolderConfig,
 	saveGoogleDriveOAuthUserConfig,
 	syncGoogleDriveDocument,
 	testGoogleDriveConnection,
@@ -75,6 +76,19 @@ router.get('/project-folder', async (req, res) => {
 	const config = await getGoogleDriveProjectFolderConfig({
 		userId: req.pocketbaseUserId,
 		projectId: String(req.query.projectId || ''),
+	});
+
+	res.json({ config });
+});
+
+router.post('/project-folder', async (req, res) => {
+	const config = await saveGoogleDriveProjectFolderConfig({
+		userId: req.pocketbaseUserId,
+		projectId: req.body?.projectId,
+		projectName: req.body?.projectName,
+		projectType: req.body?.projectType,
+		rootFolderId: req.body?.rootFolderId,
+		rootFolderUrl: req.body?.rootFolderUrl,
 	});
 
 	res.json({ config });
