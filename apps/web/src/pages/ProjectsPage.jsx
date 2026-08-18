@@ -388,8 +388,8 @@ export default function ProjectsPage() {
         setProfiles(reloaded);
       } catch {
         if (!isMounted) return;
-        // Fallback temporario para manter UX mesmo em indisponibilidade de API.
-        setProfiles(readProjectProfiles());
+        setProfiles([]);
+        toast.error('Nao foi possivel carregar projetos da API. Verifique se o backend foi atualizado.');
       }
     };
 
