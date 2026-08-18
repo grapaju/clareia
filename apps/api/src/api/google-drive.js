@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Readable } from 'node:stream';
 import { google } from 'googleapis';
 import { runQuery } from '../db/postgres.js';
@@ -8,6 +9,9 @@ import { runQuery } from '../db/postgres.js';
 const GOOGLE_DRIVE_FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
 const GOOGLE_DRIVE_TEXT_FILE_MIME_TYPE = 'text/plain';
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+
+// src/api/google-drive.js -> apps/api (raiz do app, onde fica o .env real)
+const API_APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 const oauthStates = new Map();
 
@@ -22,7 +26,9 @@ function normalizeText(value) {
 }
 
 function getApiEnvFilePath() {
-	return path.resolve(process.cwd(), '.env');
+	// Nao usar process.cwd(): depende de como o PM2/npm inicia o processo e pode
+	// resolver para a raiz do monorepo em vez de apps/api, fazendo o .env "sumir".
+	return path.resolve(API_APP_ROOT, '.env');
 }
 
 function upsertEnvValue(content, key, value) {
