@@ -512,6 +512,17 @@ export async function disconnectGoogleDrive({ userId }) {
 	return { disconnected: true };
 }
 
+async function driveFolderExists({ drive, folderId }) {
+	if (!isValidDriveFolderId(folderId)) return false;
+
+	try {
+		const response = await drive.files.get({ fileId: folderId, fields: 'id,trashed' });
+		return Boolean(response.data?.id) && !response.data.trashed;
+	} catch {
+		return false;
+	}
+}
+
 export async function bootstrapGoogleDriveProjectFolders({ userId, projectId, projectName, projectType, parentFolderId }) {
 	const normalizedProjectId = normalizeText(projectId);
 	const normalizedProjectName = normalizeText(projectName) || normalizedProjectId;
@@ -521,8 +532,10 @@ export async function bootstrapGoogleDriveProjectFolders({ userId, projectId, pr
 		throw createError('projectId e projectName sao obrigatorios.', 400);
 	}
 
+	const { drive } = await createDriveClientForUser(userId);
+
 	const existing = await getProjectFolderByUserAndProjectId({ userId, projectId: normalizedProjectId });
-	if (existing?.rootFolderId) {
+	if (existing?.rootFolderId && (await driveFolderExists({ drive, folderId: existing.rootFolderId }))) {
 		return {
 			projectId: normalizedProjectId,
 			projectName: normalizedProjectName,
@@ -532,8 +545,6 @@ export async function bootstrapGoogleDriveProjectFolders({ userId, projectId, pr
 			reused: true,
 		};
 	}
-
-	const { drive } = await createDriveClientForUser(userId);
 
 	const requestedParentId = normalizeText(parentFolderId);
 	const parentId = isValidDriveFolderId(requestedParentId)

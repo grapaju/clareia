@@ -3017,6 +3017,29 @@ export default function ProjectsPage() {
                 />
               </div>
 
+              {driveConnectionStatus?.connected && (
+                <div className="space-y-2 min-w-0">
+                  <Label className="break-words">Criar dentro da pasta (opcional)</Label>
+                  <Input
+                    className="w-full min-w-0"
+                    value={driveConfigForm.parentFolderUrl || ''}
+                    onChange={(event) => {
+                      const nextUrl = event.target.value;
+                      const extractedId = extractDriveFolderId(nextUrl);
+                      setDriveConfigForm((current) => ({
+                        ...current,
+                        parentFolderUrl: nextUrl,
+                        driveFolderId: extractedId || ''
+                      }));
+                    }}
+                    placeholder="Ex.: link da pasta 'Projetos' ja existente no seu Drive"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Deixe em branco para criar dentro da pasta padrao "Clareia".
+                  </p>
+                </div>
+              )}
+
               {projectDriveConfig?.driveFolderUrl && (
                 <div className="space-y-2 min-w-0">
                   <Label className="break-words">Status</Label>
