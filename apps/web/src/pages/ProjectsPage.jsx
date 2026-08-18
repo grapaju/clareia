@@ -78,6 +78,7 @@ import {
   getGoogleDriveAuthUrl,
   getGoogleDriveProjectFolderConfig,
   getGoogleDriveStatus,
+  saveGoogleDriveDefaultParentFolder,
   saveGoogleDriveProjectFolderConfig,
   syncGoogleDriveDocument
 } from '@/services/googleDriveIntegrationService.js';
@@ -282,6 +283,7 @@ export default function ProjectsPage() {
   const [driveConfigForm, setDriveConfigForm] = useState({
     folderName: '',
     parentFolderUrl: '',
+    parentFolderId: '',
     driveFolderUrl: '',
     driveFolderId: '',
     status: 'conectado manualmente'
@@ -379,6 +381,7 @@ export default function ProjectsPage() {
         setDriveConfigForm({
           folderName: '',
           parentFolderUrl: '',
+          parentFolderId: '',
           driveFolderUrl: '',
           driveFolderId: '',
           status: 'conectado manualmente'
@@ -392,6 +395,7 @@ export default function ProjectsPage() {
       setDriveConfigForm({
         folderName: selectedProject,
         parentFolderUrl: '',
+        parentFolderId: '',
         driveFolderUrl: '',
         driveFolderId: '',
         status: 'conectado manualmente'
@@ -404,6 +408,11 @@ export default function ProjectsPage() {
         if (!isMounted) return;
 
         setDriveConnectionStatus(status || { connected: false });
+        setDriveConfigForm((current) => ({
+          ...current,
+          parentFolderUrl: normalizeText(status?.defaultParentFolderUrl),
+          parentFolderId: normalizeText(status?.defaultParentFolderId),
+        }));
       } catch {
         if (!isMounted) return;
         setDriveConnectionStatus({ connected: false });
@@ -429,7 +438,8 @@ export default function ProjectsPage() {
           setProjectDriveConfig(syncedConfig);
           setDriveConfigForm({
             folderName: syncedConfig?.folderName || selectedProject,
-            parentFolderUrl: '',
+            parentFolderUrl: normalizeText(status?.defaultParentFolderUrl),
+            parentFolderId: normalizeText(status?.defaultParentFolderId),
             driveFolderUrl: syncedConfig?.driveFolderUrl || '',
             driveFolderId: syncedConfig?.driveFolderId || '',
             status: syncedConfig?.status || 'conectado automaticamente'
@@ -1005,17 +1015,47 @@ export default function ProjectsPage() {
     window.open(targetUrl, '_blank', 'noopener,noreferrer');
   };
 
-  const handleCreateDriveDefaultSubfolders = () => {
+  const handleCreateDriveDefaultSubfolders = async () => {
     if (!selectedProject) return;
 
     if (driveConnectionStatus?.connected) {
-      setIsBootstrappingDriveFolders(true);
-      bootstrapGoogleDriveProjectFolders({
-        projectId: selectedProject,
-        projectName: normalizeText(driveConfigForm.folderName) || selectedProject,
-        projectType: selectedProfile?.projectType || 'Administrativo',
-        parentFolderId: normalizeText(driveConfigForm.driveFolderId) || undefined
-      }).then((result) => {
+      try {
+        setIsBootstrappingDriveFolders(true);
+
+        const selectedParentId = normalizeText(driveConfigForm.parentFolderId);
+        const selectedParentUrl = normalizeText(driveConfigForm.parentFolderUrl);
+        const currentDefaultParentId = normalizeText(driveConnectionStatus?.defaultParentFolderId);
+
+        let parentFolderIdToUse = selectedParentId || currentDefaultParentId;
+
+        if (selectedParentUrl && !selectedParentId) {
+          toast.error('Link da pasta mae invalido. Use um link completo da pasta no Google Drive.');
+          return;
+        }
+
+        if (selectedParentId && selectedParentId !== currentDefaultParentId) {
+          const updatedStatus = await saveGoogleDriveDefaultParentFolder({
+            parentFolderId: selectedParentId,
+            parentFolderUrl: selectedParentUrl,
+          });
+
+          setDriveConnectionStatus(updatedStatus || driveConnectionStatus);
+          setDriveConfigForm((current) => ({
+            ...current,
+            parentFolderId: normalizeText(updatedStatus?.defaultParentFolderId),
+            parentFolderUrl: normalizeText(updatedStatus?.defaultParentFolderUrl),
+          }));
+
+          parentFolderIdToUse = normalizeText(updatedStatus?.defaultParentFolderId) || selectedParentId;
+        }
+
+        const result = await bootstrapGoogleDriveProjectFolders({
+          projectId: selectedProject,
+          projectName: normalizeText(driveConfigForm.folderName) || selectedProject,
+          projectType: selectedProfile?.projectType || 'Administrativo',
+          parentFolderId: parentFolderIdToUse || undefined,
+        });
+
         if (result?.rootFolderUrl) {
           const synced = {
             projectId: selectedProject,
@@ -1035,11 +1075,11 @@ export default function ProjectsPage() {
             status: synced?.status || 'conectado automaticamente'
           }));
         }
-      }).catch((error) => {
+      } catch (error) {
         toast.error(error?.message || 'Nao foi possivel criar subpastas no Google Drive.');
-      }).finally(() => {
+      } finally {
         setIsBootstrappingDriveFolders(false);
-      });
+      }
     }
 
     const foldersToCreate = getDriveDefaultSubfoldersByType(selectedProfile?.projectType || 'Administrativo');
@@ -3077,7 +3117,7 @@ export default function ProjectsPage() {
                           setDriveConfigForm((current) => ({
                             ...current,
                             parentFolderUrl: nextUrl,
-                            driveFolderId: extractedId || ''
+                            parentFolderId: extractedId || ''
                           }));
                         }}
                         placeholder="Ex.: link da pasta 'Projetos' ja existente no seu Drive"

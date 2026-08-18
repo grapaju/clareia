@@ -56,6 +56,16 @@ export async function saveGoogleDriveProjectFolderConfig(payload = {}) {
   return response?.config || null;
 }
 
+export async function saveGoogleDriveDefaultParentFolder(payload = {}) {
+  return integratedAiClient.fetch('/google-drive/default-parent-folder', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  });
+}
+
 export async function bootstrapGoogleDriveProjectFolders(payload = {}) {
   return integratedAiClient.fetch('/google-drive/projects/bootstrap', {
     method: 'POST',

@@ -73,6 +73,9 @@ CREATE TABLE IF NOT EXISTS google_drive_connections (
   email TEXT DEFAULT '',
   scope TEXT DEFAULT '',
   encrypted_refresh_token TEXT DEFAULT '',
+  default_parent_folder_id TEXT,
+  default_parent_folder_url TEXT,
+  default_parent_folder_name TEXT,
   connected_at TIMESTAMPTZ,
   status TEXT DEFAULT 'connected',
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -91,6 +94,15 @@ CREATE TABLE IF NOT EXISTS google_drive_project_folders (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(user_id, project_id)
 );
+
+ALTER TABLE google_drive_connections
+  ADD COLUMN IF NOT EXISTS default_parent_folder_id TEXT;
+
+ALTER TABLE google_drive_connections
+  ADD COLUMN IF NOT EXISTS default_parent_folder_url TEXT;
+
+ALTER TABLE google_drive_connections
+  ADD COLUMN IF NOT EXISTS default_parent_folder_name TEXT;
 `;
 
 export async function ensurePostgresSchema() {

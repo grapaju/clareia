@@ -8,6 +8,7 @@ import {
 	getGoogleDriveProjectFolderConfig,
 	getGoogleDriveStatus,
 	handleGoogleDriveOAuthCallback,
+	saveGoogleDriveDefaultParentFolder,
 	saveGoogleDriveProjectFolderConfig,
 	saveGoogleDriveOAuthUserConfig,
 	syncGoogleDriveDocument,
@@ -92,6 +93,16 @@ router.post('/project-folder', async (req, res) => {
 	});
 
 	res.json({ config });
+});
+
+router.post('/default-parent-folder', async (req, res) => {
+	const status = await saveGoogleDriveDefaultParentFolder({
+		userId: req.pocketbaseUserId,
+		parentFolderId: req.body?.parentFolderId,
+		parentFolderUrl: req.body?.parentFolderUrl,
+	});
+
+	res.json(status);
 });
 
 router.post('/projects/bootstrap', async (req, res) => {

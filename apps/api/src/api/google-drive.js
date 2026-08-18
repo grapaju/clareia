@@ -25,6 +25,11 @@ function normalizeText(value) {
 	return String(value || '').trim();
 }
 
+function normalizeNullableText(value) {
+	const normalized = normalizeText(value);
+	return normalized || null;
+}
+
 function getApiEnvFilePath() {
 	// Nao usar process.cwd(): depende de como o PM2/npm inicia o processo e pode
 	// resolver para a raiz do monorepo em vez de apps/api, fazendo o .env "sumir".
@@ -242,7 +247,7 @@ function buildDocumentBody(content) {
 
 async function getConnectionByUserId(userId) {
 	const result = await runQuery(
-		`SELECT user_id, email, scope, encrypted_refresh_token, connected_at, status
+		`SELECT user_id, email, scope, encrypted_refresh_token, default_parent_folder_id, default_parent_folder_url, default_parent_folder_name, connected_at, status
 		 FROM google_drive_connections
 		 WHERE user_id = $1
 		 LIMIT 1`,
@@ -259,6 +264,9 @@ async function getConnectionByUserId(userId) {
 		email: row.email,
 		scope: row.scope,
 		encryptedRefreshToken: row.encrypted_refresh_token,
+		defaultParentFolderId: row.default_parent_folder_id,
+		defaultParentFolderUrl: row.default_parent_folder_url,
+		defaultParentFolderName: row.default_parent_folder_name,
 		connectedAt: row.connected_at,
 		status: row.status,
 	};
@@ -292,13 +300,27 @@ async function getProjectFolderByUserAndProjectId({ userId, projectId }) {
 
 async function upsertConnectionByUserId({ userId, payload }) {
 	await runQuery(
-		`INSERT INTO google_drive_connections (user_id, email, scope, encrypted_refresh_token, connected_at, status, updated_at)
-		 VALUES ($1, $2, $3, $4, $5::timestamptz, $6, now())
+		`INSERT INTO google_drive_connections (
+			user_id,
+			email,
+			scope,
+			encrypted_refresh_token,
+			default_parent_folder_id,
+			default_parent_folder_url,
+			default_parent_folder_name,
+			connected_at,
+			status,
+			updated_at
+		)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz, $9, now())
 		 ON CONFLICT (user_id)
 		 DO UPDATE SET
 			email = EXCLUDED.email,
 			scope = EXCLUDED.scope,
 			encrypted_refresh_token = EXCLUDED.encrypted_refresh_token,
+			default_parent_folder_id = COALESCE(EXCLUDED.default_parent_folder_id, google_drive_connections.default_parent_folder_id),
+			default_parent_folder_url = COALESCE(EXCLUDED.default_parent_folder_url, google_drive_connections.default_parent_folder_url),
+			default_parent_folder_name = COALESCE(EXCLUDED.default_parent_folder_name, google_drive_connections.default_parent_folder_name),
 			connected_at = EXCLUDED.connected_at,
 			status = EXCLUDED.status,
 			updated_at = now()`,
@@ -307,12 +329,45 @@ async function upsertConnectionByUserId({ userId, payload }) {
 			normalizeText(payload.email),
 			normalizeText(payload.scope),
 			normalizeText(payload.encryptedRefreshToken),
-			normalizeText(payload.connectedAt) || null,
+			normalizeNullableText(payload.defaultParentFolderId),
+			normalizeNullableText(payload.defaultParentFolderUrl),
+			normalizeNullableText(payload.defaultParentFolderName),
+			normalizeNullableText(payload.connectedAt),
 			normalizeText(payload.status) || 'connected',
 		]
 	);
 }
 
+async function updateConnectionDefaultParentFolderByUserId({ userId, parentFolderId, parentFolderUrl, parentFolderName }) {
+	await runQuery(
+		`UPDATE google_drive_connections
+		 SET
+			default_parent_folder_id = $2,
+			default_parent_folder_url = $3,
+			default_parent_folder_name = $4,
+			updated_at = now()
+		 WHERE user_id = $1`,
+		[
+			userId,
+			normalizeNullableText(parentFolderId),
+			normalizeNullableText(parentFolderUrl),
+			normalizeNullableText(parentFolderName),
+		]
+	);
+}
+
+function extractDriveFolderIdFromUrl(url) {
+	const value = normalizeText(url);
+	if (!value) return '';
+
+	const folderMatch = value.match(/\/folders\/([a-zA-Z0-9_-]+)/i);
+	if (folderMatch?.[1]) return folderMatch[1];
+
+	const idParamMatch = value.match(/[?&]id=([a-zA-Z0-9_-]+)/i);
+	if (idParamMatch?.[1]) return idParamMatch[1];
+
+	return '';
+}
 async function upsertProjectFolder({ userId, projectId, payload }) {
 	await runQuery(
 		`INSERT INTO google_drive_project_folders (
@@ -504,6 +559,9 @@ export async function getGoogleDriveStatus({ userId }) {
 		connected: true,
 		email: normalizeText(connection.email),
 		scope: normalizeText(connection.scope),
+		defaultParentFolderId: normalizeText(connection.defaultParentFolderId),
+		defaultParentFolderUrl: normalizeText(connection.defaultParentFolderUrl),
+		defaultParentFolderName: normalizeText(connection.defaultParentFolderName),
 		connectedAt: connection.connectedAt,
 		status: normalizeText(connection.status) || 'connected',
 	};
@@ -540,7 +598,7 @@ export async function bootstrapGoogleDriveProjectFolders({ userId, projectId, pr
 		throw createError('projectId e projectName sao obrigatorios.', 400);
 	}
 
-	const { drive } = await createDriveClientForUser(userId);
+	const { drive, connection } = await createDriveClientForUser(userId);
 
 	const existing = await getProjectFolderByUserAndProjectId({ userId, projectId: normalizedProjectId });
 	if (existing?.rootFolderId && (await driveFolderExists({ drive, folderId: existing.rootFolderId }))) {
@@ -555,9 +613,12 @@ export async function bootstrapGoogleDriveProjectFolders({ userId, projectId, pr
 	}
 
 	const requestedParentId = normalizeText(parentFolderId);
+	const defaultParentId = normalizeText(connection?.defaultParentFolderId);
 	const parentId = isValidDriveFolderId(requestedParentId)
 		? requestedParentId
-		: (await getOrCreateAppRootFolder(drive)).id;
+		: (isValidDriveFolderId(defaultParentId)
+			? defaultParentId
+			: (await getOrCreateAppRootFolder(drive)).id);
 
 	const rootFolder = await createFolderIfMissing({
 		drive,
@@ -603,6 +664,50 @@ export async function bootstrapGoogleDriveProjectFolders({ userId, projectId, pr
 		subfolders: createdSubfolders,
 		reused: false,
 	};
+}
+
+export async function saveGoogleDriveDefaultParentFolder({ userId, parentFolderId, parentFolderUrl }) {
+	const connection = await getConnectionByUserId(userId);
+	if (!connection?.encryptedRefreshToken) {
+		throw createError('Conecte o Google Drive antes de definir a pasta mae padrao.', 400);
+	}
+
+	const normalizedParentFolderId = normalizeText(parentFolderId) || extractDriveFolderIdFromUrl(parentFolderUrl);
+	const normalizedParentFolderUrl = normalizeText(parentFolderUrl);
+
+	if (!normalizedParentFolderId) {
+		throw createError('Informe um link ou id valido da pasta mae.', 400);
+	}
+
+	if (!isValidDriveFolderId(normalizedParentFolderId)) {
+		throw createError('Id da pasta mae invalido.', 400);
+	}
+
+	const { drive } = await createDriveClientForUser(userId);
+	let folderMeta = null;
+
+	try {
+		const response = await drive.files.get({
+			fileId: normalizedParentFolderId,
+			fields: 'id,name,mimeType,trashed,webViewLink',
+		});
+		folderMeta = response.data || null;
+	} catch {
+		throw createError('Pasta mae nao encontrada no Google Drive.', 404);
+	}
+
+	if (!folderMeta?.id || folderMeta.trashed || folderMeta.mimeType !== GOOGLE_DRIVE_FOLDER_MIME_TYPE) {
+		throw createError('A referencia informada nao corresponde a uma pasta ativa do Google Drive.', 400);
+	}
+
+	await updateConnectionDefaultParentFolderByUserId({
+		userId,
+		parentFolderId: folderMeta.id,
+		parentFolderUrl: normalizeText(folderMeta.webViewLink) || normalizedParentFolderUrl || `https://drive.google.com/drive/folders/${folderMeta.id}`,
+		parentFolderName: normalizeText(folderMeta.name),
+	});
+
+	return getGoogleDriveStatus({ userId });
 }
 
 export async function getGoogleDriveProjectFolderConfig({ userId, projectId }) {
@@ -822,6 +927,8 @@ export async function getGoogleDriveConfigChecklist({ userId }) {
 		connection: {
 			connected: Boolean(connection),
 			email: normalizeText(connection?.email),
+			defaultParentFolderConfigured: Boolean(normalizeText(connection?.defaultParentFolderId)),
+			defaultParentFolderName: normalizeText(connection?.defaultParentFolderName),
 			connectedAt: connection?.connectedAt || null,
 			refreshTokenStored: Boolean(connection?.encryptedRefreshToken),
 		},
