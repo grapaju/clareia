@@ -8,6 +8,7 @@ import {
 	getGoogleDriveProjectFolderConfig,
 	getGoogleDriveStatus,
 	handleGoogleDriveOAuthCallback,
+	removeGoogleDriveProjectFolderConfig,
 	saveGoogleDriveDefaultParentFolder,
 	saveGoogleDriveProjectFolderConfig,
 	saveGoogleDriveOAuthUserConfig,
@@ -93,6 +94,15 @@ router.post('/project-folder', async (req, res) => {
 	});
 
 	res.json({ config });
+});
+
+router.delete('/project-folder', async (req, res) => {
+	const result = await removeGoogleDriveProjectFolderConfig({
+		userId: req.pocketbaseUserId,
+		projectId: String(req.query.projectId || ''),
+	});
+
+	res.json(result);
 });
 
 router.post('/default-parent-folder', async (req, res) => {

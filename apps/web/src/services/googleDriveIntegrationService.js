@@ -56,6 +56,13 @@ export async function saveGoogleDriveProjectFolderConfig(payload = {}) {
   return response?.config || null;
 }
 
+export async function removeGoogleDriveProjectFolderConfig(projectId) {
+  const query = toQueryString({ projectId });
+  return integratedAiClient.fetch(`/google-drive/project-folder?${query}`, {
+    method: 'DELETE'
+  });
+}
+
 export async function saveGoogleDriveDefaultParentFolder(payload = {}) {
   return integratedAiClient.fetch('/google-drive/default-parent-folder', {
     method: 'POST',

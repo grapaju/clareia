@@ -774,6 +774,20 @@ export async function saveGoogleDriveProjectFolderConfig({ userId, projectId, pr
 	return getGoogleDriveProjectFolderConfig({ userId, projectId: normalizedProjectId });
 }
 
+export async function removeGoogleDriveProjectFolderConfig({ userId, projectId }) {
+	const normalizedProjectId = normalizeText(projectId);
+	if (!normalizedProjectId) {
+		throw createError('projectId e obrigatorio.', 400);
+	}
+
+	await deleteProjectFolderByUserAndProjectId({ userId, projectId: normalizedProjectId });
+
+	return {
+		removed: true,
+		projectId: normalizedProjectId,
+	};
+}
+
 async function resolveTargetFolderId({ userId, projectId, projectName, projectType, driveFolderId }) {
 	const explicitFolderId = normalizeText(driveFolderId);
 	if (explicitFolderId) {

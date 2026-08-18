@@ -78,6 +78,7 @@ import {
   getGoogleDriveAuthUrl,
   getGoogleDriveProjectFolderConfig,
   getGoogleDriveStatus,
+  removeGoogleDriveProjectFolderConfig,
   saveGoogleDriveDefaultParentFolder,
   saveGoogleDriveProjectFolderConfig,
   syncGoogleDriveDocument
@@ -283,6 +284,7 @@ export default function ProjectsPage() {
   const [driveConnectionStatus, setDriveConnectionStatus] = useState({ connected: false });
   const [isConnectingDrive, setIsConnectingDrive] = useState(false);
   const [isBootstrappingDriveFolders, setIsBootstrappingDriveFolders] = useState(false);
+  const [isDisconnectingProjectDrive, setIsDisconnectingProjectDrive] = useState(false);
   const [isManualDriveSectionOpen, setIsManualDriveSectionOpen] = useState(false);
   const [isParentFolderSectionOpen, setIsParentFolderSectionOpen] = useState(false);
   const [isSyncingDriveMaterial, setIsSyncingDriveMaterial] = useState(false);
@@ -1082,6 +1084,36 @@ export default function ProjectsPage() {
       return;
     }
     window.open(targetUrl, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleDisconnectProjectDriveFolder = async () => {
+    if (!selectedProject || !projectDriveConfig || isDisconnectingProjectDrive) return;
+
+    const confirmed = window.confirm(
+      'Deseja desconectar a pasta deste projeto? A conta Google continuara conectada e voce podera reconectar depois.'
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setIsDisconnectingProjectDrive(true);
+      await removeGoogleDriveProjectFolderConfig(selectedProject);
+
+      setProjectDriveConfig(null);
+      setDriveConfigForm((current) => ({
+        ...current,
+        driveFolderUrl: '',
+        driveFolderId: '',
+        status: 'conectado manualmente'
+      }));
+
+      appendHistory(selectedProject, 'Google Drive desconectado', 'Vinculo da pasta do projeto removido.');
+      toast.success('Pasta do projeto desconectada com sucesso.');
+    } catch (error) {
+      toast.error(error?.message || 'Nao foi possivel desconectar a pasta do projeto.');
+    } finally {
+      setIsDisconnectingProjectDrive(false);
+    }
   };
 
   const handleCreateDriveDefaultSubfolders = async () => {
@@ -2446,6 +2478,14 @@ export default function ProjectsPage() {
                                   <div className="flex flex-wrap gap-2">
                                     <Button size="sm" variant="outline" onClick={handleOpenProjectDriveFolder}>Abrir no Drive</Button>
                                     <Button size="sm" variant="outline" onClick={() => setIsDriveDialogOpen(true)}>Alterar conexao</Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={handleDisconnectProjectDriveFolder}
+                                      disabled={isDisconnectingProjectDrive}
+                                    >
+                                      {isDisconnectingProjectDrive ? 'Desconectando...' : 'Desconectar pasta'}
+                                    </Button>
                                   </div>
                                 </div>
                               )
