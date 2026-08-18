@@ -473,6 +473,18 @@ async function createFolderIfMissing({ drive, parentId, name }) {
 	return created.data;
 }
 
+const APP_ROOT_FOLDER_NAME = 'Clareia';
+
+// IDs de pasta do Google Drive tem no minimo ~15 caracteres alfanumericos/-/_.
+// Valores curtos ou invalidos (ex: '.') nao devem ser usados como parentId.
+function isValidDriveFolderId(value) {
+	return /^[a-zA-Z0-9_-]{10,}$/.test(String(value || '').trim());
+}
+
+async function getOrCreateAppRootFolder(drive) {
+	return createFolderIfMissing({ drive, parentId: null, name: APP_ROOT_FOLDER_NAME });
+}
+
 export async function getGoogleDriveStatus({ userId }) {
 	const connection = await getConnectionByUserId(userId);
 
@@ -522,9 +534,15 @@ export async function bootstrapGoogleDriveProjectFolders({ userId, projectId, pr
 	}
 
 	const { drive } = await createDriveClientForUser(userId);
+
+	const requestedParentId = normalizeText(parentFolderId);
+	const parentId = isValidDriveFolderId(requestedParentId)
+		? requestedParentId
+		: (await getOrCreateAppRootFolder(drive)).id;
+
 	const rootFolder = await createFolderIfMissing({
 		drive,
-		parentId: normalizeText(parentFolderId) || null,
+		parentId,
 		name: normalizedProjectName,
 	});
 

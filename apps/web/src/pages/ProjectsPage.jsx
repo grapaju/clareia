@@ -277,6 +277,7 @@ export default function ProjectsPage() {
   const [driveConnectionStatus, setDriveConnectionStatus] = useState({ connected: false });
   const [isConnectingDrive, setIsConnectingDrive] = useState(false);
   const [isBootstrappingDriveFolders, setIsBootstrappingDriveFolders] = useState(false);
+  const [isManualDriveSectionOpen, setIsManualDriveSectionOpen] = useState(false);
   const [isSyncingDriveMaterial, setIsSyncingDriveMaterial] = useState(false);
   const [driveConfigForm, setDriveConfigForm] = useState({
     folderName: '',
@@ -984,7 +985,7 @@ export default function ProjectsPage() {
       setIsBootstrappingDriveFolders(true);
       bootstrapGoogleDriveProjectFolders({
         projectId: selectedProject,
-        projectName: selectedProject,
+        projectName: normalizeText(driveConfigForm.folderName) || selectedProject,
         projectType: selectedProfile?.projectType || 'Administrativo',
         parentFolderId: normalizeText(driveConfigForm.driveFolderId) || undefined
       }).then((result) => {
@@ -2989,17 +2990,25 @@ export default function ProjectsPage() {
           </DialogContent>
         </Dialog>
 
-        <Dialog open={isDriveDialogOpen} onOpenChange={setIsDriveDialogOpen}>
+        <Dialog
+          open={isDriveDialogOpen}
+          onOpenChange={(open) => {
+            setIsDriveDialogOpen(open);
+            if (!open) setIsManualDriveSectionOpen(false);
+          }}
+        >
           <DialogContent className="w-[calc(100vw-1.5rem)] max-w-lg overflow-hidden">
             <DialogHeader>
               <DialogTitle>{projectDriveConfig ? 'Alterar conexao do Google Drive' : 'Conectar Google Drive'}</DialogTitle>
               <DialogDescription>
-                Configure uma unica vez por projeto. Voce pode conectar manualmente ou usar a conexao automatica via OAuth.
+                {driveConnectionStatus?.connected
+                  ? 'Sua conta ja esta conectada. Defina o nome da pasta e a Clareia cria tudo automaticamente dentro do seu Drive.'
+                  : 'Conecte sua conta do Google para criar a pasta automaticamente, ou informe o link de uma pasta ja existente.'}
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-3 min-w-0">
               <div className="space-y-2 min-w-0">
-                <Label className="break-words">Nome da pasta principal</Label>
+                <Label className="break-words">Nome da pasta do projeto</Label>
                 <Input
                   className="w-full min-w-0"
                   value={driveConfigForm.folderName}
@@ -3007,64 +3016,94 @@ export default function ProjectsPage() {
                   placeholder="Ex.: Expocentro"
                 />
               </div>
-              <div className="space-y-2 min-w-0">
-                <Label className="break-words">Link da pasta do Google Drive</Label>
-                <Input
-                  className="w-full min-w-0"
-                  value={driveConfigForm.driveFolderUrl}
-                  onChange={(event) => {
-                    const nextUrl = event.target.value;
-                    const extractedId = extractDriveFolderId(nextUrl);
-                    setDriveConfigForm((current) => ({
-                      ...current,
-                      driveFolderUrl: nextUrl,
-                      driveFolderId: extractedId || current.driveFolderId
-                    }));
-                  }}
-                  placeholder="https://drive.google.com/drive/folders/..."
-                />
-              </div>
-              <div className="space-y-2 min-w-0">
-                <Label className="break-words">driveFolderId</Label>
-                <Input
-                  className="w-full min-w-0"
-                  value={driveConfigForm.driveFolderId}
-                  onChange={(event) => setDriveConfigForm((current) => ({ ...current, driveFolderId: event.target.value }))}
-                  placeholder="Extraido da URL quando possivel"
-                />
-              </div>
-              <div className="space-y-2 min-w-0">
-                <Label className="break-words">Status</Label>
-                <Input value={driveConfigForm.status || 'conectado manualmente'} readOnly className="w-full min-w-0 bg-muted/40" />
-              </div>
+
+              {projectDriveConfig?.driveFolderUrl && (
+                <div className="space-y-2 min-w-0">
+                  <Label className="break-words">Status</Label>
+                  <Input value={driveConfigForm.status || 'conectado'} readOnly className="w-full min-w-0 bg-muted/40" />
+                </div>
+              )}
+
+              {!driveConnectionStatus?.connected && (
+                <div className="space-y-3 min-w-0 rounded-md border border-border p-3">
+                  <p className="text-sm text-muted-foreground">
+                    Ja tem uma pasta criada no Google Drive? Cole o link dela abaixo.
+                  </p>
+                  <div className="space-y-2 min-w-0">
+                    <Label className="break-words">Link da pasta do Google Drive</Label>
+                    <Input
+                      className="w-full min-w-0"
+                      value={driveConfigForm.driveFolderUrl}
+                      onChange={(event) => {
+                        const nextUrl = event.target.value;
+                        const extractedId = extractDriveFolderId(nextUrl);
+                        setDriveConfigForm((current) => ({
+                          ...current,
+                          driveFolderUrl: nextUrl,
+                          driveFolderId: extractedId || current.driveFolderId
+                        }));
+                      }}
+                      placeholder="https://drive.google.com/drive/folders/..."
+                    />
+                  </div>
+                </div>
+              )}
+
+              {driveConnectionStatus?.connected && (
+                <div className="min-w-0">
+                  <button
+                    type="button"
+                    className="text-sm text-muted-foreground underline underline-offset-2"
+                    onClick={() => setIsManualDriveSectionOpen((current) => !current)}
+                  >
+                    {isManualDriveSectionOpen ? 'Ocultar opcao manual' : 'Prefiro vincular uma pasta ja existente'}
+                  </button>
+
+                  {isManualDriveSectionOpen && (
+                    <div className="space-y-3 min-w-0 rounded-md border border-border p-3 mt-2">
+                      <div className="space-y-2 min-w-0">
+                        <Label className="break-words">Link da pasta do Google Drive</Label>
+                        <Input
+                          className="w-full min-w-0"
+                          value={driveConfigForm.driveFolderUrl}
+                          onChange={(event) => {
+                            const nextUrl = event.target.value;
+                            const extractedId = extractDriveFolderId(nextUrl);
+                            setDriveConfigForm((current) => ({
+                              ...current,
+                              driveFolderUrl: nextUrl,
+                              driveFolderId: extractedId || current.driveFolderId
+                            }));
+                          }}
+                          placeholder="https://drive.google.com/drive/folders/..."
+                        />
+                      </div>
+                      <Button
+                        className="w-full sm:w-auto"
+                        variant="outline"
+                        onClick={() => {
+                          const ok = handleSaveProjectDriveConfig();
+                          if (ok) setIsDriveDialogOpen(false);
+                        }}
+                      >
+                        Salvar pasta do Drive
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
             <DialogFooter className="gap-2 sm:justify-end sm:flex-wrap">
-              <Button className="w-full sm:w-auto" variant="outline" onClick={handleCreateDriveDefaultSubfolders} disabled={isBootstrappingDriveFolders}>
-                {isBootstrappingDriveFolders ? 'Criando...' : 'Criar subpastas padrao'}
-              </Button>
-              <Button className="w-full sm:w-auto" variant="outline" onClick={handleConnectGoogleDriveAutomatic} disabled={isConnectingDrive}>
-                {isConnectingDrive ? 'Conectando...' : 'Conectar automatico'}
-              </Button>
-              <Button
-                className="w-full sm:w-auto"
-                variant="outline"
-                onClick={() => {
-                  setIsDriveDialogOpen(false);
-                  navigate('/integracoes/google-drive-oauth');
-                }}
-              >
-                Ver guia OAuth
-              </Button>
+              {driveConnectionStatus?.connected ? (
+                <Button className="w-full sm:w-auto" onClick={handleCreateDriveDefaultSubfolders} disabled={isBootstrappingDriveFolders}>
+                  {isBootstrappingDriveFolders ? 'Criando pasta...' : 'Criar pasta do projeto no Drive'}
+                </Button>
+              ) : (
+                <Button className="w-full sm:w-auto" onClick={handleConnectGoogleDriveAutomatic} disabled={isConnectingDrive}>
+                  {isConnectingDrive ? 'Conectando...' : 'Conectar Google Drive'}
+                </Button>
+              )}
               <Button className="w-full sm:w-auto" variant="outline" onClick={() => setIsDriveDialogOpen(false)}>Fechar</Button>
-              <Button
-                className="w-full sm:w-auto"
-                onClick={() => {
-                  const ok = handleSaveProjectDriveConfig();
-                  if (ok) setIsDriveDialogOpen(false);
-                }}
-              >
-                Salvar pasta do Drive
-              </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
