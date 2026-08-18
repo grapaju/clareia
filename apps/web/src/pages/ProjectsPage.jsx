@@ -278,6 +278,7 @@ export default function ProjectsPage() {
   const [isConnectingDrive, setIsConnectingDrive] = useState(false);
   const [isBootstrappingDriveFolders, setIsBootstrappingDriveFolders] = useState(false);
   const [isManualDriveSectionOpen, setIsManualDriveSectionOpen] = useState(false);
+  const [isParentFolderSectionOpen, setIsParentFolderSectionOpen] = useState(false);
   const [isSyncingDriveMaterial, setIsSyncingDriveMaterial] = useState(false);
   const [driveConfigForm, setDriveConfigForm] = useState({
     folderName: '',
@@ -2293,6 +2294,14 @@ export default function ProjectsPage() {
                                   <p className="text-sm text-muted-foreground">Nenhuma pasta do Google Drive conectada.</p>
                                   <Button size="sm" onClick={() => setIsDriveDialogOpen(true)}>Conectar Drive</Button>
                                 </div>
+                              ) : projectDriveConfig.connectionType === 'oauth' && !driveConnectionStatus?.connected ? (
+                                <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                                  <p className="text-sm text-amber-800 truncate">
+                                    A conexao com o Google Drive foi encerrada. Reconecte para continuar usando a pasta{' '}
+                                    <span className="font-medium">{projectDriveConfig.folderName || selectedProject}</span>.
+                                  </p>
+                                  <Button size="sm" onClick={() => setIsDriveDialogOpen(true)}>Reconectar</Button>
+                                </div>
                               ) : (
                                 <div className="rounded-xl border border-border bg-muted/20 p-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                                   <p className="text-sm text-muted-foreground truncate">
@@ -2994,7 +3003,10 @@ export default function ProjectsPage() {
           open={isDriveDialogOpen}
           onOpenChange={(open) => {
             setIsDriveDialogOpen(open);
-            if (!open) setIsManualDriveSectionOpen(false);
+            if (!open) {
+              setIsManualDriveSectionOpen(false);
+              setIsParentFolderSectionOpen(false);
+            }
           }}
         >
           <DialogContent className="w-[calc(100vw-1.5rem)] max-w-lg overflow-hidden">
@@ -3002,7 +3014,7 @@ export default function ProjectsPage() {
               <DialogTitle>{projectDriveConfig ? 'Alterar conexao do Google Drive' : 'Conectar Google Drive'}</DialogTitle>
               <DialogDescription>
                 {driveConnectionStatus?.connected
-                  ? 'Sua conta ja esta conectada. Defina o nome da pasta e a Clareia cria tudo automaticamente dentro do seu Drive.'
+                  ? 'Sua conta ja esta conectada. Basta dar um nome ao projeto: a pasta e criada automaticamente dentro de "Clareia", no seu Google Drive.'
                   : 'Conecte sua conta do Google para criar a pasta automaticamente, ou informe o link de uma pasta ja existente.'}
               </DialogDescription>
             </DialogHeader>
@@ -3018,25 +3030,37 @@ export default function ProjectsPage() {
               </div>
 
               {driveConnectionStatus?.connected && (
-                <div className="space-y-2 min-w-0">
-                  <Label className="break-words">Criar dentro da pasta (opcional)</Label>
-                  <Input
-                    className="w-full min-w-0"
-                    value={driveConfigForm.parentFolderUrl || ''}
-                    onChange={(event) => {
-                      const nextUrl = event.target.value;
-                      const extractedId = extractDriveFolderId(nextUrl);
-                      setDriveConfigForm((current) => ({
-                        ...current,
-                        parentFolderUrl: nextUrl,
-                        driveFolderId: extractedId || ''
-                      }));
-                    }}
-                    placeholder="Ex.: link da pasta 'Projetos' ja existente no seu Drive"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Deixe em branco para criar dentro da pasta padrao "Clareia".
-                  </p>
+                <div className="min-w-0">
+                  <button
+                    type="button"
+                    className="text-sm text-muted-foreground underline underline-offset-2"
+                    onClick={() => setIsParentFolderSectionOpen((current) => !current)}
+                  >
+                    {isParentFolderSectionOpen ? 'Ocultar opcao avancada' : 'Quero escolher em qual pasta do Drive criar (avancado)'}
+                  </button>
+
+                  {isParentFolderSectionOpen && (
+                    <div className="space-y-2 min-w-0 rounded-md border border-border p-3 mt-2">
+                      <Label className="break-words">Link da pasta onde criar (opcional)</Label>
+                      <Input
+                        className="w-full min-w-0"
+                        value={driveConfigForm.parentFolderUrl || ''}
+                        onChange={(event) => {
+                          const nextUrl = event.target.value;
+                          const extractedId = extractDriveFolderId(nextUrl);
+                          setDriveConfigForm((current) => ({
+                            ...current,
+                            parentFolderUrl: nextUrl,
+                            driveFolderId: extractedId || ''
+                          }));
+                        }}
+                        placeholder="Ex.: link da pasta 'Projetos' ja existente no seu Drive"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Deixe em branco para usar a pasta padrao "Clareia" (criada automaticamente).
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
 
