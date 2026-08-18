@@ -14,11 +14,18 @@ Este guia consolida o procedimento de deploy e operacao do Clareia no aaPanel co
 | Servico | Porta padrao | Uso |
 | --- | --- | --- |
 | Web (Vite em desenvolvimento) | 3000 | Interface do usuario |
-| API Node.js | 3005 | API do produto |
+| API Node.js | 3005 (local) | API do produto |
 | PostgreSQL | 5432 | Banco de dados principal |
 | PocketBase (opcional/legado) | 8090 | Apenas rotinas legadas especificas |
 
 No ambiente local, a web acessa a API pelo proxy em /hcgi/api.
+
+Importante: a porta real da API em cada servidor de producao e definida pelo
+PORT no .env e deve bater com o proxy_pass do bloco Nginx daquele dominio
+(ex: `grep proxy_pass /www/server/panel/vhost/nginx/<dominio>.conf`). Em um
+servidor aaPanel compartilhado com varios sites, portas como 3005 podem ja
+estar em uso por outro projeto — confirme sempre antes de assumir 3005 como
+livre ou de matar processos que estejam nela.
 
 ## Pre-requisitos
 
@@ -39,6 +46,7 @@ PORT=3005
 CORS_ORIGIN=https://seu-dominio.com
 DATABASE_URL=postgresql://usuario:senha@127.0.0.1:5432/clareia
 JWT_SECRET=chave-longa-forte-e-aleatoria
+GOOGLE_DRIVE_TOKEN_ENCRYPTION_KEY=string-aleatoria-forte
 ```
 
 Regras:
@@ -46,6 +54,16 @@ Regras:
 - DATABASE_URL e obrigatorio.
 - JWT_SECRET e obrigatorio.
 - CORS_ORIGIN deve apontar para o dominio publico do front-end.
+- GOOGLE_DRIVE_TOKEN_ENCRYPTION_KEY e obrigatoria para usar a integracao com
+  Google Drive (criptografa os tokens salvos em `google_drive_connections`).
+  Nao e configuravel pela tela de integracao — precisa ser adicionada
+  manualmente no `.env` do servidor. Gere um valor unico com:
+  `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`
+  Depois de definida, nao troque o valor: conexoes ja salvas ficam invalidas
+  se a chave mudar (usuarios precisam reconectar o Drive).
+- Os campos `GOOGLE_OAUTH_CLIENT_ID`/`CLIENT_SECRET`/`REDIRECT_URI`/`SCOPES`
+  podem ser configurados pela propria tela de integracao
+  (`/integracoes/google-drive-oauth`), que grava direto no `.env` da API.
 
 ### apps/web
 
@@ -138,6 +156,23 @@ pm2 restart clareia-api
 
 Use o aaPanel para Nginx e SSL. Mantenha a API em PM2.
 
+### Gerenciando a API pelo Node Project do aaPanel
+
+Se o servidor usa o gerenciador "Node Project" do proprio aaPanel (em vez de
+`pm2` direto via SSH), configure-o assim para evitar processos duplicados
+brigando pela mesma porta:
+
+- **Comando de start:** `npm run start:postgres` (roda so a API, sem
+  PocketBase) executado a partir da raiz do repositorio. Nao use `npm run
+  start` puro nessa configuracao: ele tambem sobe o PocketBase via
+  `concurrently --kill-others`, e se o binario do PocketBase nao tiver
+  permissao de execucao (`EACCES`), o `--kill-others` derruba a API junto.
+- **Porta:** deve ser exatamente a porta usada no `proxy_pass` do bloco Nginx
+  do dominio (confirme com `grep proxy_pass` no arquivo de vhost).
+- Depois de configurar pelo painel, use sempre os botoes Start/Stop/Restart
+  do painel — evite rodar `pm2 start`/`pm2 delete` manualmente para essa
+  mesma aplicacao, para nao criar dois processos gerenciando a mesma porta.
+
 ### Arquitetura sugerida
 
 1. Nginx (aaPanel) atende HTTPS do dominio.
@@ -213,3 +248,5 @@ location /hcgi/platform/ {
 - Restringir acesso de rede ao PostgreSQL (sem exposicao publica, salvo necessidade controlada).
 - Publicar o front-end apenas por HTTPS.
 - Programar backup recorrente do PostgreSQL antes de atualizacoes.
+
+
