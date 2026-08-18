@@ -95,6 +95,20 @@ CREATE TABLE IF NOT EXISTS google_drive_project_folders (
   UNIQUE(user_id, project_id)
 );
 
+CREATE TABLE IF NOT EXISTS project_profiles (
+  id BIGSERIAL PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  summary TEXT DEFAULT '',
+  project_type TEXT DEFAULT 'Administrativo',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(user_id, name)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_project_profiles_user_name_ci
+  ON project_profiles(user_id, lower(name));
+
 ALTER TABLE google_drive_connections
   ADD COLUMN IF NOT EXISTS default_parent_folder_id TEXT;
 

@@ -5,6 +5,7 @@ import integratedAiRouter from './integrated-ai.js';
 import googleDriveRouter from './google-drive.js';
 import tasksRouter from './tasks.js';
 import recordsRouter from './records.js';
+import projectsRouter from './projects.js';
 
 const router = Router();
 
@@ -13,6 +14,7 @@ export default () => {
     router.use('/auth', authRouter);
     router.use('/tasks', tasksRouter);
     router.use('/records', recordsRouter);
+    router.use('/projects', projectsRouter);
     router.use('/integrated-ai', integratedAiRouter);
     router.use('/google-drive', googleDriveRouter);
 

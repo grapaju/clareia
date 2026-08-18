@@ -88,8 +88,14 @@ import { createProjectNote, deleteProjectNote, listProjectNotes, listRecentProje
 import { listProjectWaitingReturns } from '@/services/waitingReturnService.js';
 import { deleteWorkSession, getWorkTimeSummary, listProjectWorkSessions, toHours, updateWorkSession } from '@/services/workSessionService.js';
 import { getTaskLastCompletionDate } from '@/services/taskHistoryService.js';
+import {
+  createProjectProfileApi,
+  deleteProjectProfileApi,
+  listProjectProfilesApi,
+  updateProjectProfileApi
+} from '@/services/projectProfilesApiService.js';
 
-const PROJECT_PROFILES_KEY = 'clareia_project_profiles_v1';
+const LEGACY_PROJECT_PROFILES_KEY = 'clareia_project_profiles_v1';
 const PROJECT_HISTORY_KEY = 'clareia_project_history_v1';
 
 function safeParse(value, fallback) {
@@ -103,12 +109,12 @@ function safeParse(value, fallback) {
 
 function readProjectProfiles() {
   if (typeof window === 'undefined') return [];
-  return safeParse(window.localStorage.getItem(PROJECT_PROFILES_KEY), []);
+  return safeParse(window.localStorage.getItem(LEGACY_PROJECT_PROFILES_KEY), []);
 }
 
 function writeProjectProfiles(items) {
   if (typeof window === 'undefined') return;
-  window.localStorage.setItem(PROJECT_PROFILES_KEY, JSON.stringify(items));
+  window.localStorage.setItem(LEGACY_PROJECT_PROFILES_KEY, JSON.stringify(items));
 }
 
 function readProjectHistory() {
@@ -343,7 +349,55 @@ export default function ProjectsPage() {
   const [deleteConfirmName, setDeleteConfirmName] = useState('');
 
   useEffect(() => {
-    setProfiles(readProjectProfiles());
+    let isMounted = true;
+
+    const migrateLegacyProfilesIfNeeded = async () => {
+      try {
+        const remote = await listProjectProfilesApi();
+        if (!isMounted) return;
+
+        if (remote.length > 0) {
+          setProfiles(remote);
+          return;
+        }
+
+        const legacy = readProjectProfiles();
+        if (legacy.length === 0) {
+          setProfiles([]);
+          return;
+        }
+
+        for (const profile of legacy) {
+          const name = normalizeText(profile?.name);
+          if (!name) continue;
+
+          try {
+            await createProjectProfileApi({
+              name,
+              summary: normalizeText(profile?.summary),
+              projectType: normalizeText(profile?.projectType) || 'Administrativo',
+            });
+          } catch {
+            // Ignora conflitos para seguir migracao dos demais registros.
+          }
+        }
+
+        writeProjectProfiles([]);
+        const reloaded = await listProjectProfilesApi();
+        if (!isMounted) return;
+        setProfiles(reloaded);
+      } catch {
+        if (!isMounted) return;
+        // Fallback temporario para manter UX mesmo em indisponibilidade de API.
+        setProfiles(readProjectProfiles());
+      }
+    };
+
+    migrateLegacyProfilesIfNeeded();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -875,8 +929,8 @@ export default function ProjectsPage() {
     setHistoryItems(next);
   };
 
-  const saveProfile = ({ oldName, nextProfile, applyTemplate = false }) => {
-    const existing = readProjectProfiles();
+  const saveProfile = async ({ oldName, nextProfile, applyTemplate = false }) => {
+    const existing = [...profiles];
     const cleanName = normalizeText(nextProfile.name);
     if (!cleanName) {
       toast.error('Informe o nome do projeto.');
@@ -891,18 +945,33 @@ export default function ProjectsPage() {
       return false;
     }
 
-    const now = nowIso();
-    const profilePayload = {
-      name: cleanName,
-      summary: normalizeText(nextProfile.summary),
-      projectType: nextProfile.projectType || 'Administrativo',
-      createdAt: existing.find((item) => item.name === oldName)?.createdAt || now,
-      updatedAt: now
-    };
+    let profilePayload = null;
+    try {
+      if (oldName) {
+        profilePayload = await updateProjectProfileApi(oldName, {
+          name: cleanName,
+          summary: normalizeText(nextProfile.summary),
+          projectType: nextProfile.projectType || 'Administrativo',
+        });
+      } else {
+        profilePayload = await createProjectProfileApi({
+          name: cleanName,
+          summary: normalizeText(nextProfile.summary),
+          projectType: nextProfile.projectType || 'Administrativo',
+        });
+      }
+    } catch (error) {
+      toast.error(error?.message || 'Nao foi possivel salvar o projeto no servidor.');
+      return false;
+    }
+
+    if (!profilePayload?.name) {
+      toast.error('Nao foi possivel salvar o projeto.');
+      return false;
+    }
 
     let next = existing.filter((item) => item.name !== oldName);
     next = [profilePayload, ...next].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
-    writeProjectProfiles(next);
     setProfiles(next);
 
     if (applyTemplate) {
@@ -912,8 +981,8 @@ export default function ProjectsPage() {
     return profilePayload;
   };
 
-  const handleCreateProject = () => {
-    const created = saveProfile({
+  const handleCreateProject = async () => {
+    const created = await saveProfile({
       oldName: null,
       nextProfile: newProjectForm,
       applyTemplate: true
@@ -927,11 +996,11 @@ export default function ProjectsPage() {
     setNewProjectForm({ name: '', projectType: 'Administrativo', summary: '' });
   };
 
-  const handleUpdateProject = () => {
+  const handleUpdateProject = async () => {
     if (!selectedProject) return;
 
     const previousType = selectedProfile?.projectType || 'Administrativo';
-    const updated = saveProfile({
+    const updated = await saveProfile({
       oldName: selectedProject,
       nextProfile: {
         ...profileForm,
@@ -1796,7 +1865,7 @@ export default function ProjectsPage() {
 
     setIsRenamingProject(true);
     try {
-      const updated = saveProfile({
+      const updated = await saveProfile({
         oldName: selectedProject,
         nextProfile: {
           name: nextName,
@@ -1858,8 +1927,9 @@ export default function ProjectsPage() {
     try {
       clearProjectWorkspaceData(selectedProject);
 
-      const nextProfiles = readProjectProfiles().filter((item) => item.name !== selectedProject);
-      writeProjectProfiles(nextProfiles);
+      await deleteProjectProfileApi(selectedProject);
+
+      const nextProfiles = profiles.filter((item) => item.name !== selectedProject);
       setProfiles(nextProfiles);
 
       const historyMap = readProjectHistory();
