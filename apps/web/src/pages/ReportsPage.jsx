@@ -33,15 +33,8 @@ import { deleteWorkSession, listWorkSessions, updateWorkSession } from '@/servic
 import { listAllTaskHistory } from '@/services/taskHistoryService.js';
 import { listDailyWrapUps } from '@/services/dailyWrapUpService.js';
 import { toast } from 'sonner';
-
-function formatDurationFriendly(minutes) {
-  const safeMinutes = Math.max(0, Number(minutes || 0));
-  if (safeMinutes < 60) return `${safeMinutes} min`;
-  const hours = Math.floor(safeMinutes / 60);
-  const remainingMinutes = safeMinutes % 60;
-  if (remainingMinutes === 0) return `${hours}h`;
-  return `${hours}h${remainingMinutes}`;
-}
+import { formatDurationFriendly, pluralizeCount } from '@/lib/reportFormatting.js';
+import { normalizeTaskStatus, TASK_STATUS } from '@/lib/taskExecution.js';
 
 function formatDateTime(value) {
   if (!value) return '-';
@@ -117,7 +110,7 @@ export default function ReportsPage() {
           ...session,
           taskTitle: task?.title || 'Sem tarefa',
           taskType: task?.taskType || 'Sem tipo',
-          taskStatus: task?.status || 'Sem status'
+          taskStatus: task ? normalizeTaskStatus(task.status) : 'sem_status'
         };
       })
       .filter((session) => {
@@ -141,8 +134,7 @@ export default function ReportsPage() {
         if (!task || task.taskType !== taskTypeFilter) return false;
       }
       if (statusFilter !== 'all') {
-        const task = taskById.get(event.taskId);
-        if (!task || task.status !== statusFilter) return false;
+        if (statusFilter !== TASK_STATUS.CONCLUIDA) return false;
       }
       return true;
     });
@@ -317,9 +309,9 @@ export default function ReportsPage() {
       `Projeto: ${projectFilter === 'all' ? 'Todos' : projectFilter}`,
       '',
       `Total de horas: ${formatDurationFriendly(totals.totalMinutes)}`,
-      `Tarefas concluidas: ${totals.completedTasks}`,
-      `Sessoes registradas: ${totals.sessions}`,
-      `Projetos trabalhados: ${totals.projectsWorked}`,
+      pluralizeCount(totals.completedTasks, 'tarefa concluída', 'tarefas concluídas'),
+      pluralizeCount(totals.sessions, 'sessão registrada', 'sessões registradas'),
+      `Projetos com horas registradas: ${totals.projectsWorked}`,
       '',
       'Total por projeto:'
     ];
@@ -328,7 +320,7 @@ export default function ReportsPage() {
       lines.push('- Sem dados no periodo.');
     } else {
       perProjectRows.forEach((row) => {
-        lines.push(`- ${row.project}: ${formatDurationFriendly(row.minutes)} | ${row.tasksDone} tarefas concluidas | ${row.sessions} sessoes`);
+        lines.push(`- ${row.project}: ${formatDurationFriendly(row.minutes)} | ${pluralizeCount(row.tasksDone, 'tarefa concluída', 'tarefas concluídas')} | ${pluralizeCount(row.sessions, 'sessão', 'sessões')}`);
       });
     }
 
@@ -390,9 +382,9 @@ export default function ReportsPage() {
       divider();
       writeLine('Resumo executivo', { fontSize: 12, bold: true });
       writeLine(`Total de horas: ${formatDurationFriendly(totals.totalMinutes)}`);
-      writeLine(`Tarefas concluídas: ${totals.completedTasks}`);
-      writeLine(`Sessões registradas: ${totals.sessions}`);
-      writeLine(`Projetos trabalhados: ${totals.projectsWorked}`);
+      writeLine(pluralizeCount(totals.completedTasks, 'tarefa concluída', 'tarefas concluídas'));
+      writeLine(pluralizeCount(totals.sessions, 'sessão registrada', 'sessões registradas'));
+      writeLine(`Projetos com horas registradas: ${totals.projectsWorked}`);
 
       divider();
       writeLine('Total por projeto', { fontSize: 12, bold: true });
@@ -400,7 +392,7 @@ export default function ReportsPage() {
         writeLine('Sem dados no período selecionado.');
       } else {
         perProjectRows.forEach((row) => {
-          writeLine(`${row.project} - ${formatDurationFriendly(row.minutes)} - ${row.tasksDone} tarefas concluídas - ${row.sessions} sessões`);
+          writeLine(`${row.project} - ${formatDurationFriendly(row.minutes)} - ${pluralizeCount(row.tasksDone, 'tarefa concluída', 'tarefas concluídas')} - ${pluralizeCount(row.sessions, 'sessão', 'sessões')}`);
         });
       }
 
@@ -472,12 +464,12 @@ export default function ReportsPage() {
                       <Label>Status</Label>
                       <select className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
                         <option value="all">Todos</option>
-                        <option value="Hoje">Hoje</option>
-                        <option value="Esta semana">Esta semana</option>
-                        <option value="Pendente">Pendente</option>
-                        <option value="Fazendo">Fazendo</option>
-                        <option value="Concluída">Concluída</option>
-                        <option value="Backlog">Arquivada</option>
+                        <option value="pendente">Pendente</option>
+                        <option value="em_andamento">Em andamento</option>
+                        <option value="pausada">Pausada</option>
+                        <option value="aguardando_retorno">Aguardando retorno</option>
+                        <option value="concluida">Concluída</option>
+                        <option value="arquivada">Arquivada</option>
                       </select>
                     </div>
                   </div>
@@ -501,7 +493,7 @@ export default function ReportsPage() {
                 <Card className="bg-card border-border"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Total de horas</p><p className="text-2xl font-medium">{formatDurationFriendly(totals.totalMinutes)}</p></CardContent></Card>
                 <Card className="bg-card border-border"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Tarefas concluídas</p><p className="text-2xl font-medium">{totals.completedTasks}</p></CardContent></Card>
                 <Card className="bg-card border-border"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Sessões registradas</p><p className="text-2xl font-medium">{totals.sessions}</p></CardContent></Card>
-                <Card className="bg-card border-border"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Projetos trabalhados</p><p className="text-2xl font-medium">{totals.projectsWorked}</p></CardContent></Card>
+                <Card className="bg-card border-border"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Projetos com horas registradas</p><p className="text-2xl font-medium">{totals.projectsWorked}</p></CardContent></Card>
               </div>
 
               <Card className="bg-card border-border shadow-sm">
@@ -514,7 +506,7 @@ export default function ReportsPage() {
                       {perProjectRows.map((row) => (
                         <div key={row.project} className="rounded-lg border border-border p-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
                           <p className="text-sm font-medium text-foreground">{row.project}</p>
-                          <p className="text-sm text-muted-foreground">{formatDurationFriendly(row.minutes)} - {row.tasksDone} tarefas concluídas - {row.sessions} sessões</p>
+                          <p className="text-sm text-muted-foreground">{formatDurationFriendly(row.minutes)} - {pluralizeCount(row.tasksDone, 'tarefa concluída', 'tarefas concluídas')} - {pluralizeCount(row.sessions, 'sessão', 'sessões')}</p>
                         </div>
                       ))}
                     </div>

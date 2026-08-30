@@ -1,13 +1,13 @@
 import { Router } from 'express';
-import { ContentBlockType, stream, uploadImagesToPocketBase } from '../api/integrated-ai.js';
+import { ContentBlockType, stream, uploadImagesLocally } from '../api/integrated-ai.js';
 import { SystemPrompt } from '../constants/prompts.js';
 import { uploadFiles } from '../middleware/file-upload.js';
 import { integratedAiRateLimit } from '../middleware/integrated-ai-rate-limit.js';
-import { pocketbaseAuth } from '../middleware/pocketbase-auth.js';
+import { requireAuth } from '../middleware/auth.js';
 
 const router = Router();
 
-router.use(pocketbaseAuth);
+router.use(requireAuth);
 
 router.post('/stream', integratedAiRateLimit, uploadFiles({
 	allowedMimeTypes: [
@@ -26,14 +26,14 @@ router.post('/stream', integratedAiRateLimit, uploadFiles({
 	const parsedMessage = JSON.parse(message);
 
 	if (req.files?.length > 0) {
-		const imageUrls = await uploadImagesToPocketBase({ images: req.files });
+		const imageUrls = await uploadImagesLocally({ images: req.files });
 		imageUrls.forEach((url) => {
 			parsedMessage.push({ type: ContentBlockType.Image, image: url });
 		});
 	}
 
 	const sseStream = await stream({
-		userId: req.pocketbaseUserId,
+		userId: req.userId,
 		systemPrompt: SystemPrompt,
 		userMessage: parsedMessage,
 	});

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Helmet } from 'react-helmet';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Sparkles, Edit2, Copy, ListTodo, Calendar, Clock, ChevronDown, ChevronUp, Link2, Trash2, Layers } from 'lucide-react';
+import { Sparkles, Edit2, ListTodo, Calendar, Clock, ChevronDown, ChevronUp, Link2, Trash2, Layers } from 'lucide-react';
 import Header from '@/components/Header.jsx';
 import Sidebar from '@/components/Sidebar.jsx';
 import MobileNav from '@/components/MobileNav.jsx';
@@ -31,11 +31,13 @@ import {
 } from '@/components/ui/dialog';
 import { useAuth } from '@/contexts/AuthContext.jsx';
 import { useTheme } from '@/contexts/ThemeContext.jsx';
-import pb from '@/lib/pocketbaseClient.js';
-import { getCurrentAccountId } from '@/lib/pocketbaseClient.js';
+import apiClient, { getCurrentAccountId } from '@/lib/apiClient.js';
 import { normalizeTaskTypeForTaskCollection } from '@/lib/unloadMindLogic.js';
 import { toast } from 'sonner';
 import { appendProjectHistory } from '@/services/projectHistoryService.js';
+import { getProjectStatusLabel, resolvePlanProjectAssociations } from '@/lib/projectAssociationLogic.js';
+import { confirmPlan, getPlanProjectContext } from '@/services/plansApiService.js';
+import { useTaskContext } from '@/hooks/useTaskContext.js';
 
 const TASK_TYPE_OPTIONS = [
   'orçamento/proposta',
@@ -115,6 +117,7 @@ export default function ClearPlanPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const { currentUser } = useAuth();
+  const { refreshTasks } = useTaskContext();
   const accountId = currentUser?.currentAccountId || getCurrentAccountId();
   const { lowStimulationMode } = useTheme();
   const cameFromDirectCreate = Boolean(location.state?.planRecord);
@@ -127,6 +130,8 @@ export default function ClearPlanPage() {
   const [expandedTaskIds, setExpandedTaskIds] = useState([]);
   const [editingTaskId, setEditingTaskId] = useState(null);
   const [lowStimIndex, setLowStimIndex] = useState(0);
+  const [showAllTasks, setShowAllTasks] = useState(false);
+  const [projectContext, setProjectContext] = useState({ projects: [], aliases: [] });
 
   const [deleteDialog, setDeleteDialog] = useState({ open: false, taskId: null });
   const [mergeDialog, setMergeDialog] = useState({ open: false, sourceId: null, targetId: '' });
@@ -137,7 +142,7 @@ export default function ClearPlanPage() {
   const updatePlanStatus = async (record, status, extras = {}) => {
     if (!record?.id || !record?.planoGerado) return;
 
-    await pb.collection('planosClareados').update(record.id, {
+    await apiClient.collection('planosClareados').update(record.id, {
       planoGerado: {
         ...record.planoGerado,
         meta: {
@@ -158,12 +163,12 @@ export default function ClearPlanPage() {
 
       try {
         const [plans, tasks] = await Promise.all([
-          pb.collection('planosClareados').getFullList({
+          apiClient.collection('planosClareados').getFullList({
             sort: '-created',
             filter: `userId = "${currentUser.id}"`,
             $autoCancel: false
           }),
-          pb.collection('tasks').getFullList({
+          apiClient.collection('tasks').getFullList({
             sort: '-created',
             filter: `userId = "${currentUser.id}"`,
             fields: 'id,title',
@@ -245,6 +250,24 @@ export default function ClearPlanPage() {
     setExpandedTaskIds([]);
     setEditingTaskId(null);
     setLowStimIndex(0);
+    setShowAllTasks(false);
+
+    let active = true;
+    getPlanProjectContext()
+      .then((context) => {
+        if (!active) return;
+        setProjectContext(context);
+        setEditableTasks(resolvePlanProjectAssociations(all, context));
+      })
+      .catch((error) => {
+        console.error(error);
+        toast.error('Não foi possível consultar seus projetos. Você ainda pode decidir depois.');
+        setEditableTasks(resolvePlanProjectAssociations(all));
+      });
+
+    return () => {
+      active = false;
+    };
   }, [planData?.id, plan]);
 
   useEffect(() => {
@@ -255,10 +278,10 @@ export default function ClearPlanPage() {
   }, [lowStimulationMode, lowStimIndex, editableTasks.length]);
 
   const visibleTasks = useMemo(() => {
-    if (!lowStimulationMode) return editableTasks;
+    if (!lowStimulationMode) return showAllTasks ? editableTasks : editableTasks.slice(0, 3);
     if (editableTasks.length === 0) return [];
     return [editableTasks[lowStimIndex]].filter(Boolean);
-  }, [lowStimulationMode, editableTasks, lowStimIndex]);
+  }, [lowStimulationMode, editableTasks, lowStimIndex, showAllTasks]);
 
   const mergeCandidates = useMemo(() => {
     if (!mergeDialog.sourceId) return [];
@@ -278,6 +301,21 @@ export default function ClearPlanPage() {
         next.priority = getPriorityByType(value, task.priority);
       }
       return next;
+    }));
+  };
+
+  const updateTaskProject = (taskId, value) => {
+    setEditableTasks((current) => current.map((task) => {
+      if (task.id !== taskId) return task;
+      if (value === 'undecided') return { ...task, project: '', projectStatus: 'undecided' };
+      if (value === 'personal') return { ...task, project: 'Pessoal', projectStatus: 'personal' };
+      if (value === 'new') return { ...task, projectStatus: 'new' };
+      return {
+        ...task,
+        project: value,
+        projectStatus: 'existing',
+        projectAlias: task.projectMention || task.originalText || task.title,
+      };
     }));
   };
 
@@ -468,17 +506,15 @@ export default function ClearPlanPage() {
     setIsProcessing(true);
 
     try {
-      let count = 0;
-
-      for (const t of allTasks) {
+      const preparedTasks = allTasks.map((t) => {
         const scheduledDate = t.scheduledDate || t.dataSugeridaExecucao || new Date().toISOString().split('T')[0];
         const scheduledPeriod = t.scheduledPeriod || t.periodoSugerido || 'tarde';
 
-        await pb.collection('tasks').create({
-          userId: currentUser?.id,
-          ...(accountId ? { accountId } : {}),
+        return {
+          ...t,
           title: t.title,
           project: t.project,
+          projectStatus: t.projectStatus || 'undecided',
           taskType: normalizeTaskTypeForTaskCollection(t.taskType),
           nextAction: t.firstStep || t.microtarefas?.[0]?.descricao || t.title,
           timeEstimate: t.timeEstimate,
@@ -492,33 +528,25 @@ export default function ClearPlanPage() {
           isClientTask: Boolean(t.isClientTask),
           microtarefas: t.microtarefas,
           status: getStatusFromScheduledDate(scheduledDate)
-        }, { $autoCancel: false });
+        };
+      });
 
-        if (t.project) {
-          appendProjectHistory(t.project, 'Tarefa criada', t.title || 'Nova tarefa do plano');
-        }
+      const result = await confirmPlan({
+        planId: planData.id,
+        accountId,
+        origin: plan?.meta?.origin || 'plano-clareado',
+        tasks: preparedTasks,
+      });
 
-        count++;
-      }
+      await refreshTasks();
 
-      await pb.collection('planosClareados').update(planData.id, {
-        planoGerado: {
-          ...plan,
-          ...revisedPlan,
-          meta: {
-            ...(plan?.meta || {}),
-            status: 'created',
-            updatedAt: new Date().toISOString(),
-            reviewed: true,
-            reviewedTasksCount: allTasks.length,
-            createdTasksCount: count,
-            processedAt: new Date().toISOString()
-          }
-        }
-      }, { $autoCancel: false });
+      preparedTasks.forEach((task) => {
+        if (task.project) appendProjectHistory(task.project, 'Tarefa criada', task.title || 'Nova tarefa do plano');
+      });
 
       setPlanData(null);
-      toast.success(`${count} tarefas criadas com sucesso.`);
+      const count = result?.items?.length || preparedTasks.length;
+      toast.success(result?.reused ? 'Este plano já havia sido criado.' : `${count} tarefas criadas com sucesso.`);
       navigate('/');
     } catch (err) {
       console.error(err);
@@ -528,51 +556,30 @@ export default function ClearPlanPage() {
     }
   };
 
-  const handleCancelCreation = async () => {
-    if (!planData?.id) {
-      navigate('/criar-plano');
-      return;
-    }
-
+  const handleSaveForLater = async () => {
+    if (!planData?.id) return;
+    const revisedPlan = buildPlanFromEditableTasks();
     setIsProcessing(true);
     try {
-      await updatePlanStatus(planData, 'cancelled', { cancelledAt: new Date().toISOString() });
-      setPlanData(null);
-      toast.success('Criação cancelada. Este plano não será mais exibido para criação.');
-      navigate('/criar-plano');
-    } catch (err) {
-      console.error(err);
-      toast.error('Erro ao cancelar criação do plano.');
+      await apiClient.collection('planosClareados').update(planData.id, {
+        planoGerado: {
+          ...plan,
+          ...revisedPlan,
+          meta: { ...(plan?.meta || {}), status: 'pending', savedAt: new Date().toISOString() }
+        }
+      }, { $autoCancel: false });
+      toast.success('Plano salvo. Você pode continuar depois.');
+      navigate('/');
+    } catch (error) {
+      console.error(error);
+      toast.error('Não foi possível salvar agora. Suas alterações continuam na tela.');
     } finally {
       setIsProcessing(false);
     }
   };
 
-  const handleCopy = () => {
-    if (editableTasks.length === 0) return;
-
-    let copyText = 'Plano Organizado\n\n';
-    editableTasks.forEach((t) => {
-      copyText += `[ ] ${t.title} (${t.timeEstimate || 0} min)\n`;
-      copyText += `    Projeto: ${t.project || 'Pessoal'}\n`;
-      copyText += `    Tipo: ${t.taskType || 'administrativo'}\n`;
-      copyText += `    Prioridade: ${t.priority || 'Prioridade média'}\n`;
-      copyText += `    Quando fazer: ${t.scheduledLabel || t.quandoFazer || 'Esta semana'}\n`;
-      copyText += `    Primeira ação: ${t.firstStep || '-'}\n`;
-      if (t.microtarefas?.length) {
-        t.microtarefas.forEach((m) => {
-          copyText += `      - ${m.descricao}\n`;
-        });
-      }
-      copyText += '\n';
-    });
-
-    navigator.clipboard.writeText(copyText);
-    toast.success('Plano copiado para a área de transferência.');
-  };
-
   const handleEditSource = () => {
-    navigate('/criar-plano');
+    navigate('/criar-plano', { state: { prefillText: planData?.conteudoOriginal || '' } });
   };
 
   if (isResolvingPendingPlan) {
@@ -655,24 +662,30 @@ export default function ClearPlanPage() {
                 <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-primary/10 text-primary mb-4 shadow-sm">
                   <Sparkles className="w-7 h-7" />
                 </div>
-                <h1 className="text-3xl md:text-4xl font-medium text-foreground mb-3">Revise as tarefas identificadas</h1>
+                <h1 className="text-3xl md:text-4xl font-medium text-foreground mb-3">
+                  Encontrei {editableTasks.length} {editableTasks.length === 1 ? 'tarefa' : 'tarefas'}
+                </h1>
                 <p className="text-base md:text-lg text-muted-foreground">
-                  Revise em modo compacto. Você pode editar, ver passos, juntar, excluir ou transformar em microtarefa antes de criar.
+                  Você não precisa completar tudo agora. Alguns detalhes podem ficar para depois.
                 </p>
               </div>
 
+              {planData?.conteudoOriginal && (
+                <details className="mb-5 rounded-lg border border-border bg-card px-4 py-3 text-sm">
+                  <summary className="cursor-pointer font-medium text-foreground">Ver o que escrevi originalmente</summary>
+                  <p className="mt-3 whitespace-pre-wrap text-muted-foreground">{planData.conteudoOriginal}</p>
+                </details>
+              )}
+
               <div className="flex flex-wrap gap-3 mb-6 bg-card p-3 rounded-2xl border border-border shadow-sm justify-center sticky top-[72px] z-30">
                 <Button onClick={handleCreateTasks} disabled={isProcessing} className="bg-primary text-primary-foreground hover:bg-primary/90 px-5 rounded-xl">
-                  <ListTodo className="w-4 h-4 mr-2" /> Transformar em tarefas
+                  <ListTodo className="w-4 h-4 mr-2" /> {editableTasks.length === 1 ? 'Criar tarefa' : 'Criar meu plano'}
                 </Button>
-                <Button variant="outline" onClick={handleEditSource} className="rounded-xl">
-                  <Edit2 className="w-4 h-4 mr-2" /> Voltar para editar texto original
+                <Button variant="outline" onClick={handleSaveForLater} disabled={isProcessing} className="rounded-xl">
+                  Salvar para continuar depois
                 </Button>
-                <Button variant="outline" onClick={handleCancelCreation} disabled={isProcessing} className="rounded-xl text-destructive hover:bg-destructive/10">
-                  Cancelar
-                </Button>
-                <Button variant="ghost" onClick={handleCopy} className="rounded-xl text-muted-foreground hover:bg-muted">
-                  <Copy className="w-4 h-4 mr-2" /> Copiar
+                <Button variant="ghost" onClick={handleEditSource} className="rounded-xl">
+                  Voltar e escrever mais
                 </Button>
               </div>
 
@@ -727,11 +740,11 @@ export default function ClearPlanPage() {
                           <div className="flex flex-wrap gap-2 text-xs md:text-sm">
                             {lowStimulationMode ? (
                               <span className="text-muted-foreground">
-                                {task.project || 'Pessoal'} · {task.taskType || 'administrativo'} · {task.priority || 'Prioridade média'} · {task.timeEstimate || 0} min · {task.scheduledLabel || task.quandoFazer || 'Esta semana'}
+                                {task.project || 'Projeto a decidir'} · {task.taskType || 'administrativo'} · {task.priority || 'Prioridade média'} · {task.timeEstimate || 0} min · {task.scheduledLabel || task.quandoFazer || 'Esta semana'}
                               </span>
                             ) : (
                               <>
-                                <span className="px-2 py-1 rounded-full bg-muted border border-border">Projeto: {task.project || 'Pessoal'}</span>
+                                <span className="px-2 py-1 rounded-full bg-muted border border-border">{getProjectStatusLabel(task.projectStatus)}: {task.project || 'decidir depois'}</span>
                                 <span className="px-2 py-1 rounded-full bg-muted border border-border">Tipo: {task.taskType || 'administrativo'}</span>
                                 <span className="px-2 py-1 rounded-full bg-primary/10 border border-primary/20 text-primary">{task.priority || 'Prioridade média'}</span>
                                 <span className="px-2 py-1 rounded-full bg-muted border border-border"><Clock className="w-3 h-3 inline mr-1" />{task.timeEstimate || 0} min</span>
@@ -749,6 +762,9 @@ export default function ClearPlanPage() {
                             <Button size="sm" variant="outline" onClick={() => setEditingTaskId((prev) => (prev === task.id ? null : task.id))}>
                               <Edit2 className="w-3.5 h-3.5 mr-1" /> Editar
                             </Button>
+                            <Button size="sm" variant="outline" onClick={() => setEditingTaskId(task.id)}>
+                              Trocar projeto
+                            </Button>
                             <Button size="sm" variant="outline" onClick={() => toggleExpanded(task.id)}>
                               <Layers className="w-3.5 h-3.5 mr-1" /> {expanded ? 'Ocultar passos' : 'Ver passos'}
                             </Button>
@@ -759,7 +775,13 @@ export default function ClearPlanPage() {
                               Transformar em microtarefa de...
                             </Button>
                             <Button size="sm" variant="outline" className="text-destructive" onClick={() => setDeleteDialog({ open: true, taskId: task.id })}>
-                              <Trash2 className="w-3.5 h-3.5 mr-1" /> Excluir
+                              <Trash2 className="w-3.5 h-3.5 mr-1" /> Remover
+                            </Button>
+                            <Button size="sm" variant="ghost" onClick={() => setEditableTasks((current) => current.filter((item) => item.id !== task.id))}>
+                              Não é uma tarefa
+                            </Button>
+                            <Button size="sm" variant="ghost" onClick={() => { updateTaskField(task.id, 'detailsDeferred', true); setEditingTaskId(null); }}>
+                              Decidir detalhes depois
                             </Button>
                           </div>
 
@@ -772,7 +794,26 @@ export default function ClearPlanPage() {
                                 </div>
                                 <div className="space-y-1">
                                   <Label>Projeto</Label>
-                                  <Input value={task.project || ''} onChange={(e) => updateTaskField(task.id, 'project', e.target.value)} />
+                                  <Select
+                                    value={task.projectStatus === 'existing' ? task.project : (task.projectStatus || 'undecided')}
+                                    onValueChange={(value) => updateTaskProject(task.id, value)}
+                                  >
+                                    <SelectTrigger><SelectValue /></SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="undecided">Decidir depois</SelectItem>
+                                      <SelectItem value="personal">Pessoal</SelectItem>
+                                      {task.projectStatus === 'new' && <SelectItem value="new">Criar {task.project}</SelectItem>}
+                                      {projectContext.projects.filter((project) => project.name !== 'Pessoal').map((project) => (
+                                        <SelectItem key={project.name} value={project.name}>{project.name}</SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                  {task.projectStatus === 'new' && (
+                                    <Input value={task.project || ''} onChange={(event) => updateTaskField(task.id, 'project', event.target.value)} aria-label="Nome do projeto novo" />
+                                  )}
+                                  <p className="text-xs text-muted-foreground">
+                                    {task.projectStatus === 'new' ? 'Este projeto será criado somente ao confirmar.' : getProjectStatusLabel(task.projectStatus)}
+                                  </p>
                                 </div>
                                 <div className="space-y-1">
                                   <Label>Tipo</Label>
@@ -855,6 +896,13 @@ export default function ClearPlanPage() {
                   );
                 })}
               </div>
+              {!lowStimulationMode && !showAllTasks && editableTasks.length > 3 && (
+                <div className="mt-4 text-center">
+                  <Button variant="outline" onClick={() => setShowAllTasks(true)}>
+                    Ver mais {editableTasks.length - 3} tarefas
+                  </Button>
+                </div>
+              )}
             </div>
           </main>
         </div>

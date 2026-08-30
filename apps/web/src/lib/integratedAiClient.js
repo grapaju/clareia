@@ -1,30 +1,18 @@
 const API_SERVER_URL = '/hcgi/api';
 
-function getPocketbaseToken() {
-	const jwtToken = localStorage.getItem('clareia_auth_token');
-	if (jwtToken) {
-		return jwtToken;
-	}
-
-	const pocketbaseToken = localStorage.getItem('pocketbase_auth');
-
-	if (pocketbaseToken) {
-		const bytes = new TextEncoder().encode(pocketbaseToken);
-		const binary = String.fromCharCode(...bytes);
-
-		return btoa(binary);
-	}
+function getAuthToken() {
+	return localStorage.getItem('clareia_auth_token');
 }
 
 const integratedAiClient = {
 	fetch: async (path, options = {}) => {
-		const pocketbaseToken = getPocketbaseToken();
+		const authToken = getAuthToken();
 
 		const response = await window.fetch(API_SERVER_URL + path, {
 			...options,
 			headers: {
 				...options.headers,
-				...(pocketbaseToken && { Authorization: `Bearer ${pocketbaseToken}` }),
+				...(authToken && { Authorization: `Bearer ${authToken}` }),
 			},
 		});
 
@@ -44,15 +32,16 @@ const integratedAiClient = {
 			throw error;
 		}
 
+		if (response.status === 204) return null;
 		return response.json();
 	},
 
 	stream: async (path, { body, signal, images } = {}) => {
-		const pocketbaseToken = getPocketbaseToken();
+		const authToken = getAuthToken();
 
 		const headers = {
 			Accept: 'text/event-stream',
-			...(pocketbaseToken && { Authorization: `Bearer ${pocketbaseToken}` }),
+			...(authToken && { Authorization: `Bearer ${authToken}` }),
 		};
 
 		const formData = new FormData();

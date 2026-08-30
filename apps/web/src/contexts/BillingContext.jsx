@@ -1,7 +1,6 @@
 
 import React, { createContext, useState, useEffect } from 'react';
-import pb from '@/lib/pocketbaseClient.js';
-import { getCurrentAccountId } from '@/lib/pocketbaseClient.js';
+import apiClient, { getCurrentAccountId } from '@/lib/apiClient.js';
 import { useAuth } from '@/contexts/AuthContext.jsx';
 import { toast } from 'sonner';
 
@@ -21,7 +20,7 @@ export function BillingProvider({ children }) {
 
     const fetchBillings = async () => {
       try {
-        const records = await pb.collection('billings').getFullList({
+        const records = await apiClient.collection('billings').getFullList({
           sort: 'dueDate',
           $autoCancel: false
         });
@@ -39,7 +38,7 @@ export function BillingProvider({ children }) {
   const addCharge = async (chargeData) => {
     try {
       const accountId = currentUser?.currentAccountId || getCurrentAccountId();
-      const record = await pb.collection('billings').create({
+      const record = await apiClient.collection('billings').create({
         ...chargeData,
         userId: currentUser?.id,
         ...(accountId ? { accountId } : {})
@@ -55,7 +54,7 @@ export function BillingProvider({ children }) {
 
   const updateCharge = async (id, updates) => {
     try {
-      const record = await pb.collection('billings').update(id, updates, { $autoCancel: false });
+      const record = await apiClient.collection('billings').update(id, updates, { $autoCancel: false });
       setCharges(prev => prev.map(c => c.id === id ? record : c));
       return record;
     } catch (error) {
@@ -67,7 +66,7 @@ export function BillingProvider({ children }) {
 
   const deleteCharge = async (id) => {
     try {
-      await pb.collection('billings').delete(id, { $autoCancel: false });
+      await apiClient.collection('billings').delete(id, { $autoCancel: false });
       setCharges(prev => prev.filter(c => c.id !== id));
     } catch (error) {
       console.error(error);

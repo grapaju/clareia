@@ -17,6 +17,27 @@ html {
   scroll-behavior: smooth;
 }
 
+html[data-text-size='grande'] { font-size: 112.5%; }
+html[data-text-size='maior'] { font-size: 125%; }
+html[data-density='confortavel'] { --radius: 0.5rem; }
+html.high-contrast { --muted-foreground: 220 20% 32%; --border: 220 15% 70%; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+.reduce-motion *, .reduce-motion *::before, .reduce-motion *::after {
+  scroll-behavior: auto !important;
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}
+
 @layer base {
   :root {
     /* Calm, clean, welcoming design system */

@@ -21,7 +21,7 @@ export function normalizeTaskStatus(status) {
   if (!text) return TASK_STATUS.PENDENTE;
   if (text === 'em_andamento' || text.includes('fazendo') || text.includes('em andamento')) return TASK_STATUS.EM_ANDAMENTO;
   if (text.includes('pausad')) return TASK_STATUS.PAUSADA;
-  if (text.includes('concluid')) return TASK_STATUS.CONCLUIDA;
+  if (text.includes('concluid') || text === 'completed' || text === 'done') return TASK_STATUS.CONCLUIDA;
   if (text === 'aguardando_retorno' || text.includes('aguardando retorno')) return TASK_STATUS.AGUARDANDO_RETORNO;
   if (text.includes('arquivad') || text.includes('backlog')) return TASK_STATUS.ARQUIVADA;
 
@@ -48,6 +48,16 @@ export function isTaskArchivedStatus(status) {
 
 export function isTaskPausedStatus(status) {
   return normalizeTaskStatus(status) === TASK_STATUS.PAUSADA;
+}
+
+export function isTaskOpenStatus(status) {
+  const normalized = normalizeTaskStatus(status);
+  return normalized !== TASK_STATUS.CONCLUIDA && normalized !== TASK_STATUS.ARQUIVADA;
+}
+
+export function isTaskActionableStatus(status) {
+  const normalized = normalizeTaskStatus(status);
+  return normalized === TASK_STATUS.PENDENTE || normalized === TASK_STATUS.EM_ANDAMENTO;
 }
 
 function microtaskId(raw, index) {

@@ -7,6 +7,7 @@ import Sidebar from '@/components/Sidebar.jsx';
 import MobileNav from '@/components/MobileNav.jsx';
 import TaskCard from '@/components/TaskCard.jsx';
 import CheckInCard from '@/components/CheckInCard.jsx';
+import PreferencesOnboarding from '@/components/PreferencesOnboarding.jsx';
 import TaskDetailsModal from '@/components/TaskDetailsModal.jsx';
 import EditTaskModal from '@/components/EditTaskModal.jsx';
 import { Button } from '@/components/ui/button';
@@ -35,16 +36,20 @@ import { useTheme } from '@/contexts/ThemeContext.jsx';
 import { useAuth } from '@/contexts/AuthContext.jsx';
 import { listFollowUpsForDate, listWaitingReturns } from '@/services/waitingReturnService.js';
 import { listUnsortedNotes } from '@/lib/unsortedNotesStorage.js';
-import pb from '@/lib/pocketbaseClient.js';
+import apiClient from '@/lib/apiClient.js';
 import BlockedHelpDialog from '@/components/BlockedHelpDialog.jsx';
 import { getNextRecurringDate, getStatusForScheduledDate } from '@/lib/recurrenceLogic.js';
 import TaskCompletionDialog from '@/components/TaskCompletionDialog.jsx';
 import CreateFollowUpFromTaskDialog from '@/components/CreateFollowUpFromTaskDialog.jsx';
-import { getTaskMicrotaskProgress, normalizeTaskStatus, TASK_STATUS } from '@/lib/taskExecution.js';
+import { getTaskMicrotaskProgress, isTaskActionableStatus, normalizeTaskStatus, TASK_STATUS } from '@/lib/taskExecution.js';
 import TaskPendingMicrotasksDialog from '@/components/TaskPendingMicrotasksDialog.jsx';
 import TaskPauseDialog from '@/components/TaskPauseDialog.jsx';
 import DailyWrapUpDialog from '@/components/DailyWrapUpDialog.jsx';
 import { useAppMode } from '@/contexts/AppModeContext.jsx';
+import QuickCaptureDialog from '@/components/QuickCaptureDialog.jsx';
+import TaskPickerDialog from '@/components/TaskPickerDialog.jsx';
+import SmallerStepDialog from '@/components/SmallerStepDialog.jsx';
+import { toIsoDate } from '@/lib/localDate.js';
 
 const WEEK_REVIEW_KEY = 'clareia_week_review_seen';
 
@@ -73,13 +78,6 @@ function readProjectHealth() {
   return { staleProjectsCount: staleProjects.length };
 }
 
-function toIsoDate(value) {
-  if (!value) return null;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).toISOString().split('T')[0];
-}
-
 export default function HomePage() {
   const {
     tasks,
@@ -88,6 +86,7 @@ export default function HomePage() {
     deleteTask,
     updateTask,
     checkIn,
+    openCheckInEditor,
     setSelectedTask,
     startTask,
     resumeTask,
@@ -98,12 +97,11 @@ export default function HomePage() {
   const { isDailyMode } = useAppMode();
   const { currentUser } = useAuth();
   const navigate = useNavigate();
-  const userId = currentUser?.id || pb.authStore?.model?.id || null;
+  const userId = currentUser?.id || apiClient.authStore?.model?.id || null;
 
   const [detailsTask, setDetailsTask] = useState(null);
   const [editTask, setEditTask] = useState(null);
   const [deleteTaskTarget, setDeleteTaskTarget] = useState(null);
-  const [isReorganizingDay, setIsReorganizingDay] = useState(false);
   const [showOtherTasks, setShowOtherTasks] = useState(false);
   const [isBlockedDialogOpen, setIsBlockedDialogOpen] = useState(false);
   const [completionTaskTarget, setCompletionTaskTarget] = useState(null);
@@ -112,11 +110,34 @@ export default function HomePage() {
   const [pendingCompletionPayload, setPendingCompletionPayload] = useState(null);
   const [isPauseDialogOpen, setIsPauseDialogOpen] = useState(false);
   const [isWrapUpOpen, setIsWrapUpOpen] = useState(false);
+  const [skippedSuggestionIds, setSkippedSuggestionIds] = useState([]);
+  const [selectedRecommendationId, setSelectedRecommendationId] = useState('');
+  const [isTaskPickerOpen, setIsTaskPickerOpen] = useState(false);
+  const [smallStepTask, setSmallStepTask] = useState(null);
 
-  const { recommended, agora, depois, seSobrar, alertasImportantes = [], fallbackMessage } = reorganizeTasksByEnergy(tasks, checkIn);
+  const { recommended: rankedRecommendation, agora, alertasImportantes = [] } = reorganizeTasksByEnergy(tasks, checkIn);
+  const eligibleOpenTasks = useMemo(() => {
+    const ranked = [rankedRecommendation, ...agora]
+      .filter(Boolean)
+      .filter((task) => isTaskActionableStatus(task.status));
+    return [...new Map(ranked.map((task) => [task.id, task])).values()];
+  }, [agora, rankedRecommendation]);
+  const recommended = useMemo(() => {
+    const selected = eligibleOpenTasks.find((task) => task.id === selectedRecommendationId);
+    if (selected) return selected;
+    return eligibleOpenTasks.find((task) => !skippedSuggestionIds.includes(task.id)) || null;
+  }, [eligibleOpenTasks, selectedRecommendationId, skippedSuggestionIds]);
+  const alternativeTasks = useMemo(() => eligibleOpenTasks.filter((task) => (
+    task.id !== recommended?.id && !skippedSuggestionIds.includes(task.id)
+  )), [eligibleOpenTasks, recommended?.id, skippedSuggestionIds]);
   const todayCapacity = getTodayCapacity(tasks, checkIn);
 
-  const todayIso = useMemo(() => new Date().toISOString().split('T')[0], []);
+  const todayIso = useMemo(() => toIsoDate(new Date()), []);
+  const overdueTasks = useMemo(() => alertasImportantes.filter((task) => {
+    const scheduledDate = toIsoDate(task.scheduledDate || task.dataSugeridaExecucao);
+    const dueDate = toIsoDate(task.dueDate || task.dataLimite);
+    return (scheduledDate && scheduledDate < todayIso) || (dueDate && dueDate < todayIso);
+  }), [alertasImportantes, todayIso]);
 
   const recurringTasks = useMemo(() => {
     return tasks.filter((task) => {
@@ -179,8 +200,10 @@ export default function HomePage() {
   const showWeeklyReviewPrompt = useMemo(() => {
     if (typeof window === 'undefined') return false;
     const seenWeek = window.localStorage.getItem(WEEK_REVIEW_KEY);
-    return seenWeek !== getWeekStorageKey();
-  }, [tasks.length]);
+    const hasReviewItems = Object.values(weeklyReview).some((value) => Number(value) > 0);
+    const isReviewDay = new Date().getDay() === 1;
+    return (hasReviewItems || isReviewDay) && seenWeek !== getWeekStorageKey();
+  }, [weeklyReview]);
 
   const pausedTasks = useMemo(() => {
     return tasks.filter((task) => normalizeTaskStatus(task.status) === TASK_STATUS.PAUSADA);
@@ -192,6 +215,20 @@ export default function HomePage() {
       : await startTask(task.id);
     setSelectedTask(updatedTask || task);
     navigate('/foco');
+  };
+
+  const handleAnotherSuggestion = () => {
+    if (!recommended || alternativeTasks.length === 0) {
+      toast.info('Não encontrei outra tarefa que combine com este momento.');
+      return;
+    }
+    setSkippedSuggestionIds((current) => [...new Set([...current, recommended.id])]);
+    setSelectedRecommendationId('');
+  };
+
+  const handleSelectRecommendation = (task) => {
+    setSkippedSuggestionIds((current) => current.filter((id) => id !== task.id));
+    setSelectedRecommendationId(task.id);
   };
 
   const handleCompleteTask = async (payload) => {
@@ -259,36 +296,6 @@ export default function HomePage() {
     window.localStorage.setItem(WEEK_REVIEW_KEY, getWeekStorageKey());
   };
 
-  const handleLightenDay = async () => {
-    const todayTasks = tasks.filter((task) => normalizeTaskStatus(task.status) === TASK_STATUS.PENDENTE);
-    if (todayTasks.length <= 2) {
-      toast.message('Seu dia já está enxuto.');
-      return;
-    }
-
-    setIsReorganizingDay(true);
-    try {
-      const mainTask = recommended || todayTasks[0];
-      const lightTask = todayTasks.find((task) => task.id !== mainTask?.id && (task.energiaNecessaria === 'Baixa' || Number(task.timeEstimate || 0) <= 30));
-      const keepIds = new Set([mainTask?.id, lightTask?.id].filter(Boolean));
-      const toMove = todayTasks.filter((task) => !keepIds.has(task.id));
-
-      for (const task of toMove) {
-        await updateTask(task.id, {
-          status: TASK_STATUS.PENDENTE,
-          scheduledPeriod: 'tarde'
-        });
-      }
-
-      toast.success('Vamos deixar o dia mais leve. Escolha apenas o próximo passo possível.');
-    } catch (error) {
-      console.error(error);
-      toast.error('Não foi possível reorganizar o dia agora.');
-    } finally {
-      setIsReorganizingDay(false);
-    }
-  };
-
   const handleScheduleRecurringToday = async (task) => {
     try {
       await updateTask(task.id, {
@@ -331,119 +338,34 @@ export default function HomePage() {
         <Header />
         <div className="flex">
           <Sidebar />
-          <main className="flex-1 pb-20 md:pb-8">
+          <main className="min-w-0 flex-1 pb-20 md:pb-8">
             <div className="page-container section-spacing max-w-4xl">
+
+              <PreferencesOnboarding />
 
               <div className="mb-10">
                 <h1 className="text-3xl md:text-4xl font-medium text-foreground mb-3">Hoje</h1>
-                <p className="text-lg text-muted-foreground max-w-2xl">{lowStimulationMode ? 'Uma coisa por vez. Vamos no próximo passo possível.' : 'Descarregue, organize e execute com foco no que importa agora.'}</p>
+                <p className="text-lg text-muted-foreground max-w-2xl">O que eu faço agora?</p>
                 {!!checkIn?.prioridadePrincipal && (
                   <p className="mt-2 text-sm text-foreground">Prioridade principal de hoje: <span className="font-medium">{checkIn.prioridadePrincipal}</span></p>
                 )}
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {!isDailyMode && <Button variant="outline" onClick={() => navigate('/calendario')}>Ver no calendário</Button>}
-                  <Button variant="outline" onClick={() => setIsWrapUpOpen(true)}>Encerrar dia</Button>
-                </div>
+                {!isDailyMode && <Button className="mt-3" variant="ghost" onClick={() => navigate('/calendario')}>Ver no calendário</Button>}
               </div>
 
               <CheckInCard compact={lowStimulationMode} />
 
-              {!lowStimulationMode && !isDailyMode && recurringThisWeekCount > 0 && (
-                <div className="mb-6 rounded-xl border border-border bg-card px-4 py-3 flex items-center justify-between gap-3">
-                  <p className="text-sm text-muted-foreground">
-                    Rotinas: {recurringThisWeekCount} recorrência{recurringThisWeekCount > 1 ? 's' : ''} programada{recurringThisWeekCount > 1 ? 's' : ''} esta semana.
-                  </p>
-                  <Button size="sm" variant="outline" onClick={() => navigate('/rotinas')}>Ver rotinas</Button>
-                </div>
-              )}
-
-              {!lowStimulationMode && !isDailyMode && overdueRecurring.length > 0 && (
-                <div className="mb-6 rounded-xl border border-amber-300/50 bg-amber-50 px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                  <p className="text-sm text-amber-900">
-                    Rotina vencida: {overdueRecurring[0].title}
-                  </p>
-                  <div className="flex gap-2">
-                    <Button size="sm" onClick={() => handleScheduleRecurringToday(overdueRecurring[0])}>Agendar para hoje</Button>
-                    <Button size="sm" variant="outline" onClick={() => handleDeferRecurring(overdueRecurring[0])}>Adiar</Button>
+              {overdueTasks.length > 0 && (
+                <div className="mb-8 flex flex-col gap-4 border-y border-primary/20 py-5 sm:flex-row sm:items-center sm:justify-between" role="status">
+                  <div>
+                    <h2 className="font-medium text-foreground">
+                      {overdueTasks.length === 1 ? 'Uma tarefa ficou de um dia anterior' : `${overdueTasks.length} tarefas ficaram de dias anteriores`}
+                    </h2>
+                    <p className="mt-1 text-sm text-muted-foreground">Vamos cuidar de uma por vez. Escolha uma nova data para continuar.</p>
+                    <p className="mt-2 text-sm font-medium text-foreground">{overdueTasks[0].title}</p>
                   </div>
-                </div>
-              )}
-
-              {!lowStimulationMode && !isDailyMode && (
-              <div className="mb-8 flex flex-col gap-1 border-l-2 border-primary/30 pl-4 text-sm sm:flex-row sm:items-center sm:justify-between">
-                <p className="font-medium text-foreground">
-                  Hoje: {todayCapacity.plannedMinutes} de {todayCapacity.availableMinutes} min planejados
-                </p>
-                <p className={todayCapacity.isOverCapacity ? 'text-destructive' : 'text-muted-foreground'}>
-                  {todayCapacity.isOverCapacity
-                    ? 'A agenda passou do seu tempo disponível.'
-                    : `${todayCapacity.remainingMinutes} min de margem para imprevistos.`}
-                </p>
-              </div>
-              )}
-
-              {!lowStimulationMode && !isDailyMode && (
-              <div className="mb-8 flex items-center justify-end">
-                <Button variant="outline" onClick={handleLightenDay} disabled={isReorganizingDay}>
-                  Cansei / Reorganizar meu dia
-                </Button>
-              </div>
-              )}
-
-              {!lowStimulationMode && !isDailyMode && showWeeklyReviewPrompt && (
-                <div className="mb-10 rounded-2xl border border-border bg-card p-5">
-                  <h2 className="text-base font-medium text-foreground">Quer revisar sua semana?</h2>
-                  <div className="mt-3 grid grid-cols-2 md:grid-cols-3 gap-2 text-sm text-muted-foreground">
-                    <p>Tarefas vencidas: {weeklyReview.overdueTasks}</p>
-                    <p>Tarefas paradas: {weeklyReview.stalledTasks}</p>
-                    <p>Cobranças próximas: {weeklyReview.billingSoon}</p>
-                    <p>Projetos sem movimento: {weeklyReview.staleProjectsCount}</p>
-                    <p>Pendências guardadas: {weeklyReview.pendingInbox}</p>
-                    <p>Aguardando retorno: {weeklyReview.waitingCount}</p>
-                  </div>
-                  <div className="mt-4 flex gap-2">
-                    <Button onClick={() => { handleDismissWeekPrompt(); navigate('/prioridades'); }}>Montar plano da semana</Button>
-                    <Button variant="outline" onClick={handleDismissWeekPrompt}>Lembrar depois</Button>
-                  </div>
-                </div>
-              )}
-
-              {!lowStimulationMode && followUpsToday.length > 0 && (
-                <div className="mb-10 rounded-2xl border border-border bg-card p-5">
-                  <h2 className="text-base font-medium text-foreground">Aguardando retorno com follow-up hoje</h2>
-                  <ul className="mt-3 space-y-2">
-                    {followUpsToday.slice(0, lowStimulationMode ? 2 : 4).map((item) => (
-                      <li key={item.id} className="text-sm text-foreground">
-                        {item.title} - {item.contactName}
-                      </li>
-                    ))}
-                  </ul>
-                  <Button variant="outline" className="mt-4" onClick={() => navigate('/aguardando-retorno')}>Abrir Aguardando retorno</Button>
-                </div>
-              )}
-
-              {pausedTasks.length > 0 && (
-                <div className="mb-10 rounded-2xl border border-amber-300/50 bg-amber-50 p-5">
-                  <h2 className="text-base font-medium text-amber-900">Continuar de onde parei</h2>
-                  <div className="mt-3 space-y-3">
-                    {pausedTasks.slice(0, lowStimulationMode ? 1 : 3).map((task) => {
-                      const progress = getTaskMicrotaskProgress(task);
-                      const workedMinutes = getTaskWorkedMinutes(task.id);
-                      return (
-                        <div key={task.id} className="rounded-xl border border-amber-200 bg-white p-3">
-                          <p className="text-sm font-medium text-foreground">Continuar: {task.title}</p>
-                          <p className="text-xs text-muted-foreground">Próximo passo: {progress.nextPending?.title || progress.nextPending?.descricao || 'Revisar contexto da tarefa'}</p>
-                          <p className="text-xs text-muted-foreground">Tempo já trabalhado: {workedMinutes} min</p>
-                          {task.pauseNote && (
-                            <p className="text-xs text-muted-foreground">Onde parei: {task.pauseNote}</p>
-                          )}
-                          <div className="mt-2">
-                            <Button size="sm" onClick={() => handleStartTask(task)}>Continuar de onde parei</Button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
+                  <Button variant="outline" onClick={() => setEditTask(overdueTasks[0])} className="shrink-0">
+                    Replanejar {overdueTasks.length === 1 ? 'tarefa' : 'primeira tarefa'}
+                  </Button>
                 </div>
               )}
 
@@ -451,7 +373,7 @@ export default function HomePage() {
                 <div className="mb-12 animate-in fade-in duration-700">
                   {!lowStimulationMode && (
                     <h2 className="text-sm uppercase tracking-widest font-bold text-primary mb-4 flex items-center gap-2">
-                      <span className="w-2 h-2 rounded-full bg-primary animate-pulse" /> O que fazer agora
+                      Comece por aqui
                     </h2>
                   )}
                   <div className="bg-card border-2 border-primary/20 shadow-lg rounded-3xl p-6 md:p-8">
@@ -477,16 +399,18 @@ export default function HomePage() {
 
                     <div className="flex items-center gap-3 mt-6 flex-wrap">
                       <Button onClick={() => handleStartTask(recommended)} className="rounded-xl bg-primary text-primary-foreground hover:bg-primary/90 min-w-[160px] flex-1 sm:flex-none">
-                        <Play className="w-4 h-4 mr-2" /> Começar
+                        <Play className="w-4 h-4 mr-2" /> Começar agora
                       </Button>
 
-                      <Button variant="outline" onClick={() => setIsBlockedDialogOpen(true)} className="rounded-xl border-border hover:bg-muted text-foreground min-w-[160px] flex-1 sm:flex-none">
-                        Estou travada
+                      <Button variant="outline" onClick={handleAnotherSuggestion} disabled={alternativeTasks.length === 0} className="rounded-xl border-border hover:bg-muted text-foreground min-w-[140px] flex-1 sm:flex-none">
+                        Outra sugestão
                       </Button>
 
-                      <Button variant="outline" onClick={() => setCompletionTaskTarget(recommended)} className="rounded-xl border-border hover:bg-muted text-foreground min-w-[160px] flex-1 sm:flex-none">
-                        <CheckCircle2 className="w-4 h-4 mr-2" /> Concluir
+                      <Button variant="outline" onClick={() => setDetailsTask(recommended)} className="rounded-xl border-border hover:bg-muted text-foreground min-w-[140px] flex-1 sm:flex-none">
+                        Ver contexto
                       </Button>
+
+                      <Button variant="ghost" onClick={() => setIsBlockedDialogOpen(true)}>Não consigo fazer isso agora</Button>
 
                       {!lowStimulationMode && (
                       <DropdownMenu>
@@ -530,55 +454,109 @@ export default function HomePage() {
                   )}
                 </div>
               ) : (
-                <div className="text-center py-20 bg-card border border-border rounded-3xl shadow-sm mb-12">
-                  <CheckCircle2 className="w-16 h-16 text-muted-foreground mx-auto mb-6 opacity-30" />
-                  <h2 className="text-2xl font-medium text-foreground mb-3">Sem tarefa ideal para agora</h2>
-                  <p className="text-lg text-muted-foreground mb-8">
-                    {fallbackMessage || 'Nenhuma tarefa pesada para agora. Você pode revisar o plano ou registrar contexto no Descarregar mente.'}
-                  </p>
-                  <Button size="lg" onClick={() => navigate('/descarregar-mente')} className="rounded-2xl h-14">Registrar no Descarregar mente</Button>
+                <div className="border-y border-border py-10 mb-12">
+                  <h2 className="text-xl font-medium text-foreground mb-2">
+                    {tasks.length === 0 ? 'Sua lista está livre por enquanto. Quer tirar algo da cabeça?' : 'Não encontrei algo que combine com este momento.'}
+                  </h2>
+                  {tasks.length === 0 ? (
+                    <QuickCaptureDialog triggerLabel="Organizar agora" />
+                  ) : (
+                    <div className="flex flex-wrap gap-2">
+                      <Button onClick={() => setSmallStepTask(eligibleOpenTasks[0] || null)} disabled={eligibleOpenTasks.length === 0}>Encontrar um passo menor</Button>
+                      <Button variant="ghost" onClick={() => setIsTaskPickerOpen(true)}>Escolher outra tarefa</Button>
+                      <Button variant="ghost" onClick={openCheckInEditor}>Ajustar energia e tempo</Button>
+                    </div>
+                  )}
                 </div>
               )}
 
-              {agora.length > 0 && (!lowStimulationMode || showOtherTasks) && (
+              {alternativeTasks.length > 0 && (!lowStimulationMode || showOtherTasks) && (
                 <div className="mb-12 animate-in fade-in slide-in-from-bottom-4 duration-500 delay-100 fill-mode-both">
-                  <h3 className="text-xl font-medium text-foreground mb-6">Em seguida</h3>
+                  <h3 className="text-xl font-medium text-foreground mb-6">Depois disso</h3>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                    {agora.slice(0, lowStimulationMode ? 1 : agora.length).map((task) => (
+                    {alternativeTasks.slice(0, lowStimulationMode ? 1 : 2).map((task) => (
                       <TaskCard key={task.id} task={task} minimal />
                     ))}
                   </div>
                 </div>
               )}
 
-              {depois.length > 0 && (!lowStimulationMode || showOtherTasks) && (
-                <div className="mb-12 animate-in fade-in slide-in-from-bottom-4 duration-500 delay-200 fill-mode-both">
-                  <h3 className="text-xl font-medium text-foreground mb-6 opacity-80">Se sobrar energia</h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 opacity-80">
-                    {depois.slice(0, lowStimulationMode ? 1 : depois.length).map((task) => (
-                      <TaskCard key={task.id} task={task} minimal />
-                    ))}
+              {!lowStimulationMode && !isDailyMode && (
+                <div className="mb-8 flex flex-col gap-1 border-l-2 border-primary/30 pl-4 text-sm sm:flex-row sm:items-center sm:justify-between">
+                  <p className="font-medium text-foreground">{todayCapacity.plannedMinutes} min agendados para {todayCapacity.availableMinutes} min disponíveis</p>
+                  <p className={todayCapacity.isOverCapacity ? 'text-destructive' : 'text-muted-foreground'}>
+                    {todayCapacity.isOverCapacity ? 'A agenda passou do seu tempo disponível.' : `${todayCapacity.remainingMinutes} min livres.`}
+                  </p>
+                </div>
+              )}
+
+              {!lowStimulationMode && followUpsToday.length > 0 && (
+                <div className="mb-8 rounded-xl border border-border bg-card p-5">
+                  <h2 className="text-base font-medium text-foreground">Aguardando retorno</h2>
+                  <ul className="mt-3 space-y-2">
+                    {followUpsToday.slice(0, 2).map((item) => <li key={item.id} className="text-sm text-foreground">{item.title} - {item.contactName}</li>)}
+                  </ul>
+                  <Button variant="outline" className="mt-4" onClick={() => navigate('/aguardando-retorno')}>Ver acompanhamentos</Button>
+                </div>
+              )}
+
+              {!lowStimulationMode && !isDailyMode && showWeeklyReviewPrompt && (
+                <div className="mb-8 rounded-xl border border-border bg-card p-5">
+                  <h2 className="text-base font-medium text-foreground">Quer revisar sua semana?</h2>
+                  <div className="mt-3 grid grid-cols-2 md:grid-cols-3 gap-2 text-sm text-muted-foreground">
+                    {weeklyReview.overdueTasks > 0 && <p>Tarefas vencidas: {weeklyReview.overdueTasks}</p>}
+                    {weeklyReview.stalledTasks > 0 && <p>Tarefas paradas: {weeklyReview.stalledTasks}</p>}
+                    {weeklyReview.billingSoon > 0 && <p>Cobranças próximas: {weeklyReview.billingSoon}</p>}
+                    {weeklyReview.staleProjectsCount > 0 && <p>Projetos sem movimento: {weeklyReview.staleProjectsCount}</p>}
+                    {weeklyReview.pendingInbox > 0 && <p>Pendências guardadas: {weeklyReview.pendingInbox}</p>}
+                    {weeklyReview.waitingCount > 0 && <p>Aguardando retorno: {weeklyReview.waitingCount}</p>}
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <Button onClick={() => { handleDismissWeekPrompt(); navigate('/prioridades'); }}>Revisar agora</Button>
+                    <Button variant="ghost" onClick={handleDismissWeekPrompt}>Lembrar depois</Button>
                   </div>
                 </div>
               )}
 
-              {seSobrar.length > 0 && (!lowStimulationMode || showOtherTasks) && (
-                <div className="mb-12 animate-in fade-in slide-in-from-bottom-4 duration-500 delay-400 fill-mode-both">
-                  <h3 className="text-xl font-medium text-foreground mb-6 opacity-80">Esta semana</h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 opacity-80">
-                    {seSobrar.slice(0, lowStimulationMode ? 1 : 3).map((task) => (
-                      <TaskCard key={task.id} task={task} minimal />
-                    ))}
+              {!lowStimulationMode && !isDailyMode && recurringThisWeekCount > 0 && (
+                <div className="mb-6 rounded-xl border border-border bg-card px-4 py-3 flex items-center justify-between gap-3">
+                  <p className="text-sm text-muted-foreground">Rotinas: {recurringThisWeekCount} esta semana.</p>
+                  <Button size="sm" variant="outline" onClick={() => navigate('/rotinas')}>Ver rotinas</Button>
+                </div>
+              )}
+
+              {!lowStimulationMode && !isDailyMode && overdueRecurring.length > 0 && (
+                <div className="mb-6 rounded-xl border border-border bg-card px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <p className="text-sm text-foreground">Rotina pendente: {overdueRecurring[0].title}</p>
+                  <div className="flex gap-2">
+                    <Button size="sm" onClick={() => handleScheduleRecurringToday(overdueRecurring[0])}>Agendar para hoje</Button>
+                    <Button size="sm" variant="ghost" onClick={() => handleDeferRecurring(overdueRecurring[0])}>Adiar</Button>
                   </div>
                 </div>
               )}
 
-              {alertasImportantes.filter((t) => t.id !== recommended?.id).length > 0 && (!lowStimulationMode || showOtherTasks) && (
+              {pausedTasks.length > 0 && (
+                <div className="mb-8 rounded-xl border border-border bg-card p-5">
+                  <h2 className="text-base font-medium text-foreground">Continuar de onde parei</h2>
+                  {pausedTasks.slice(0, 1).map((task) => {
+                    const progress = getTaskMicrotaskProgress(task);
+                    return (
+                      <div key={task.id} className="mt-3">
+                        <p className="text-sm text-foreground">{task.title}</p>
+                        <p className="text-xs text-muted-foreground">Próximo passo: {progress.nextPending?.title || progress.nextPending?.descricao || 'Revisar contexto da tarefa'} · {getTaskWorkedMinutes(task.id)} min trabalhados</p>
+                        <Button className="mt-2" size="sm" onClick={() => handleStartTask(task)}>Continuar</Button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {alertasImportantes.filter((task) => task.id !== recommended?.id && !overdueTasks.some((overdue) => overdue.id === task.id)).length > 0 && (!lowStimulationMode || showOtherTasks) && (
                 <div className="mb-12 animate-in fade-in slide-in-from-bottom-4 duration-500 delay-300 fill-mode-both">
                   <h3 className="text-xl font-medium text-foreground mb-6">Alertas importantes</h3>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                     {alertasImportantes
-                      .filter((task) => task.id !== recommended?.id)
+                      .filter((task) => task.id !== recommended?.id && !overdueTasks.some((overdue) => overdue.id === task.id))
                       .slice(0, lowStimulationMode ? 1 : 4)
                       .map((task) => (
                         <TaskCard key={task.id} task={task} />
@@ -587,13 +565,9 @@ export default function HomePage() {
                 </div>
               )}
 
-              {!isDailyMode && (
-                <div className="text-center mt-12 pt-8 border-t border-border">
-                  <Button variant="ghost" onClick={() => navigate('/plano-clareado')} className="text-primary hover:text-primary hover:bg-primary/5 rounded-xl h-12 px-6">
-                    Abrir Plano Clareado
-                  </Button>
-                </div>
-              )}
+              <div className="mt-8 border-t border-border pt-4 text-right">
+                <Button variant="ghost" onClick={() => setIsWrapUpOpen(true)}>Encerrar o dia</Button>
+              </div>
 
             </div>
           </main>
@@ -614,12 +588,13 @@ export default function HomePage() {
           onOpenChange={setIsBlockedDialogOpen}
           onRequestBreakDown={() => {
             if (recommended) {
-              setEditTask(recommended);
+              setSmallStepTask(recommended);
             }
             setIsBlockedDialogOpen(false);
           }}
           updateTaskById={updateTask}
           createSupportTask={addTask}
+          deleteSupportTask={deleteTask}
         />
 
         <TaskCompletionDialog
@@ -669,6 +644,21 @@ export default function HomePage() {
             onClose={() => setEditTask(null)}
           />
         )}
+
+        <TaskPickerDialog
+          open={isTaskPickerOpen}
+          onOpenChange={setIsTaskPickerOpen}
+          tasks={eligibleOpenTasks}
+          onSelect={handleSelectRecommendation}
+          onViewAll={() => { setIsTaskPickerOpen(false); navigate('/prioridades'); }}
+        />
+
+        <SmallerStepDialog
+          task={smallStepTask}
+          open={Boolean(smallStepTask)}
+          onOpenChange={(open) => { if (!open) setSmallStepTask(null); }}
+          onApply={(nextAction) => updateTask(smallStepTask.id, { nextAction })}
+        />
 
         <AlertDialog open={!!deleteTaskTarget} onOpenChange={(open) => !open && setDeleteTaskTarget(null)}>
           <AlertDialogContent>

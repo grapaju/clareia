@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import { runQuery } from '../db/postgres.js';
-import { pocketbaseAuth } from '../middleware/pocketbase-auth.js';
+import { requireAuth } from '../middleware/auth.js';
 
 const router = Router();
 
@@ -85,7 +85,7 @@ function appendSort(orderBy, params, sort) {
   }
 }
 
-router.use(pocketbaseAuth);
+router.use(requireAuth);
 
 router.get('/:collection', async (req, res) => {
   const collection = normalizeCollection(req.params.collection);
@@ -93,7 +93,7 @@ router.get('/:collection', async (req, res) => {
     return res.status(400).json({ message: 'collection invalida.' });
   }
 
-  const params = [collection, req.pocketbaseUserId];
+  const params = [collection, req.userId];
   const where = ['collection_name = $1', 'user_id = $2'];
 
   const filters = parseFilterExpression(req.query.filter);
@@ -150,9 +150,19 @@ router.post('/:collection', async (req, res) => {
   const created = await runQuery(
     `INSERT INTO app_records (id, collection_name, user_id, account_id, data)
      VALUES ($1, $2, $3, $4, $5::jsonb)
+     ON CONFLICT (id) DO UPDATE
+     SET account_id = EXCLUDED.account_id,
+         data = EXCLUDED.data,
+         updated_at = now()
+     WHERE app_records.collection_name = EXCLUDED.collection_name
+       AND app_records.user_id = EXCLUDED.user_id
      RETURNING id, user_id, account_id, data, created_at, updated_at`,
-    [id, collection, req.pocketbaseUserId, accountId, JSON.stringify(payload)]
+    [id, collection, req.userId, accountId, JSON.stringify(payload)]
   );
+
+  if (!created.rows[0]) {
+    return res.status(409).json({ message: 'Este identificador ja pertence a outro registro.' });
+  }
 
   res.status(201).json({ item: mapRecord(created.rows[0]) });
 });
@@ -169,7 +179,7 @@ router.patch('/:collection/:id', async (req, res) => {
      FROM app_records
      WHERE id = $1 AND collection_name = $2 AND user_id = $3
      LIMIT 1`,
-    [id, collection, req.pocketbaseUserId]
+    [id, collection, req.userId]
   );
 
   const existing = found.rows[0];
@@ -192,7 +202,7 @@ router.patch('/:collection/:id', async (req, res) => {
          updated_at = now()
      WHERE id = $3 AND collection_name = $4 AND user_id = $5
      RETURNING id, user_id, account_id, data, created_at, updated_at`,
-    [nextAccountId, JSON.stringify(merged), id, collection, req.pocketbaseUserId]
+    [nextAccountId, JSON.stringify(merged), id, collection, req.userId]
   );
 
   res.json({ item: mapRecord(updated.rows[0]) });
@@ -207,7 +217,7 @@ router.delete('/:collection/:id', async (req, res) => {
 
   const deleted = await runQuery(
     'DELETE FROM app_records WHERE id = $1 AND collection_name = $2 AND user_id = $3 RETURNING id',
-    [id, collection, req.pocketbaseUserId]
+    [id, collection, req.userId]
   );
 
   if (deleted.rows.length === 0) {

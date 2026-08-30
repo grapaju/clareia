@@ -4,10 +4,10 @@ Este guia consolida o procedimento de deploy e operacao do Clareia no aaPanel co
 
 ## Resumo rapido
 
-1. Desenvolvimento com PostgreSQL: npm run dev:postgres na raiz.
+1. Desenvolvimento: npm run dev na raiz.
 2. Producao: API Node.js sob PM2; front-end estatico em dist/apps/web/.
 3. Atualizacao: git pull, npm ci, npm run build --prefix apps/web.
-4. Banco principal: PostgreSQL (nao depende de PocketBase para auth e tarefas).
+4. Banco: PostgreSQL para autenticacao e dados da aplicacao.
 
 ## Servicos e portas
 
@@ -15,8 +15,7 @@ Este guia consolida o procedimento de deploy e operacao do Clareia no aaPanel co
 | --- | --- | --- |
 | Web (Vite em desenvolvimento) | 3000 | Interface do usuario |
 | API Node.js | 3005 (local) | API do produto |
-| PostgreSQL | 5432 | Banco de dados principal |
-| PocketBase (opcional/legado) | 8090 | Apenas rotinas legadas especificas |
+| PostgreSQL | 5432 | Banco de dados da aplicacao |
 
 No ambiente local, a web acessa a API pelo proxy em /hcgi/api.
 
@@ -87,7 +86,7 @@ A API cria/garante o schema automaticamente na inicializacao.
 Com PostgreSQL local ativo:
 
 ```powershell
-npm run dev:postgres
+npm run dev
 ```
 
 Enderecos esperados:
@@ -162,11 +161,8 @@ Se o servidor usa o gerenciador "Node Project" do proprio aaPanel (em vez de
 `pm2` direto via SSH), configure-o assim para evitar processos duplicados
 brigando pela mesma porta:
 
-- **Comando de start:** `npm run start:postgres` (roda so a API, sem
-  PocketBase) executado a partir da raiz do repositorio. Nao use `npm run
-  start` puro nessa configuracao: ele tambem sobe o PocketBase via
-  `concurrently --kill-others`, e se o binario do PocketBase nao tiver
-  permissao de execucao (`EACCES`), o `--kill-others` derruba a API junto.
+- **Comando de start:** `npm run start` executado a partir da raiz do
+  repositorio.
 - **Porta:** deve ser exatamente a porta usada no `proxy_pass` do bloco Nginx
   do dominio (confirme com `grep proxy_pass` no arquivo de vhost).
 - Depois de configurar pelo painel, use sempre os botoes Start/Stop/Restart
@@ -200,20 +196,6 @@ location /hcgi/api/ {
 location / {
   root /caminho/do/projeto/dist/apps/web;
   try_files $uri $uri/ /index.html;
-}
-```
-
-Se ainda existir dependencia legada de PocketBase, mantenha tambem:
-
-```nginx
-location /hcgi/platform/ {
-  proxy_pass http://127.0.0.1:8090/;
-  proxy_http_version 1.1;
-  proxy_set_header Host $host;
-  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-  proxy_set_header X-Forwarded-Proto $scheme;
-  proxy_set_header Upgrade $http_upgrade;
-  proxy_set_header Connection "upgrade";
 }
 ```
 

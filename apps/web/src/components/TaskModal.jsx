@@ -1,256 +1,204 @@
-
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
+import { ChevronDown, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Sparkles } from 'lucide-react';
 import { autoSuggestAll } from '@/lib/autoSuggestions';
 import { generateMicrotasks } from '@/lib/microtaskRules';
-import MicrotaskList from './MicrotaskList.jsx';
+import MicrotaskEditor from './MicrotaskEditor.jsx';
 import { normalizeMicrotasks } from '@/lib/taskExecution.js';
+import { toLocalIsoDate } from '@/lib/localDate.js';
+import { validateTaskInput } from '@/lib/taskInput.js';
+import ProjectSelect from '@/components/ProjectSelect.jsx';
 
-function getTodayIso() {
-  return new Date().toISOString().split('T')[0];
-}
+const TASK_TYPES = ['Cobrança', 'Reunião', 'Desenvolvimento', 'Site', 'Google Ads', 'Atendimento', 'Administrativo', 'Pessoal', 'Evento', 'Outro'];
+const TIME_OPTIONS = ['15', '30', '45', '60', '90', '120', '180'];
 
-function getSuggestedPeriodByNow() {
+function suggestedPeriod() {
   const hour = new Date().getHours();
-  if (hour < 12) return 'manhã';
-  if (hour < 18) return 'tarde';
-  return 'noite';
+  if (hour < 12) return 'Manhã';
+  if (hour < 18) return 'Tarde';
+  return 'Noite';
 }
 
-function resolveSuggestedPeriod(dateIso, explicitPeriod) {
-  if (explicitPeriod) return explicitPeriod;
-  if (dateIso === getTodayIso()) return getSuggestedPeriodByNow();
-  return 'manhã';
+function initialData(task = {}) {
+  const scheduledDate = task.scheduledDate || task.dataSugeridaExecucao || toLocalIsoDate(new Date());
+  return {
+    ...task,
+    title: task.title || '',
+    project: task.project || '',
+    nextAction: task.nextAction || '',
+    dueDate: task.dueDate ? String(task.dueDate).split('T')[0] : '',
+    description: task.description || '',
+    taskType: task.taskType || 'Pessoal',
+    timeEstimate: String(task.timeEstimate || '30'),
+    dataSugeridaExecucao: String(scheduledDate).split('T')[0],
+    periodoSugerido: task.periodoSugerido || task.scheduledPeriod || suggestedPeriod(),
+    energiaNecessaria: task.energiaNecessaria || 'Média',
+    importance: task.importance || 'Média',
+    urgency: task.urgency || 'Média',
+    executionDifficulty: task.executionDifficulty || 'Direta',
+    recurrenceFrequency: task.recurrenceFrequency || 'Nenhuma',
+    microtarefas: normalizeMicrotasks(task.microtarefas || [], task.id || ''),
+  };
 }
 
 export default function TaskModal({ task, onSubmit, onCancel }) {
-  const today = getTodayIso();
-  const [formData, setFormData] = useState({
-    title: '',
-    project: '',
-    taskType: '',
-    nextAction: '',
-    timeEstimate: '',
-    dueDate: '',
-    dataSugeridaExecucao: today,
-    periodoSugerido: getSuggestedPeriodByNow(),
-    energiaNecessaria: 'Média',
-    status: 'pendente',
-    microtarefas: []
-  });
+  const [formData, setFormData] = useState(() => initialData(task));
+  const [errors, setErrors] = useState({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  useEffect(() => {
-    if (task) {
-      const scheduledDate = task.dataSugeridaExecucao ? task.dataSugeridaExecucao.split('T')[0] : today;
-      setFormData({
-        title: task.title || '',
-        project: task.project || '',
-        taskType: task.taskType || '',
-        nextAction: task.nextAction || '',
-        timeEstimate: task.timeEstimate || '',
-        dueDate: task.dueDate ? task.dueDate.split('T')[0] : '',
-        dataSugeridaExecucao: scheduledDate,
-        periodoSugerido: resolveSuggestedPeriod(scheduledDate, task.periodoSugerido),
-        energiaNecessaria: task.energiaNecessaria || 'Média',
-        status: task.status || 'pendente',
-        microtarefas: normalizeMicrotasks(task.microtarefas || [], task.id || '')
-      });
-    }
-  }, [task, today]);
+  useEffect(() => setFormData(initialData(task)), [task]);
 
   const handleChange = (field, value) => {
-    setFormData(prev => {
-      const updated = { ...prev, [field]: value };
-
-      if (field === 'dataSugeridaExecucao') {
-        const previousDate = prev.dataSugeridaExecucao;
-        const previousPeriod = prev.periodoSugerido;
-        const previousWasAuto = previousDate === getTodayIso() ? previousPeriod === getSuggestedPeriodByNow() : previousPeriod === 'manhã';
-
-        if (previousWasAuto) {
-          updated.periodoSugerido = value === getTodayIso() ? getSuggestedPeriodByNow() : 'manhã';
-        }
-      }
-      
-      // Auto-generate microtasks if time > 60 or specific keywords found in title
-      if (field === 'title' || field === 'timeEstimate' || field === 'taskType') {
-        const titleL = updated.title.toLowerCase();
-        const est = parseInt(updated.timeEstimate) || 0;
-        const keywords = ['preparar', 'desenvolver', 'implementar', 'organizar', 'revisar', 'lançar', 'configurar', 'retomar', 'criar', 'atualizar', 'integrar', 'montar', 'estruturar', 'planejar'];
-        const needsBreakdown = est > 60 || keywords.some(k => titleL.includes(k));
-        
-        if (needsBreakdown && (!prev.microtarefas || prev.microtarefas.length === 0)) {
-          updated.microtarefas = generateMicrotasks(updated.taskType, updated.title, est);
-        }
-      }
-      return updated;
-    });
+    setFormData((current) => ({ ...current, [field]: value }));
+    if (errors[field]) setErrors((current) => ({ ...current, [field]: undefined }));
   };
 
   const handleSuggest = () => {
-    if (!formData.title) return;
+    if (!formData.title.trim()) return;
     const suggestions = autoSuggestAll(formData.title, formData.dueDate);
-    const est = formData.timeEstimate || suggestions.timeEstimate;
-    
-    setFormData(prev => ({
-      ...prev,
-      taskType: prev.taskType || suggestions.taskType,
-      project: prev.project || suggestions.project,
-      timeEstimate: est,
-      nextAction: prev.nextAction || suggestions.nextAction,
-      microtarefas: prev.microtarefas?.length ? prev.microtarefas : generateMicrotasks(suggestions.taskType, prev.title, est)
+    setFormData((current) => ({
+      ...current,
+      taskType: current.taskType || suggestions.taskType,
+      project: current.project || suggestions.project,
+      timeEstimate: current.timeEstimate || String(suggestions.timeEstimate || 30),
+      nextAction: current.nextAction || suggestions.nextAction,
+      microtarefas: current.microtarefas.length
+        ? current.microtarefas
+        : generateMicrotasks(suggestions.taskType, current.title, suggestions.timeEstimate || 30),
     }));
   };
 
-  const handleToggleMicrotask = (id, checked) => {
-    setFormData(prev => ({
-      ...prev,
-      microtarefas: prev.microtarefas.map((m) => 
-        m.id === id
-          ? {
-              ...m,
-              completed: Boolean(checked),
-              completedAt: checked ? new Date().toISOString() : null,
-              status: checked ? 'concluída' : 'não iniciada'
-            }
-          : m
-      )
-    }));
-  };
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    if (!formData.title.trim() || !formData.project.trim() || !formData.taskType || !formData.nextAction || !formData.timeEstimate) {
-      // Basic validation handled by 'required' attribute, but catch empty spaces
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    const validation = validateTaskInput(formData);
+    if (!validation.valid) {
+      setErrors(validation.errors);
       return;
     }
-    onSubmit({
-      ...formData,
-      scheduledDate: formData.dataSugeridaExecucao,
-      scheduledPeriod: formData.periodoSugerido,
-      timeEstimate: parseInt(formData.timeEstimate) || 30
-    });
+
+    setIsSubmitting(true);
+    try {
+      await onSubmit({
+        ...formData,
+        scheduledDate: formData.dataSugeridaExecucao,
+        scheduledPeriod: formData.periodoSugerido,
+        timeEstimate: Number.parseInt(formData.timeEstimate, 10) || 30,
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const timeOptions = ['15', '30', '45', '60', '90', '120', '180'];
-  const taskTypes = ['Cobrança', 'Reunião', 'Desenvolvimento', 'Site', 'Google Ads', 'Atendimento', 'Administrativo', 'Pessoal', 'Evento', 'Outro'];
-
   return (
-    <form onSubmit={handleSubmit} className="space-y-6">
-      <div className="flex gap-2 mb-2">
-        <Button type="button" variant="secondary" onClick={handleSuggest} className="text-sm bg-accent/10 hover:bg-accent/20 text-accent border border-accent/20 h-8">
-          <Sparkles className="w-3.5 h-3.5 mr-2" />
-          Preencher sugestões
-        </Button>
+    <form onSubmit={handleSubmit} className="space-y-5">
+      <div className="space-y-2">
+        <Label htmlFor="task-title">O que precisa ser feito? *</Label>
+        <Input
+          id="task-title"
+          autoFocus
+          value={formData.title}
+          onChange={(event) => handleChange('title', event.target.value)}
+          aria-invalid={Boolean(errors.title)}
+          aria-describedby={errors.title ? 'task-title-error' : undefined}
+        />
+        {errors.title && <p id="task-title-error" className="text-sm text-destructive">{errors.title}</p>}
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-        <div className="space-y-2 col-span-full">
-          <Label className="text-foreground">Título *</Label>
-          <Input 
-            value={formData.title} 
-            onChange={e => handleChange('title', e.target.value)} 
-            placeholder="O que precisa ser feito?" 
-            required
-            className="bg-card text-foreground"
-          />
-        </div>
-
-        <div className="space-y-2">
-          <Label className="text-foreground">Projeto/Cliente *</Label>
-          <Input 
-            value={formData.project} 
-            onChange={e => handleChange('project', e.target.value)} 
-            placeholder="Ex: Leone" 
-            required
-            className="bg-card text-foreground"
-          />
-        </div>
-
-        <div className="space-y-2">
-          <Label className="text-foreground">Tipo de Tarefa *</Label>
-          <Select value={formData.taskType} onValueChange={v => handleChange('taskType', v)} required>
-            <SelectTrigger className="bg-card text-foreground"><SelectValue placeholder="Selecione" /></SelectTrigger>
-            <SelectContent>
-              {taskTypes.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div className="space-y-2 col-span-full">
-          <Label className="text-foreground">Primeira ação prática *</Label>
-          <Input 
-            value={formData.nextAction} 
-            onChange={e => handleChange('nextAction', e.target.value)} 
-            placeholder="Ex: Abrir o painel e baixar os dados" 
-            required
-            className="bg-card text-foreground"
-          />
-        </div>
-
-        <div className="space-y-2">
-          <Label className="text-foreground">Tempo Estimado (min) *</Label>
-          <Select value={String(formData.timeEstimate)} onValueChange={v => handleChange('timeEstimate', v)} required>
-            <SelectTrigger className="bg-card text-foreground"><SelectValue placeholder="Selecione o tempo" /></SelectTrigger>
-            <SelectContent>
-              {timeOptions.map(t => <SelectItem key={t} value={t}>{t} minutos</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div className="space-y-2">
-          <Label className="text-foreground">Energia Necessária *</Label>
-          <Select value={formData.energiaNecessaria} onValueChange={v => handleChange('energiaNecessaria', v)} required>
-            <SelectTrigger className="bg-card text-foreground"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {['Baixa', 'Média', 'Alta'].map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div className="space-y-2">
-          <Label className="text-foreground">Data Sugerida *</Label>
-          <Input 
-            type="date" 
-            value={formData.dataSugeridaExecucao} 
-            onChange={e => handleChange('dataSugeridaExecucao', e.target.value)} 
-            required
-            className="bg-card text-foreground"
-          />
-        </div>
-
-        <div className="space-y-2">
-          <Label className="text-foreground">Período Sugerido *</Label>
-          <Select value={formData.periodoSugerido} onValueChange={v => handleChange('periodoSugerido', v)} required>
-            <SelectTrigger className="bg-card text-foreground"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {['manhã', 'tarde', 'noite', 'horário específico'].map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </div>
+      <div className="space-y-2">
+        <Label htmlFor="task-project">Projeto <span className="text-muted-foreground">(opcional)</span></Label>
+        <ProjectSelect value={formData.project} onChange={(value) => handleChange('project', value)} />
       </div>
 
-      {formData.microtarefas && formData.microtarefas.length > 0 && (
-        <div className="pt-2">
-          <MicrotaskList 
-            microtasks={formData.microtarefas} 
-            taskType={formData.taskType} 
-            onToggle={handleToggleMicrotask} 
-          />
-        </div>
-      )}
+      <div className="space-y-2">
+        <Label htmlFor="task-next-action">Primeiro passo visível <span className="text-muted-foreground">(opcional)</span></Label>
+        <Input id="task-next-action" value={formData.nextAction} onChange={(event) => handleChange('nextAction', event.target.value)} />
+      </div>
 
-      <div className="flex gap-3 pt-6 border-t border-border">
-        <Button type="submit" className="flex-1 bg-primary text-primary-foreground hover:bg-primary/90">
-          {task?.id ? 'Salvar alterações' : 'Criar tarefa'}
-        </Button>
-        <Button type="button" variant="outline" onClick={onCancel} className="bg-card">
-          Cancelar
-        </Button>
+      <div className="space-y-2">
+        <Label htmlFor="task-due-date">Precisa estar pronto até <span className="text-muted-foreground">(opcional)</span></Label>
+        <Input id="task-due-date" type="date" value={formData.dueDate} onChange={(event) => handleChange('dueDate', event.target.value)} />
+      </div>
+
+      <details className="group rounded-md border border-border">
+        <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between px-4 py-3 font-medium">
+          Adicionar detalhes
+          <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" aria-hidden="true" />
+        </summary>
+        <div className="space-y-5 border-t border-border p-4">
+          <Button type="button" variant="outline" size="sm" onClick={handleSuggest}>
+            <Sparkles className="mr-2 h-4 w-4" aria-hidden="true" /> Preencher sugestões
+          </Button>
+
+          <div className="space-y-2">
+            <Label htmlFor="task-description">Descrição</Label>
+            <Textarea id="task-description" value={formData.description} onChange={(event) => handleChange('description', event.target.value)} />
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label>Quero fazer em</Label>
+              <Input type="date" value={formData.dataSugeridaExecucao} onChange={(event) => handleChange('dataSugeridaExecucao', event.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label>Duração estimada</Label>
+              <Select value={formData.timeEstimate} onValueChange={(value) => handleChange('timeEstimate', value)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>{TIME_OPTIONS.map((time) => <SelectItem key={time} value={time}>{time} minutos</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Quanto esforço exige?</Label>
+              <Select value={formData.energiaNecessaria} onValueChange={(value) => handleChange('energiaNecessaria', value)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>{['Baixa', 'Média', 'Alta'].map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Período</Label>
+              <Select value={formData.periodoSugerido} onValueChange={(value) => handleChange('periodoSugerido', value)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>{['Manhã', 'Tarde', 'Noite', 'Horário específico'].map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Tipo</Label>
+              <Select value={formData.taskType} onValueChange={(value) => handleChange('taskType', value)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>{TASK_TYPES.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Recorrência</Label>
+              <Select value={formData.recurrenceFrequency} onValueChange={(value) => handleChange('recurrenceFrequency', value)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>{['Nenhuma', 'Semanal', 'Mensal'].map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2 sm:col-span-2">
+              <Label>Como está essa tarefa para você?</Label>
+              <Select value={formData.executionDifficulty} onValueChange={(value) => handleChange('executionDifficulty', value)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Direta">Consigo fazer diretamente</SelectItem>
+                  <SelectItem value="Grande demais">Preciso dividir em passos</SelectItem>
+                  <SelectItem value="Tem atrito">Ainda não sei como começar</SelectItem>
+                  <SelectItem value="Travada">Estou travada</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <MicrotaskEditor microtasks={formData.microtarefas} onChange={(value) => handleChange('microtarefas', value)} />
+        </div>
+      </details>
+
+      <div className="sticky bottom-0 z-10 -mx-1 flex flex-col-reverse gap-2 border-t border-border bg-card px-1 py-4 sm:flex-row sm:justify-end">
+        <Button type="button" variant="outline" onClick={onCancel} disabled={isSubmitting}>Cancelar</Button>
+        <Button type="submit" disabled={isSubmitting}>{isSubmitting ? 'Guardando...' : task?.id ? 'Salvar alterações' : 'Guardar tarefa'}</Button>
       </div>
     </form>
   );

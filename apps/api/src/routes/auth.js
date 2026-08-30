@@ -2,7 +2,7 @@ import { Router } from 'express';
 import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { runQuery } from '../db/postgres.js';
-import { pocketbaseAuth } from '../middleware/pocketbase-auth.js';
+import { requireAuth } from '../middleware/auth.js';
 import { signAuthToken } from '../utils/jwt.js';
 
 const router = Router();
@@ -13,10 +13,15 @@ function normalizeText(value) {
 
 function sanitizeUser(row) {
   if (!row) return null;
+  const ownerEmail = normalizeText(process.env.CLAREIA_OWNER_EMAIL).toLowerCase();
+  const role = ownerEmail && ownerEmail === String(row.email || '').toLowerCase()
+    ? 'owner'
+    : row.role || 'user';
   return {
     id: row.id,
     email: row.email,
     name: row.name || '',
+    role,
     currentAccountId: row.current_account_id || '',
     created: row.created_at,
     updated: row.updated_at,
@@ -51,7 +56,7 @@ router.post('/signup', async (req, res) => {
   const created = await runQuery(
     `INSERT INTO users (id, email, password_hash, name)
      VALUES ($1, $2, $3, $4)
-     RETURNING id, email, name, current_account_id, created_at, updated_at`,
+    RETURNING id, email, name, role, current_account_id, created_at, updated_at`,
     [userId, email, passwordHash, name]
   );
 
@@ -59,6 +64,7 @@ router.post('/signup', async (req, res) => {
   const token = signAuthToken({
     sub: user.id,
     email: user.email,
+    role: user.role,
     accountId: user.currentAccountId || '',
   });
 
@@ -74,7 +80,7 @@ router.post('/login', async (req, res) => {
   }
 
   const found = await runQuery(
-    `SELECT id, email, name, current_account_id, created_at, updated_at, password_hash
+    `SELECT id, email, name, role, current_account_id, created_at, updated_at, password_hash
      FROM users WHERE email = $1 LIMIT 1`,
     [email]
   );
@@ -93,19 +99,20 @@ router.post('/login', async (req, res) => {
   const token = signAuthToken({
     sub: user.id,
     email: user.email,
+    role: user.role,
     accountId: user.currentAccountId || '',
   });
 
   res.json({ token, user });
 });
 
-router.use(pocketbaseAuth);
+router.use(requireAuth);
 
 router.get('/me', async (req, res) => {
   const found = await runQuery(
-    `SELECT id, email, name, current_account_id, created_at, updated_at
+    `SELECT id, email, name, role, current_account_id, created_at, updated_at
      FROM users WHERE id = $1 LIMIT 1`,
-    [req.pocketbaseUserId]
+    [req.userId]
   );
 
   const user = sanitizeUser(found.rows[0]);
@@ -133,7 +140,7 @@ router.post('/change-password', async (req, res) => {
     return res.status(400).json({ message: 'A nova senha precisa ter ao menos 8 caracteres.' });
   }
 
-  const found = await runQuery('SELECT password_hash FROM users WHERE id = $1 LIMIT 1', [req.pocketbaseUserId]);
+  const found = await runQuery('SELECT password_hash FROM users WHERE id = $1 LIMIT 1', [req.userId]);
   const row = found.rows[0];
   if (!row) {
     return res.status(404).json({ message: 'Usuario nao encontrado.' });
@@ -147,7 +154,7 @@ router.post('/change-password', async (req, res) => {
   const nextHash = await bcrypt.hash(newPassword, 10);
   await runQuery(
     'UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2',
-    [nextHash, req.pocketbaseUserId]
+    [nextHash, req.userId]
   );
 
   res.json({ success: true });

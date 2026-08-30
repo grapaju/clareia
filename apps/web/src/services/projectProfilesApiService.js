@@ -15,6 +15,14 @@ export async function createProjectProfileApi(payload = {}) {
   return response?.item || null;
 }
 
+export async function mergeProjectProfilesApi(source, target) {
+  return integratedAiClient.fetch('/projects/merge', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source, target }),
+  });
+}
+
 export async function updateProjectProfileApi(currentName, payload = {}) {
   const encoded = encodeURIComponent(String(currentName || '').trim());
   const response = await integratedAiClient.fetch(`/projects/${encoded}`, {

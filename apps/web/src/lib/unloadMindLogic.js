@@ -14,6 +14,9 @@ const ACTION_VERBS = [
   'olhar',
   'enviar',
   'preparar',
+  'publicar',
+  'marcar',
+  'agendar',
   'revisar',
   'resolver',
   'retomar',
@@ -125,7 +128,7 @@ function inferProjectByRules(text, taskType, lastExplicitProject) {
     return { project: 'Administrativo', explicit: false };
   }
 
-  return { project: 'Pessoal', explicit: false };
+  return { project: '', explicit: false };
 }
 
 function detectType(text, action = '') {
@@ -855,7 +858,7 @@ export function parseBrainDumpToTasks(inputText) {
 
     parsed.push({
       title: entry.forcedTitle || toDisplayTitle(rawChunk),
-      project: inferredProject || 'Pessoal',
+      project: inferredProject || '',
       type: taskType,
       objective: `Concluir "${entry.forcedTitle || toDisplayTitle(rawChunk)}" com clareza e registro dos próximos passos.`,
       priority,
@@ -915,6 +918,12 @@ export function parseBrainDumpToTasks(inputText) {
   });
 
   return unique;
+}
+
+export function hasActionableCapture(inputText) {
+  return splitByPunctuation(String(inputText || ''))
+    .flatMap(splitClauseByActions)
+    .some((chunk) => Boolean(detectAction(chunk)));
 }
 
 export function parseUnloadMindToPlan(rawText) {

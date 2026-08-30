@@ -4,6 +4,7 @@ import { Clock3, Plus, Trash2, CheckCircle2 } from 'lucide-react';
 import Header from '@/components/Header.jsx';
 import Sidebar from '@/components/Sidebar.jsx';
 import MobileNav from '@/components/MobileNav.jsx';
+import ProjectSelect from '@/components/ProjectSelect.jsx';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -23,7 +24,7 @@ import {
 import { toast } from 'sonner';
 import {
   createWaitingReturn,
-  deleteWaitingReturn,
+  deleteWaitingReturnEverywhere,
   listWaitingReturns,
   syncWaitingReturnsWithCloud,
   updateWaitingReturn
@@ -97,13 +98,17 @@ export default function WaitingReturnPage() {
     setItemToDelete(id);
   };
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (!itemToDelete) return;
-    deleteWaitingReturn(itemToDelete);
-    refresh();
-    syncWaitingReturnsWithCloud();
-    setItemToDelete(null);
-    toast.success('Acompanhamento removido.');
+    try {
+      await deleteWaitingReturnEverywhere(itemToDelete);
+      refresh();
+      setItemToDelete(null);
+      toast.success('Acompanhamento removido.');
+    } catch (error) {
+      console.error(error);
+      toast.error('Não foi possível remover o acompanhamento.');
+    }
   };
 
   return (
@@ -130,7 +135,7 @@ export default function WaitingReturnPage() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div className="space-y-2 md:col-span-2"><Label>O que estou aguardando?</Label><Textarea value={form.waitingFor} onChange={(e) => setForm((c) => ({ ...c, waitingFor: e.target.value }))} className="min-h-20" /></div>
                     <div className="space-y-2"><Label>De quem?</Label><Input value={form.contactName} onChange={(e) => setForm((c) => ({ ...c, contactName: e.target.value }))} /></div>
-                    <div className="space-y-2"><Label>Projeto</Label><Input value={form.project} onChange={(e) => setForm((c) => ({ ...c, project: e.target.value }))} /></div>
+                    <div className="space-y-2"><Label>Projeto</Label><ProjectSelect value={form.project} onChange={(project) => setForm((current) => ({ ...current, project }))} /></div>
                     <div className="space-y-2"><Label>Quando lembrar?</Label><Input type="date" value={form.reminderDate} onChange={(e) => setForm((c) => ({ ...c, reminderDate: e.target.value, nextFollowUpDate: e.target.value }))} /></div>
                     <div className="space-y-2"><Label>Título (opcional)</Label><Input value={form.title} onChange={(e) => setForm((c) => ({ ...c, title: e.target.value }))} placeholder="Se vazio, usa o texto de aguardando" /></div>
                   </div>

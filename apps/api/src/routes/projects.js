@@ -1,11 +1,32 @@
 import { Router } from 'express';
 import { runQuery, withTransaction } from '../db/postgres.js';
-import { pocketbaseAuth } from '../middleware/pocketbase-auth.js';
+import { requireAuth } from '../middleware/auth.js';
 
 const router = Router();
 
 function normalizeText(value) {
 	return String(value || '').trim();
+}
+
+function normalizeProjectKey(value) {
+	return normalizeText(value)
+		.normalize('NFD')
+		.replace(/[\u0300-\u036f]/g, '')
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, '');
+}
+
+async function findNormalizedDuplicate(userId, name, excludedName = '') {
+	const result = await runQuery(
+		'SELECT name FROM project_profiles WHERE user_id = $1',
+		[userId]
+	);
+	const candidateKey = normalizeProjectKey(name);
+	const excludedKey = normalizeProjectKey(excludedName);
+	return result.rows.find((row) => {
+		const rowKey = normalizeProjectKey(row.name);
+		return rowKey === candidateKey && (!excludedKey || rowKey !== excludedKey);
+	}) || null;
 }
 
 function mapProject(row) {
@@ -18,7 +39,7 @@ function mapProject(row) {
 	};
 }
 
-router.use(pocketbaseAuth);
+router.use(requireAuth);
 
 router.get('/', async (req, res) => {
 	const result = await runQuery(
@@ -26,7 +47,7 @@ router.get('/', async (req, res) => {
 		 FROM project_profiles
 		 WHERE user_id = $1
 		 ORDER BY lower(name) ASC`,
-		[req.pocketbaseUserId]
+		[req.userId]
 	);
 
 	res.json({ items: result.rows.map(mapProject) });
@@ -41,15 +62,9 @@ router.post('/', async (req, res) => {
 		return res.status(400).json({ message: 'Nome do projeto e obrigatorio.' });
 	}
 
-	const duplicate = await runQuery(
-		`SELECT 1
-		 FROM project_profiles
-		 WHERE user_id = $1 AND lower(name) = lower($2)
-		 LIMIT 1`,
-		[req.pocketbaseUserId, name]
-	);
+	const duplicate = await findNormalizedDuplicate(req.userId, name);
 
-	if (duplicate.rows[0]) {
+	if (duplicate) {
 		return res.status(409).json({ message: 'Ja existe um projeto com esse nome.' });
 	}
 
@@ -57,10 +72,121 @@ router.post('/', async (req, res) => {
 		`INSERT INTO project_profiles (user_id, name, summary, project_type)
 		 VALUES ($1, $2, $3, $4)
 		 RETURNING name, summary, project_type, created_at, updated_at`,
-		[req.pocketbaseUserId, name, summary, projectType]
+		[req.userId, name, summary, projectType]
 	);
 
 	res.status(201).json({ item: mapProject(created.rows[0]) });
+});
+
+router.post('/merge', async (req, res) => {
+	const source = normalizeText(req.body?.source);
+	const target = normalizeText(req.body?.target);
+	if (!source || !target || normalizeProjectKey(source) === normalizeProjectKey(target)) {
+		return res.status(400).json({ message: 'Projetos de origem e destino diferentes sao obrigatorios.' });
+	}
+
+	const result = await withTransaction(async (client) => {
+		await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`project-merge:${req.userId}`]);
+		const targetProfile = await client.query(
+			'SELECT name FROM project_profiles WHERE user_id = $1 AND lower(name) = lower($2) LIMIT 1',
+			[req.userId, target]
+		);
+		const targetTask = targetProfile.rows[0] ? null : await client.query(
+			`SELECT data->>'project' AS name FROM tasks
+			 WHERE user_id = $1 AND lower(COALESCE(data->>'project', '')) = lower($2) LIMIT 1`,
+			[req.userId, target]
+		);
+		const canonicalTarget = targetProfile.rows[0]?.name || targetTask?.rows[0]?.name;
+		if (!canonicalTarget) {
+			const error = new Error('Projeto de destino nao encontrado.');
+			error.status = 404;
+			throw error;
+		}
+		if (!targetProfile.rows[0]) {
+			await client.query(
+				`INSERT INTO project_profiles (user_id, name)
+				 VALUES ($1, $2)
+				 ON CONFLICT (user_id, name) DO NOTHING`,
+				[req.userId, canonicalTarget]
+			);
+		}
+
+		const tasks = await client.query(
+			`UPDATE tasks
+			 SET data = jsonb_set(data, '{project}', to_jsonb($1::text), true), updated_at = now()
+			 WHERE user_id = $2 AND lower(COALESCE(data->>'project', '')) = lower($3)
+			 RETURNING id`,
+			[canonicalTarget, req.userId, source]
+		);
+		const sessions = await client.query(
+			`UPDATE focus_sessions
+			 SET data = jsonb_set(data, '{projectId}', to_jsonb($1::text), true)
+			 WHERE user_id = $2 AND lower(COALESCE(data->>'projectId', '')) = lower($3)
+			 RETURNING id`,
+			[canonicalTarget, req.userId, source]
+		);
+		const aliases = await client.query(
+			`UPDATE project_aliases SET project_name = $1, updated_at = now()
+			 WHERE user_id = $2 AND lower(project_name) = lower($3)
+			 RETURNING alias`,
+			[canonicalTarget, req.userId, source]
+		);
+		const records = await client.query(
+			`UPDATE app_records
+			 SET data = jsonb_set(
+			   CASE
+			     WHEN lower(COALESCE(data->>'project', '')) = lower($3)
+			     THEN jsonb_set(data, '{project}', to_jsonb($1::text), true)
+			     ELSE data
+			   END,
+			   '{projectId}',
+			   CASE
+			     WHEN lower(COALESCE(data->>'projectId', '')) = lower($3) THEN to_jsonb($1::text)
+			     ELSE COALESCE(data->'projectId', 'null'::jsonb)
+			   END,
+			   true
+			 ), updated_at = now()
+			 WHERE user_id = $2
+			   AND (
+			     lower(COALESCE(data->>'project', '')) = lower($3)
+			     OR lower(COALESCE(data->>'projectId', '')) = lower($3)
+			   )
+			 RETURNING id`,
+			[canonicalTarget, req.userId, source]
+		);
+		await client.query(
+			`DELETE FROM google_drive_project_folders AS source_folder
+			 WHERE source_folder.user_id = $1
+			   AND lower(source_folder.project_id) = lower($2)
+			   AND EXISTS (
+			     SELECT 1 FROM google_drive_project_folders AS target_folder
+			     WHERE target_folder.user_id = source_folder.user_id
+			       AND lower(target_folder.project_id) = lower($3)
+			   )`,
+			[req.userId, source, canonicalTarget]
+		);
+		await client.query(
+			`UPDATE google_drive_project_folders
+			 SET project_id = $1, project_name = $1, updated_at = now()
+			 WHERE user_id = $2 AND lower(project_id) = lower($3)`,
+			[canonicalTarget, req.userId, source]
+		);
+		await client.query(
+			`DELETE FROM project_profiles
+			 WHERE user_id = $1 AND lower(name) = lower($2)`,
+			[req.userId, source]
+		);
+
+		return {
+			target: canonicalTarget,
+			tasksMoved: tasks.rowCount,
+			sessionsMoved: sessions.rowCount,
+			aliasesMoved: aliases.rowCount,
+			recordsMoved: records.rowCount,
+		};
+	});
+
+	return res.json(result);
 });
 
 router.patch('/:name', async (req, res) => {
@@ -82,7 +208,7 @@ router.patch('/:name', async (req, res) => {
 		 FROM project_profiles
 		 WHERE user_id = $1 AND lower(name) = lower($2)
 		 LIMIT 1`,
-		[req.pocketbaseUserId, currentName]
+		[req.userId, currentName]
 	);
 
 	if (!found.rows[0]) {
@@ -90,15 +216,9 @@ router.patch('/:name', async (req, res) => {
 	}
 
 	if (currentName.toLocaleLowerCase('pt-BR') !== nextName.toLocaleLowerCase('pt-BR')) {
-		const duplicate = await runQuery(
-			`SELECT 1
-			 FROM project_profiles
-			 WHERE user_id = $1 AND lower(name) = lower($2)
-			 LIMIT 1`,
-			[req.pocketbaseUserId, nextName]
-		);
+		const duplicate = await findNormalizedDuplicate(req.userId, nextName, currentName);
 
-		if (duplicate.rows[0]) {
+		if (duplicate) {
 			return res.status(409).json({ message: 'Ja existe um projeto com esse nome.' });
 		}
 	}
@@ -113,7 +233,7 @@ router.patch('/:name', async (req, res) => {
 				updated_at = now()
 			 WHERE user_id = $4 AND lower(name) = lower($5)
 			 RETURNING name, summary, project_type, created_at, updated_at`,
-			[nextName, summary, projectType, req.pocketbaseUserId, currentName]
+			[nextName, summary, projectType, req.userId, currentName]
 		);
 
 		await client.query(
@@ -122,7 +242,7 @@ router.patch('/:name', async (req, res) => {
 				 project_name = $1,
 				 updated_at = now()
 			 WHERE user_id = $2 AND project_id = $3`,
-			[nextName, req.pocketbaseUserId, currentName]
+			[nextName, req.userId, currentName]
 		);
 
 		return updated.rows[0];
@@ -137,26 +257,21 @@ router.delete('/:name', async (req, res) => {
 		return res.status(400).json({ message: 'Nome do projeto e obrigatorio.' });
 	}
 
-	const deleted = await withTransaction(async (client) => {
-		const removed = await client.query(
+	await withTransaction(async (client) => {
+		await client.query(
 			`DELETE FROM project_profiles
 			 WHERE user_id = $1 AND lower(name) = lower($2)
-			 RETURNING name`,
-			[req.pocketbaseUserId, name]
+			`,
+			[req.userId, name]
 		);
 
 		await client.query(
 			`DELETE FROM google_drive_project_folders
 			 WHERE user_id = $1 AND project_id = $2`,
-			[req.pocketbaseUserId, name]
+			[req.userId, name]
 		);
 
-		return removed.rows[0] || null;
 	});
-
-	if (!deleted) {
-		return res.status(404).json({ message: 'Projeto nao encontrado.' });
-	}
 
 	return res.status(204).send();
 });

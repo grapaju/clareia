@@ -1,4 +1,5 @@
 import { getScheduledLabelForTask } from '@/lib/schedulingRules.js';
+import { parseLocalDate } from '@/lib/localDate.js';
 import { normalizeTaskStatus, TASK_STATUS } from '@/lib/taskExecution.js';
 
 function stripAccents(value = '') {
@@ -27,10 +28,7 @@ function minutesFromCheckInTempo(checkInTempo = '') {
 }
 
 function parseDate(value) {
-  if (!value) return null;
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return null;
-  return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+  return value ? parseLocalDate(value) : null;
 }
 
 function dateDiffInDays(a, b) {
@@ -311,8 +309,8 @@ export function reorganizeTasksByEnergy(tasks, checkIn) {
   const alerts = activeTasks
     .filter((task) => {
       const due = parseDate(task.dueDate || task.dataLimite);
-      if (!due) return false;
-      return due <= today;
+      const scheduled = parseDate(task.scheduledDate || task.dataSugeridaExecucao);
+      return Boolean((due && due <= today) || (scheduled && scheduled < today));
     })
     .map((task) => normalizeTask(task, now));
 

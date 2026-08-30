@@ -11,10 +11,6 @@ coverage/
 **/.env
 **/.env.*
 
-# runtime data
-apps/pocketbase/pb_data/
-apps/pocketbase/pb_data_dev/
-
 # OS/editor
 .DS_Store
 Thumbs.db

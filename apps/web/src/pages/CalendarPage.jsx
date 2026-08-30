@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { Helmet } from 'react-helmet';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -46,7 +46,7 @@ import { getCalendarPreferences, isAllowedDayForTask } from '@/services/calendar
 import { toIsoDate } from '@/lib/localDate.js';
 import CreateFollowUpFromTaskDialog from '@/components/CreateFollowUpFromTaskDialog.jsx';
 import TaskDetailsModal from '@/components/TaskDetailsModal.jsx';
-import { normalizeTaskStatus, TASK_STATUS } from '@/lib/taskExecution.js';
+import { isTaskOpenStatus, normalizeTaskStatus, TASK_STATUS } from '@/lib/taskExecution.js';
 import TaskPendingMicrotasksDialog from '@/components/TaskPendingMicrotasksDialog.jsx';
 import TaskPauseDialog from '@/components/TaskPauseDialog.jsx';
 
@@ -200,6 +200,7 @@ export default function CalendarPage() {
   const [detailsTask, setDetailsTask] = useState(null);
   const [draggedTaskId, setDraggedTaskId] = useState('');
   const [selectedDayIso, setSelectedDayIso] = useState('');
+  const commitmentTriggerRef = useRef(null);
 
   const followups = useMemo(() => listWaitingReturns(), [tasks.length]);
   const focusSessions = useMemo(() => listWorkSessions(), [tasks.length]);
@@ -208,7 +209,7 @@ export default function CalendarPage() {
 
   const calendarItems = useMemo(() => {
     const taskItems = tasks
-      .filter((task) => toIsoDate(task.scheduledDate || task.dataSugeridaExecucao))
+      .filter((task) => isTaskOpenStatus(task.status) && toIsoDate(task.scheduledDate || task.dataSugeridaExecucao))
       .map((task) => ({
         id: `task-${task.id}`,
         title: task.title,
@@ -223,7 +224,7 @@ export default function CalendarPage() {
       }));
 
     const dueItems = tasks
-      .filter((task) => toIsoDate(task.dueDate || task.dataLimite))
+      .filter((task) => isTaskOpenStatus(task.status) && toIsoDate(task.dueDate || task.dataLimite))
       .map((task) => ({
         id: `due-${task.id}`,
         title: `Prazo: ${task.title}`,
@@ -252,7 +253,7 @@ export default function CalendarPage() {
       }));
 
     const routineItems = tasks
-      .filter((task) => ['Semanal', 'Mensal'].includes(task.recurrenceFrequency))
+      .filter((task) => isTaskOpenStatus(task.status) && ['Semanal', 'Mensal'].includes(task.recurrenceFrequency))
       .map((task) => ({
         id: `routine-${task.id}`,
         title: `Rotina: ${task.title}`,
@@ -281,6 +282,7 @@ export default function CalendarPage() {
         estimatedMinutes: Number(session.durationMinutes || 0),
         status: session.endedAt ? 'Concluído' : 'Planejado',
         sourceId: session.id,
+        taskId: session.taskId || '',
         sourceType: 'work_session'
       }));
 
@@ -386,8 +388,13 @@ export default function CalendarPage() {
 
   const handleSaveItemDate = async () => {
     if (!selectedItem?.sourceId || !editDate) return;
+    const todayIso = toIsoDate(new Date());
+    if (editDate < todayIso) {
+      toast.error('Escolha hoje ou uma data futura.');
+      return;
+    }
 
-    if (selectedItem.type === 'task' || selectedItem.type === 'rotina' || selectedItem.type === 'prazo') {
+    if (selectedItem.type === 'task' || selectedItem.type === 'rotina') {
       const estimate = Number(tasks.find((task) => task.id === selectedItem.sourceId)?.timeEstimate || 30);
       const previewLoad = plannedMinutesForDate({ dateIso: editDate, tasks, followups, focusBlocks: focusSessions }) + estimate;
       if (previewLoad > availableMinutes) {
@@ -402,6 +409,15 @@ export default function CalendarPage() {
         manualSchedule: true
       });
       toast.success('Data atualizada.');
+      setSelectedItem(null);
+      return;
+    }
+
+    if (selectedItem.type === 'prazo') {
+      await updateTask(selectedItem.sourceId, { dueDate: editDate });
+      toast.success('Prazo atualizado.');
+      setSelectedItem(null);
+      return;
     }
 
     if (selectedItem.type === 'compromisso') {
@@ -413,6 +429,7 @@ export default function CalendarPage() {
       });
       setCommitmentsVersion((value) => value + 1);
       toast.success('Compromisso atualizado.');
+      setSelectedItem(null);
     }
   };
 
@@ -420,21 +437,36 @@ export default function CalendarPage() {
     if (!selectedItem?.sourceId) return;
     const current = new Date(`${selectedItem.date}T12:00:00`);
     current.setDate(current.getDate() + daysAhead);
+    const today = new Date();
+    today.setHours(12, 0, 0, 0);
+    if (current < today) current.setTime(today.getTime());
     const nextIso = toIsoDate(current);
 
-    if (selectedItem.type === 'task' || selectedItem.type === 'rotina' || selectedItem.type === 'prazo') {
+    if (selectedItem.type === 'task' || selectedItem.type === 'rotina') {
       await updateTask(selectedItem.sourceId, {
         scheduledDate: nextIso,
         dataSugeridaExecucao: nextIso,
+        scheduledPeriod: editPeriod,
+        periodoSugerido: editPeriod,
         manualSchedule: true
       });
       toast.success('Item movido para outro dia.');
+      setSelectedItem(null);
+      return;
+    }
+
+    if (selectedItem.type === 'prazo') {
+      await updateTask(selectedItem.sourceId, { dueDate: nextIso });
+      toast.success('Prazo movido para outro dia.');
+      setSelectedItem(null);
+      return;
     }
 
     if (selectedItem.type === 'compromisso') {
       updateCalendarCommitment(selectedItem.sourceId, { date: nextIso, syncStatus: 'pending_sync' });
       setCommitmentsVersion((value) => value + 1);
       toast.success('Compromisso movido para outro dia.');
+      setSelectedItem(null);
     }
   };
 
@@ -569,8 +601,9 @@ export default function CalendarPage() {
   };
 
   const handleOpenTaskDetails = () => {
-    if (!selectedItem?.sourceId) return;
-    const task = tasks.find((item) => item.id === selectedItem.sourceId);
+    const taskId = selectedItem?.type === 'foco' ? selectedItem.taskId : selectedItem?.sourceId;
+    if (!taskId) return;
+    const task = tasks.find((item) => item.id === taskId);
     if (!task) return;
     setDetailsTask(task);
   };
@@ -756,6 +789,10 @@ export default function CalendarPage() {
     try {
       const dropDateIso = event.currentTarget?.dataset?.droppableId || fallbackDateIso;
       if (!dropDateIso) return;
+      if (dropDateIso < toIsoDate(new Date())) {
+        toast.error('Não é possível planejar uma tarefa em um dia anterior.');
+        return;
+      }
 
       const payload = JSON.parse(event.dataTransfer.getData('text/plain') || '{}');
       if (!payload.taskId) return;
@@ -840,7 +877,7 @@ export default function CalendarPage() {
                   <Button variant={viewMode === 'dia' ? 'default' : 'outline'} onClick={() => setViewMode('dia')}>Dia</Button>
                   <Button variant={viewMode === 'semana' ? 'default' : 'outline'} onClick={() => setViewMode('semana')}>Semana</Button>
                   <Button variant={viewMode === 'mes' ? 'default' : 'outline'} onClick={() => setViewMode('mes')}>Mês</Button>
-                  <Button variant="outline" onClick={() => setShowCommitmentDialog(true)}><Plus className="w-4 h-4 mr-2" /> Novo compromisso</Button>
+                  <Button ref={commitmentTriggerRef} variant="outline" onClick={() => setShowCommitmentDialog(true)}><Plus className="w-4 h-4 mr-2" /> Novo compromisso</Button>
                   <Button variant="outline" disabled title="Integração futura">
                     <LinkIcon className="w-4 h-4 mr-2" /> Conectar Google Calendar
                   </Button>
@@ -918,20 +955,32 @@ export default function CalendarPage() {
                         {formatMinutesLabel(weekSummary.planned)} planejadas de {formatMinutesLabel(weekSummary.available)} disponíveis - {formatMinutesLabel(weekSummary.free)} livres
                       </p>
                       <p className="text-xs text-muted-foreground">{weekSummary.heavyDays} dia(s) cheio(s) ou sobrecarregado(s)</p>
-                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                      {weekSummary.heavyDays > 0 && <div className="flex flex-wrap items-center gap-2 text-xs">
                         <span className="font-medium text-muted-foreground">Carga semanal:</span>
                         <span className="rounded-full border px-2 py-0.5 bg-sky-100 text-sky-800 border-sky-300">leve</span>
                         <span className="rounded-full border px-2 py-0.5 bg-emerald-100 text-emerald-800 border-emerald-300">ok</span>
                         <span className="rounded-full border px-2 py-0.5 bg-amber-100 text-amber-800 border-amber-300">cheio</span>
                         <span className="rounded-full border px-2 py-0.5 bg-red-100 text-red-800 border-red-300">sobrecarregado</span>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
+                      </div>}
+                      {weekSummary.heavyDays > 0 && <div className="flex flex-wrap gap-2">
                         <Button size="sm" variant="outline" onClick={handleReorganizeWeek}>Reorganizar semana</Button>
-                      </div>
+                      </div>}
                     </CardContent>
                   </Card>
 
-                  <div className="grid grid-cols-[repeat(7,minmax(0,1fr))] gap-2">
+                  <div className="space-y-3 md:hidden">
+                    {weekData.map((day) => (
+                      <section key={`mobile-${day.iso}`} className={`border-b border-border pb-4 ${day.iso === toIsoDate(new Date()) ? 'border-l-4 border-l-primary pl-3' : ''}`}>
+                        <div className="mb-2 flex items-center justify-between gap-3">
+                          <div><h3 className="text-base">{day.date.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: '2-digit' })}</h3><p className="text-sm text-muted-foreground">{formatMinutesLabel(day.plannedMinutes)} planejados · {day.load}</p></div>
+                          <Button size="sm" variant="outline" onClick={() => handleFitTaskOnDate(day.iso)}>+ Planejar aqui</Button>
+                        </div>
+                        {day.items.length === 0 ? <p className="text-sm text-muted-foreground">Sem itens planejados.</p> : <div className="space-y-2">{day.items.map((item) => <button key={item.id} className="flex min-h-11 w-full items-center justify-between gap-3 rounded-md border border-border p-3 text-left" onClick={() => handleSelectItem(item)}><span className="min-w-0"><span className="block font-medium">{item.title}</span><span className="block text-sm text-muted-foreground">{buildItemMetaLine(item)}</span></span><span className="shrink-0 text-xs text-muted-foreground">{renderItemBadge(item.type)}</span></button>)}</div>}
+                      </section>
+                    ))}
+                  </div>
+
+                  <div className="hidden grid-cols-[repeat(7,minmax(0,1fr))] gap-2 md:grid">
                   {weekData.map((day) => {
                     const visual = getLoadVisual(day.load);
                     const ratio = availableMinutes > 0 ? Math.min(100, Math.round((day.plannedMinutes / availableMinutes) * 100)) : 0;
@@ -971,7 +1020,7 @@ export default function CalendarPage() {
                               handleFitTaskOnDate(day.iso);
                             }}
                           >
-                            + Encaixar
+                            + Planejar aqui
                           </button>
                         ) : (
                           <div className="space-y-1">
@@ -1036,10 +1085,18 @@ export default function CalendarPage() {
 
               {viewMode === 'mes' && (
                 <div className="space-y-3">
-                  <div className="grid grid-cols-7 gap-2 text-xs text-muted-foreground">
+                  <div className="space-y-3 md:hidden">
+                    {monthDays.filter((day) => day.getMonth() === currentDate.getMonth()).map((day) => {
+                      const iso = toIsoDate(day);
+                      const items = calendarItems.filter((item) => item.date === iso);
+                      if (items.length === 0) return null;
+                      return <section key={`month-mobile-${iso}`} className="border-b border-border pb-3"><h3 className="mb-2 text-base">{day.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' })}</h3><div className="space-y-2">{items.map((item) => <button key={item.id} className="min-h-11 w-full rounded-md border border-border p-3 text-left" onClick={() => handleSelectItem(item)}><span className="block font-medium">{item.title}</span><span className="text-sm text-muted-foreground">{buildItemMetaLine(item)}</span></button>)}</div></section>;
+                    })}
+                  </div>
+                  <div className="hidden grid-cols-7 gap-2 text-xs text-muted-foreground md:grid">
                     {['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sab', 'Dom'].map((label) => <div key={label} className="text-center">{label}</div>)}
                   </div>
-                  <div className="grid grid-cols-7 gap-2">
+                  <div className="hidden grid-cols-7 gap-2 md:grid">
                     {monthDays.map((day) => {
                       const iso = toIsoDate(day);
                       const markers = markersByDate[iso] || {};
@@ -1078,7 +1135,7 @@ export default function CalendarPage() {
       </div>
 
       <Dialog open={showCommitmentDialog} onOpenChange={setShowCommitmentDialog}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-lg" onCloseAutoFocus={(event) => { event.preventDefault(); commitmentTriggerRef.current?.focus(); }}>
           <DialogHeader>
             <DialogTitle>Novo compromisso</DialogTitle>
             <DialogDescription>Compromissos têm horário fixo e aparecem destacados no calendário.</DialogDescription>
@@ -1117,14 +1174,34 @@ export default function CalendarPage() {
                 {selectedItem.estimatedMinutes ? <p><span className="font-medium text-foreground">Estimativa:</span> {selectedItem.estimatedMinutes} min</p> : null}
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1"><Label>Data</Label><Input type="date" value={editDate} onChange={(event) => setEditDate(event.target.value)} /></div>
-                <div className="space-y-1"><Label>Período</Label><Select value={editPeriod} onValueChange={setEditPeriod}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="manhã">manhã</SelectItem><SelectItem value="tarde">tarde</SelectItem><SelectItem value="noite">noite</SelectItem></SelectContent></Select></div>
-              </div>
+              {['task', 'rotina', 'prazo', 'compromisso'].includes(selectedItem.type) && (
+                <div className={selectedItem.type === 'task' || selectedItem.type === 'rotina' ? 'grid grid-cols-2 gap-3' : ''}>
+                  <div className="space-y-1"><Label>Data</Label><Input type="date" value={editDate} onChange={(event) => setEditDate(event.target.value)} /></div>
+                  {(selectedItem.type === 'task' || selectedItem.type === 'rotina') && (
+                    <div className="space-y-1"><Label>Período</Label><Select value={editPeriod} onValueChange={setEditPeriod}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="manhã">manhã</SelectItem><SelectItem value="tarde">tarde</SelectItem><SelectItem value="noite">noite</SelectItem></SelectContent></Select></div>
+                  )}
+                </div>
+              )}
+
+              {selectedItem.type === 'foco' && (
+                <p className="border-y border-border py-3 text-sm text-muted-foreground">
+                  Este é um registro de foco já realizado. Para mudar o planejamento, abra a tarefa vinculada.
+                </p>
+              )}
+
+              {selectedItem.type === 'followup' && (
+                <p className="border-y border-border py-3 text-sm text-muted-foreground">
+                  A data deste acompanhamento é gerenciada em Aguardando retorno.
+                </p>
+              )}
 
               <div className="flex flex-wrap gap-2">
-                <Button variant="outline" onClick={handleSaveItemDate}>Editar data</Button>
-                <Button variant="outline" onClick={() => handleMoveToAnotherDay(1)}>Mover para outro dia</Button>
+                {['task', 'rotina', 'prazo', 'compromisso'].includes(selectedItem.type) && (
+                  <>
+                    <Button variant="outline" onClick={handleSaveItemDate}>Editar data</Button>
+                    <Button variant="outline" onClick={() => handleMoveToAnotherDay(1)}>Mover para outro dia</Button>
+                  </>
+                )}
 
                 {(selectedItem.type === 'task' || selectedItem.type === 'prazo' || selectedItem.type === 'rotina') && (
                   <>
@@ -1135,6 +1212,14 @@ export default function CalendarPage() {
                     <Button variant="outline" onClick={() => setShowFollowUpDialog(true)}>Criar acompanhamento</Button>
                     <Button variant="outline" onClick={handleReopenTask}>Reabrir</Button>
                   </>
+                )}
+
+                {selectedItem.type === 'foco' && selectedItem.taskId && (
+                  <Button variant="outline" onClick={handleOpenTaskDetails}>Abrir tarefa vinculada</Button>
+                )}
+
+                {selectedItem.type === 'followup' && (
+                  <Button variant="outline" onClick={() => navigate('/aguardando-retorno')}>Abrir acompanhamentos</Button>
                 )}
 
                 {selectedItem.type === 'compromisso' && (

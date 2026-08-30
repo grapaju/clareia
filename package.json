@@ -3,11 +3,11 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "dev": "concurrently --kill-others --raw \"npm run dev --prefix apps/web\" \"npm run dev --prefix apps/api\" \"npm run dev --prefix apps/pocketbase\"",
-    "dev:postgres": "concurrently --kill-others --raw \"npm run dev --prefix apps/web\" \"npm run dev --prefix apps/api\"",
+    "dev": "concurrently --kill-others --raw \"npm run dev --prefix apps/web\" \"npm run dev --prefix apps/api\"",
+    "dev:postgres": "npm run dev",
     "build": "concurrently --raw \"npm run build --prefix apps/web\"",
-    "start": "concurrently --kill-others --raw \"npm run start --prefix apps/api\" \"npm run start --prefix apps/pocketbase\"",
-    "start:postgres": "concurrently --kill-others --raw \"npm run start --prefix apps/api\"",
+    "start": "npm run start --prefix apps/api",
+    "start:postgres": "npm run start",
     "lint": "concurrently --raw \"npm run lint --prefix apps/web\" \"npm run lint --prefix apps/api\""
   },
   "devDependencies": {

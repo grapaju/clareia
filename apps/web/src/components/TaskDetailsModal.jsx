@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Play, CheckCircle2, Pencil, Archive, Trash2, MoreHorizontal } from 'lucide-react';
+import { Play, CheckCircle2, Pencil, Archive, Trash2, MoreHorizontal, Timer, CircleHelp } from 'lucide-react';
 import { useTaskContext } from '@/hooks/useTaskContext.js';
 import MicrotaskList from '@/components/MicrotaskList.jsx';
 import EditTaskModal from '@/components/EditTaskModal.jsx';
@@ -33,6 +33,7 @@ import { listProjectNotes, listTaskRelatedNotes, updateProjectNote } from '@/ser
 import BlockedHelpDialog from '@/components/BlockedHelpDialog.jsx';
 import { listProjectAccesses, listTaskRelatedAccesses, updateProjectAccess } from '@/services/projectAccessService.js';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { listTaskHistory } from '@/services/taskHistoryService.js';
 import ManualTimeDialog from '@/components/ManualTimeDialog.jsx';
 import { addTaskHistoryEvent } from '@/services/taskHistoryService.js';
@@ -247,6 +248,15 @@ export default function TaskDetailsModal({ task, isOpen, onClose }) {
                 </div>
               </div>
 
+              <Tabs defaultValue="execucao" className="min-w-0">
+                <TabsList className="grid w-full grid-cols-3">
+                  <TabsTrigger value="execucao">Execução</TabsTrigger>
+                  <TabsTrigger value="materiais">Materiais</TabsTrigger>
+                  <TabsTrigger value="historico">Histórico</TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="execucao" className="space-y-4 pt-2">
+
               {task.description && (
                 <div className="rounded-lg border border-border bg-muted/20 p-4">
                   <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Contexto inicial</p>
@@ -264,6 +274,10 @@ export default function TaskDetailsModal({ task, isOpen, onClose }) {
                 taskType={task.taskType}
                 onToggle={handleToggleMicrotask}
               />
+
+                </TabsContent>
+
+                <TabsContent value="materiais" className="pt-2">
 
               <div className="rounded-xl border border-border bg-muted/20 p-4">
                 <p className="text-xs uppercase tracking-wider text-muted-foreground font-medium mb-2">Materiais relacionados</p>
@@ -362,6 +376,10 @@ export default function TaskDetailsModal({ task, isOpen, onClose }) {
                 )}
               </div>
 
+                </TabsContent>
+
+                <TabsContent value="historico" className="space-y-4 pt-2">
+
               <TaskActivityPanel taskId={task.id} />
 
               <div className="rounded-xl border border-border bg-muted/20 p-4">
@@ -378,6 +396,8 @@ export default function TaskDetailsModal({ task, isOpen, onClose }) {
                   </ul>
                 )}
               </div>
+                </TabsContent>
+              </Tabs>
             </div>
           )}
 
@@ -395,6 +415,12 @@ export default function TaskDetailsModal({ task, isOpen, onClose }) {
                 <DropdownMenuItem onClick={() => setIsFollowUpDialogOpen(true)}>
                   <CheckCircle2 className="h-4 w-4" /> Criar acompanhamento
                 </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setIsManualTimeOpen(true)}>
+                  <Timer className="h-4 w-4" /> Adicionar tempo manual
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setIsBlockedDialogOpen(true)}>
+                  <CircleHelp className="h-4 w-4" /> Estou travada
+                </DropdownMenuItem>
                 <DropdownMenuItem onClick={handleArchive}>
                   <Archive className="h-4 w-4" /> Arquivar tarefa
                 </DropdownMenuItem>
@@ -405,18 +431,12 @@ export default function TaskDetailsModal({ task, isOpen, onClose }) {
               </DropdownMenuContent>
             </DropdownMenu>
 
-            <div className="flex min-w-0 items-center justify-end gap-2">
-              <Button variant="outline" onClick={() => setIsManualTimeOpen(true)} className="shrink-0">
-                Adicionar tempo manual
-              </Button>
+            <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
               {normalizeTaskStatus(task?.status) === TASK_STATUS.CONCLUIDA && (
                 <Button variant="outline" onClick={() => setIsReopenOpen(true)} className="shrink-0">
                   Reabrir tarefa
                 </Button>
               )}
-              <Button variant="outline" onClick={() => setIsBlockedDialogOpen(true)} className="shrink-0">
-                Estou travada
-              </Button>
               <Button variant="outline" onClick={() => setIsCompletionDialogOpen(true)} className="shrink-0">
                 <CheckCircle2 className="mr-2 h-4 w-4" /> Concluir
               </Button>
@@ -453,6 +473,7 @@ export default function TaskDetailsModal({ task, isOpen, onClose }) {
         }}
         updateTaskById={updateTask}
         createSupportTask={addTask}
+        deleteSupportTask={deleteTask}
       />
 
       <AlertDialog open={isDeleteOpen} onOpenChange={setIsDeleteOpen}>

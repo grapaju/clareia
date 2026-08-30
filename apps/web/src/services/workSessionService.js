@@ -65,6 +65,27 @@ export function listProjectWorkSessions(projectId) {
   return listWorkSessions().filter((session) => normalizeProjectId(session.projectId) === normalized);
 }
 
+export function reassignProjectWorkSessions(sourceProjectId, targetProjectId) {
+  const source = normalizeProjectId(sourceProjectId);
+  const target = normalizeProjectId(targetProjectId);
+  if (source === target) return 0;
+
+  const items = readAll();
+  let moved = 0;
+  const updated = items.map((session) => {
+    if (normalizeProjectId(session.projectId) !== source) return session;
+    moved += 1;
+    return { ...session, projectId: target };
+  });
+  if (moved > 0) writeAll(updated);
+
+  const active = readActiveSession();
+  if (active && normalizeProjectId(active.projectId) === source) {
+    writeActiveSession({ ...active, projectId: target });
+  }
+  return moved;
+}
+
 export function startTimerWorkSession(payload = {}) {
   const existing = readActiveSession();
   if (existing?.id) {

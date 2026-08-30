@@ -17,7 +17,7 @@ export default function TaskPauseDialog({
   onConfirm,
   isSubmitting = false,
   title = 'Pausar tarefa',
-  description = 'Adicione uma nota opcional sobre onde você parou.'
+  description = 'Tudo bem parar. Deixe uma frase para você saber como continuar depois.'
 }) {
   const [note, setNote] = useState(defaultValue);
 
@@ -35,11 +35,11 @@ export default function TaskPauseDialog({
         </DialogHeader>
 
         <div className="space-y-2">
-          <p className="text-sm font-medium">Onde parei?</p>
+          <p className="text-sm font-medium">Você parou aqui</p>
           <Textarea
             value={note}
             onChange={(event) => setNote(event.target.value)}
-            placeholder="Ex.: Aplicação localizada no servidor. Falta testar login."
+            placeholder="Ex.: Já configurei o formulário. Falta testar o envio do e-mail."
             className="min-h-24"
           />
         </div>

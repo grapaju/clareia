@@ -21,12 +21,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import ProjectSelect from '@/components/ProjectSelect.jsx';
 
 const TASK_TYPES = ['Cobrança', 'Reunião', 'Desenvolvimento', 'Site', 'Google Ads', 'Atendimento', 'Administrativo', 'Pessoal'];
 const PERIODS = ['Manhã', 'Tarde', 'Noite', 'Horário específico'];
 const IMPORTANCE_URGENCY = ['Baixa', 'Média', 'Alta'];
 const STATUSES = ['pendente', 'em_andamento', 'pausada', 'concluida', 'aguardando_retorno', 'arquivada'];
-const EXECUTION_DIFFICULTIES = ['Rápida', 'Direta', 'Exige foco', 'Tem atrito', 'Grande demais'];
 const RECURRENCE_FREQUENCIES = ['Nenhuma', 'Semanal', 'Mensal'];
 
 function getTodayIso() {
@@ -110,11 +110,7 @@ export default function EditTaskModal({ task, isOpen, onClose }) {
 
   const validate = () => {
     const errors = [];
-    if (!formData.title?.trim()) errors.push('Título');
-    if (!formData.project?.trim()) errors.push('Projeto');
-    if (!formData.timeEstimate) errors.push('Tempo Estimado');
-    if (!formData.dataSugeridaExecucao) errors.push('Data Sugerida');
-    if (!formData.energiaNecessaria) errors.push('Energia Necessária');
+    if (!formData.title?.trim()) errors.push('O que precisa ser feito');
 
     if (errors.length > 0) {
       toast.error(`Preencha os campos obrigatórios: ${errors.join(', ')}`);
@@ -175,7 +171,7 @@ export default function EditTaskModal({ task, isOpen, onClose }) {
   return (
     <>
       <Dialog open={isOpen} onOpenChange={(open) => !open && handleAttemptClose()}>
-        <DialogContent className="sm:max-w-[700px] max-h-[90vh] overflow-y-auto bg-card text-foreground border-border p-0">
+        <DialogContent className="h-[100dvh] w-screen max-w-none overflow-y-auto rounded-none bg-card p-0 text-foreground sm:h-auto sm:max-h-[90vh] sm:max-w-[700px] sm:rounded-lg">
           <DialogHeader className="p-6 pb-4 border-b border-border sticky top-0 bg-card z-10">
             <DialogTitle className="text-2xl font-medium">Editar tarefa</DialogTitle>
           </DialogHeader>
@@ -183,7 +179,7 @@ export default function EditTaskModal({ task, isOpen, onClose }) {
           <div className="p-6 space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div className="space-y-2 col-span-full">
-                <Label>Título *</Label>
+                <Label>O que precisa ser feito? *</Label>
                 <Input 
                   value={formData.title || ''} 
                   onChange={e => handleChange('title', e.target.value)} 
@@ -192,12 +188,8 @@ export default function EditTaskModal({ task, isOpen, onClose }) {
               </div>
 
               <div className="space-y-2">
-                <Label>Projeto *</Label>
-                <Input 
-                  value={formData.project || ''} 
-                  onChange={e => handleChange('project', e.target.value)} 
-                  className="bg-background text-foreground"
-                />
+                <Label>Projeto (opcional)</Label>
+                <ProjectSelect value={formData.project || ''} onChange={value => handleChange('project', value)} />
               </div>
 
               <div className="space-y-2">
@@ -211,7 +203,7 @@ export default function EditTaskModal({ task, isOpen, onClose }) {
               </div>
 
               <div className="space-y-2 col-span-full">
-                <Label>Ação Prática (Next Action)</Label>
+                <Label>Primeiro passo visível</Label>
                 <Textarea 
                   value={formData.nextAction || ''} 
                   onChange={e => handleChange('nextAction', e.target.value)} 
@@ -229,7 +221,7 @@ export default function EditTaskModal({ task, isOpen, onClose }) {
               </div>
 
               <div className="space-y-2">
-                <Label>Tempo Estimado (min) *</Label>
+                <Label>Duração estimada (min)</Label>
                 <Input 
                   type="number" 
                   value={formData.timeEstimate || ''} 
@@ -249,7 +241,7 @@ export default function EditTaskModal({ task, isOpen, onClose }) {
               </div>
 
               <div className="space-y-2">
-                <Label>Data sugerida de execução *</Label>
+                <Label>Quero fazer em</Label>
                 <Input 
                   type="date" 
                   value={formData.dataSugeridaExecucao || ''} 
@@ -259,7 +251,7 @@ export default function EditTaskModal({ task, isOpen, onClose }) {
               </div>
 
               <div className="space-y-2">
-                <Label>Data Limite (Due Date)</Label>
+                <Label>Precisa estar pronto até</Label>
                 <Input 
                   type="date" 
                   value={formData.dueDate || ''} 
@@ -279,7 +271,7 @@ export default function EditTaskModal({ task, isOpen, onClose }) {
               </div>
 
               <div className="space-y-3">
-                <Label>Energia Necessária *</Label>
+                <Label>Quanto esforço exige?</Label>
                 <RadioGroup 
                   value={formData.energiaNecessaria} 
                   onValueChange={v => handleChange('energiaNecessaria', v)}
@@ -321,11 +313,14 @@ export default function EditTaskModal({ task, isOpen, onClose }) {
               </div>
 
               <div className="space-y-2">
-                <Label>Dificuldade de execução</Label>
+                <Label>Como está essa tarefa para você?</Label>
                 <Select value={formData.executionDifficulty} onValueChange={v => handleChange('executionDifficulty', v)}>
                   <SelectTrigger className="bg-background"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {EXECUTION_DIFFICULTIES.map((difficulty) => <SelectItem key={difficulty} value={difficulty}>{difficulty}</SelectItem>)}
+                    <SelectItem value="Direta">Consigo fazer diretamente</SelectItem>
+                    <SelectItem value="Grande demais">Preciso dividir em passos</SelectItem>
+                    <SelectItem value="Tem atrito">Ainda não sei como começar</SelectItem>
+                    <SelectItem value="Travada">Estou travada</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -352,7 +347,7 @@ export default function EditTaskModal({ task, isOpen, onClose }) {
             </div>
           </div>
 
-          <DialogFooter className="p-6 border-t border-border bg-muted/20 flex-col sm:flex-row gap-3">
+          <DialogFooter className="sticky bottom-0 z-10 flex-col gap-3 border-t border-border bg-card p-4 sm:flex-row sm:p-6">
             <Button variant="outline" onClick={handleArchive} className="sm:mr-auto">
               Arquivar tarefa
             </Button>

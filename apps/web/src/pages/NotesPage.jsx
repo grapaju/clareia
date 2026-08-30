@@ -22,8 +22,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { useAuth } from '@/contexts/AuthContext.jsx';
 import { useTaskContext } from '@/hooks/useTaskContext.js';
-import pb from '@/lib/pocketbaseClient.js';
-import { getCurrentAccountId } from '@/lib/pocketbaseClient.js';
+import apiClient, { getCurrentAccountId } from '@/lib/apiClient.js';
 import { toast } from 'sonner';
 import { listUnsortedNotes, removeUnsortedNote } from '@/lib/unsortedNotesStorage.js';
 import { parseUnloadMindToPlan } from '@/lib/unloadMindLogic.js';
@@ -44,7 +43,7 @@ export default function NotesPage() {
   const navigate = useNavigate();
   const { currentUser } = useAuth();
   const { addTask } = useTaskContext();
-  const userId = currentUser?.id || pb.authStore?.model?.id || '';
+  const userId = currentUser?.id || apiClient.authStore?.model?.id || '';
   const accountId = currentUser?.currentAccountId || getCurrentAccountId();
   const [notes, setNotes] = useState([]);
   const [selectedNoteId, setSelectedNoteId] = useState(null);
@@ -61,7 +60,7 @@ export default function NotesPage() {
     if (!userId) return;
     setIsLoading(true);
     try {
-      const records = await pb.collection('anotacoes').getFullList({ sort: '-fixada,-updated', $autoCancel: false });
+      const records = await apiClient.collection('anotacoes').getFullList({ sort: '-fixada,-updated', $autoCancel: false });
       setNotes(records);
     } catch (error) {
       console.error('Erro ao carregar notas:', error);
@@ -133,8 +132,8 @@ export default function NotesPage() {
 
     try {
       const record = selectedNote
-        ? await pb.collection('anotacoes').update(selectedNote.id, payload, { $autoCancel: false })
-        : await pb.collection('anotacoes').create(payload, { $autoCancel: false });
+        ? await apiClient.collection('anotacoes').update(selectedNote.id, payload, { $autoCancel: false })
+        : await apiClient.collection('anotacoes').create(payload, { $autoCancel: false });
 
       setNotes((currentNotes) => {
         const withoutSaved = currentNotes.filter((note) => note.id !== record.id);
@@ -161,7 +160,7 @@ export default function NotesPage() {
       return;
     }
     try {
-      const record = await pb.collection('anotacoes').create({
+      const record = await apiClient.collection('anotacoes').create({
         userId,
         ...(accountId ? { accountId } : {}),
         titulo: notePreview(content).slice(0, 90),
@@ -195,7 +194,7 @@ export default function NotesPage() {
     }
     try {
       const plan = parseUnloadMindToPlan(content);
-      const record = await pb.collection('planosClareados').create({
+      const record = await apiClient.collection('planosClareados').create({
         userId,
         ...(accountId ? { accountId } : {}),
         conteudoOriginal: content,
@@ -230,7 +229,7 @@ export default function NotesPage() {
       for (const draft of legacyDrafts) {
         const content = draft.content.trim();
         if (!content) continue;
-        const record = await pb.collection('anotacoes').create({
+        const record = await apiClient.collection('anotacoes').create({
           userId,
           ...(accountId ? { accountId } : {}),
           titulo: notePreview(content).slice(0, 90),
@@ -262,7 +261,7 @@ export default function NotesPage() {
   const confirmDelete = async () => {
     if (!selectedNote) return;
     try {
-      await pb.collection('anotacoes').delete(selectedNote.id, { $autoCancel: false });
+      await apiClient.collection('anotacoes').delete(selectedNote.id, { $autoCancel: false });
       setNotes((currentNotes) => currentNotes.filter((note) => note.id !== selectedNote.id));
       resetEditor();
       setIsDeleteDialogOpen(false);

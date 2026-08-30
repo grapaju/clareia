@@ -12,6 +12,7 @@ import {
   FileText,
   Folder,
   FolderKanban,
+  GitMerge,
   History,
   Image,
   Link2,
@@ -31,6 +32,7 @@ import TaskCard from '@/components/TaskCard.jsx';
 import TaskModal from '@/components/TaskModal.jsx';
 import ManualTimeDialog from '@/components/ManualTimeDialog.jsx';
 import { useTaskContext } from '@/hooks/useTaskContext.js';
+import { isTaskArchivedStatus, isTaskCompletedStatus, isTaskOpenStatus } from '@/lib/taskExecution.js';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -70,6 +72,7 @@ import { createProjectFile, deleteProjectFile, listProjectFiles, updateProjectFi
 import {
   deleteProjectDriveConfig,
   extractDriveFolderId,
+  getProjectDriveConfig,
   getDriveDefaultSubfoldersByType,
   renameProjectDriveConfig
 } from '@/services/projectDriveConfigService.js';
@@ -87,12 +90,13 @@ import { createProjectLink, deleteProjectLink, getProjectLinkTypes, listFavorite
 import { createProjectAccess, deleteProjectAccess, listProjectAccesses, updateProjectAccess } from '@/services/projectAccessService.js';
 import { createProjectNote, deleteProjectNote, listProjectNotes, listRecentProjectNotes, updateProjectNote } from '@/services/projectNoteService.js';
 import { listProjectWaitingReturns } from '@/services/waitingReturnService.js';
-import { deleteWorkSession, getWorkTimeSummary, listProjectWorkSessions, toHours, updateWorkSession } from '@/services/workSessionService.js';
-import { getTaskLastCompletionDate } from '@/services/taskHistoryService.js';
+import { deleteWorkSession, getWorkTimeSummary, listProjectWorkSessions, reassignProjectWorkSessions, toHours, updateWorkSession } from '@/services/workSessionService.js';
+import { getTaskLastCompletionDate, reassignTaskHistoryProject } from '@/services/taskHistoryService.js';
 import {
   createProjectProfileApi,
   deleteProjectProfileApi,
   listProjectProfilesApi,
+  mergeProjectProfilesApi,
   updateProjectProfileApi
 } from '@/services/projectProfilesApiService.js';
 
@@ -225,17 +229,17 @@ const MATERIAL_TYPE_FILTER_OPTIONS = [
 ];
 
 const FILE_PROVIDER_OPTIONS = [
-  { value: 'external_link', label: 'Salvar como link externo' },
+  { value: 'external_link', label: 'Arquivo ou link externo' },
   { value: 'google_drive', label: 'Vincular arquivo ja existente no Drive' },
-  { value: 'google_drive_upload_future', label: 'Upload futuro para Drive' }
+  { value: 'google_drive_upload_future', label: 'Criar documento no Drive' }
 ];
 
 export default function ProjectsPage() {
-  const { tasks, addTask, completeTask, reopenTask, updateTask } = useTaskContext();
+  const { tasks, addTask, completeTask, reopenTask, updateTask, refreshTasks } = useTaskContext();
   const navigate = useNavigate();
 
   const [selectedProject, setSelectedProject] = useState(null);
-  const [activeTab, setActiveTab] = useState('visao-geral');
+  const [activeTab, setActiveTab] = useState('resumo');
   const [searchTerm, setSearchTerm] = useState('');
   const [profiles, setProfiles] = useState([]);
   const [historyItems, setHistoryItems] = useState([]);
@@ -347,6 +351,9 @@ export default function ProjectsPage() {
   const [isRenamingProject, setIsRenamingProject] = useState(false);
   const [isRenameDialogOpen, setIsRenameDialogOpen] = useState(false);
   const [renameTargetName, setRenameTargetName] = useState('');
+  const [isMergeDialogOpen, setIsMergeDialogOpen] = useState(false);
+  const [mergeTargetName, setMergeTargetName] = useState('');
+  const [isMergingProject, setIsMergingProject] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [deleteConfirmName, setDeleteConfirmName] = useState('');
 
@@ -514,12 +521,12 @@ export default function ProjectsPage() {
   }, [selectedProject]);
 
   const projectTasks = useMemo(
-    () => tasks.filter((item) => item.project === selectedProject && item.status !== 'Concluída'),
+    () => tasks.filter((item) => item.project === selectedProject && !isTaskCompletedStatus(item.status)),
     [tasks, selectedProject]
   );
-  const projectTasksOpen = useMemo(() => tasks.filter((item) => item.project === selectedProject && item.status !== 'Concluída' && item.status !== 'Backlog'), [tasks, selectedProject]);
-  const projectTasksDone = useMemo(() => tasks.filter((item) => item.project === selectedProject && item.status === 'Concluída'), [tasks, selectedProject]);
-  const projectTasksArchived = useMemo(() => tasks.filter((item) => item.project === selectedProject && item.status === 'Backlog'), [tasks, selectedProject]);
+  const projectTasksOpen = useMemo(() => tasks.filter((item) => item.project === selectedProject && isTaskOpenStatus(item.status)), [tasks, selectedProject]);
+  const projectTasksDone = useMemo(() => tasks.filter((item) => item.project === selectedProject && isTaskCompletedStatus(item.status)), [tasks, selectedProject]);
+  const projectTasksArchived = useMemo(() => tasks.filter((item) => item.project === selectedProject && isTaskArchivedStatus(item.status)), [tasks, selectedProject]);
   const projectTasksForFilter = useMemo(() => {
     if (taskFilter === 'todas') return tasks.filter((item) => item.project === selectedProject);
     if (taskFilter === 'concluidas') return projectTasksDone;
@@ -1469,9 +1476,18 @@ export default function ProjectsPage() {
   };
 
   const handleEditMaterial = (material) => {
+    const materialType = String(material.materialType || material.type || 'arquivo').toLocaleLowerCase('pt-BR');
+    const normalizedMaterialType = materialType.includes('link')
+      ? 'link'
+      : materialType.includes('nota')
+        ? 'nota'
+        : materialType.includes('acesso')
+          ? 'acesso'
+          : 'arquivo';
+    const provider = material.provider || material.storageProvider || 'external_link';
     setEditingMaterialId(material.id);
     setFileForm({
-      materialType: material.materialType || material.type || 'arquivo',
+      materialType: normalizedMaterialType,
       name: material.name || '',
       type: material.type || '',
       folder: material.folder || '',
@@ -1479,10 +1495,10 @@ export default function ProjectsPage() {
       tags: (material.tags || []).join(', '),
       origin: material.origin || '',
       externalLink: material.url || material.externalLink || '',
-      provider: material.provider || material.storageProvider || 'external_link',
+      provider,
       driveFileId: material.driveFileId || '',
       driveFolderId: material.driveFolderId || '',
-      autoSyncDrive: Boolean(material.driveFileId),
+      autoSyncDrive: provider === 'google_drive_upload_future',
       storageProvider: material.storageProvider || 'local',
       relatedTaskId: material.relatedTaskId || material.relatedTaskIds?.[0] || 'none',
       favorite: Boolean(material.favorite)
@@ -1871,7 +1887,55 @@ export default function ProjectsPage() {
     listProjectLinks(oldName).forEach((item) => updateProjectLink(item.id, { projectName: newName }));
     listProjectAccesses(oldName).forEach((item) => updateProjectAccess(item.id, { projectName: newName }));
     listProjectNotes(oldName).forEach((item) => updateProjectNote(item.id, { projectName: newName }));
-    renameProjectDriveConfig(oldName, newName);
+    if (getProjectDriveConfig(newName)) {
+      deleteProjectDriveConfig(oldName);
+    } else {
+      renameProjectDriveConfig(oldName, newName);
+    }
+  };
+
+  const openMergeProjectDialog = () => {
+    const firstTarget = allProjects.find((projectName) => projectName !== selectedProject) || '';
+    setMergeTargetName(firstTarget);
+    setIsMergeDialogOpen(true);
+  };
+
+  const confirmMergeProject = async () => {
+    if (!selectedProject || !mergeTargetName || selectedProject === mergeTargetName || isMergingProject) return;
+
+    const sourceProject = selectedProject;
+    const targetProject = mergeTargetName;
+    setIsMergingProject(true);
+    try {
+      await mergeProjectProfilesApi(sourceProject, targetProject);
+      renameProjectWorkspaceData(sourceProject, targetProject);
+      reassignProjectWorkSessions(sourceProject, targetProject);
+      reassignTaskHistoryProject(sourceProject, targetProject);
+
+      const historyMap = readProjectHistory();
+      historyMap[targetProject] = [
+        ...(Array.isArray(historyMap[sourceProject]) ? historyMap[sourceProject] : []),
+        ...(Array.isArray(historyMap[targetProject]) ? historyMap[targetProject] : [])
+      ]
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        .slice(0, 200);
+      delete historyMap[sourceProject];
+      writeProjectHistory(historyMap);
+
+      await refreshTasks();
+      setProfiles((current) => current.filter((item) => item.name !== sourceProject));
+      setSelectedProject(targetProject);
+      setProfileForm((current) => ({ ...current, name: targetProject }));
+      appendHistory(targetProject, 'Projetos mesclados', `Origem: ${sourceProject}`);
+      refreshWorkspaceData(targetProject);
+      setIsMergeDialogOpen(false);
+      toast.success(`Conteúdo movido para ${targetProject}.`);
+    } catch (error) {
+      console.error(error);
+      toast.error(error?.message || 'Nao foi possivel mesclar os projetos.');
+    } finally {
+      setIsMergingProject(false);
+    }
   };
 
   const openRenameProjectDialog = () => {
@@ -2104,16 +2168,21 @@ export default function ProjectsPage() {
                       <p className="text-muted-foreground mt-1">Area de trabalho do projeto</p>
                     </div>
 
-                    <div className="flex items-end gap-2">
-                      <Button
-                        variant="outline"
-                        className="text-destructive"
-                        onClick={openDeleteProjectDialog}
-                        disabled={isDeletingProject}
-                      >
-                        <Trash2 className="w-4 h-4 mr-2" /> Excluir projeto
-                      </Button>
-                    </div>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="outline" size="icon" aria-label="Mais ações do projeto"><MoreHorizontal className="h-4 w-4" /></Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={openRenameProjectDialog}>Renomear projeto</DropdownMenuItem>
+                        <DropdownMenuItem onClick={openMergeProjectDialog} disabled={allProjects.length < 2 || isMergingProject}>
+                          <GitMerge className="mr-2 h-4 w-4" /> Mesclar com outro projeto
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={openDeleteProjectDialog} disabled={isDeletingProject}>
+                          <Trash2 className="mr-2 h-4 w-4" /> Excluir projeto
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
 
                     <div className="w-full lg:w-[360px]">
                       <Label htmlFor="project-search">Buscar neste projeto...</Label>
@@ -2155,17 +2224,13 @@ export default function ProjectsPage() {
 
                   <Tabs value={activeTab} onValueChange={setActiveTab}>
                     <TabsList className="h-auto flex flex-wrap justify-start gap-2 p-2 mb-4">
-                      <TabsTrigger value="visao-geral">Visao geral</TabsTrigger>
+                      <TabsTrigger value="resumo">Resumo</TabsTrigger>
                       <TabsTrigger value="tarefas">Tarefas</TabsTrigger>
-                      <TabsTrigger value="tempo">Tempo</TabsTrigger>
-                      <TabsTrigger value="arquivos">Arquivos</TabsTrigger>
-                      <TabsTrigger value="links">Links</TabsTrigger>
-                      <TabsTrigger value="acessos">Acessos</TabsTrigger>
-                      <TabsTrigger value="notas">Notas</TabsTrigger>
-                      <TabsTrigger value="historico">Historico</TabsTrigger>
+                      <TabsTrigger value="materiais">Materiais</TabsTrigger>
+                      <TabsTrigger value="historico">Histórico</TabsTrigger>
                     </TabsList>
 
-                    <TabsContent value="visao-geral">
+                    <TabsContent value="resumo">
                       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
                         <Card className="xl:col-span-2 bg-card border-border shadow-sm">
                           <CardContent className="p-6 space-y-4">
@@ -2370,7 +2435,7 @@ export default function ProjectsPage() {
                       </Card>
                     </TabsContent>
 
-                    <TabsContent value="tempo">
+                    <TabsContent value="historico">
                       <div className="space-y-6">
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                           <Card className="bg-card border-border"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Hoje</p><p className="text-2xl font-medium">{toHours(projectTimeSummary.todayMinutes)}h</p></CardContent></Card>
@@ -2420,7 +2485,7 @@ export default function ProjectsPage() {
                       </div>
                     </TabsContent>
 
-                    <TabsContent value="arquivos">
+                    <TabsContent value="materiais">
                       <div className="space-y-6">
                         <Card className="bg-card border-border shadow-sm">
                           <CardContent className="p-6 space-y-4">
@@ -2695,7 +2760,7 @@ export default function ProjectsPage() {
                       </div>
                     </TabsContent>
 
-                    <TabsContent value="links">
+                    <TabsContent value="materiais">
                       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
                         <Card className="bg-card border-border shadow-sm">
                           <CardContent className="p-6 space-y-4">
@@ -2801,7 +2866,7 @@ export default function ProjectsPage() {
                       </div>
                     </TabsContent>
 
-                    <TabsContent value="acessos">
+                    <TabsContent value="materiais">
                       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
                         <Card className="bg-card border-border shadow-sm">
                           <CardContent className="p-6 space-y-4">
@@ -2852,7 +2917,7 @@ export default function ProjectsPage() {
                       </div>
                     </TabsContent>
 
-                    <TabsContent value="notas">
+                    <TabsContent value="materiais">
                       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
                         <Card className="bg-card border-border shadow-sm">
                           <CardContent className="p-6 space-y-4">
@@ -3009,13 +3074,10 @@ export default function ProjectsPage() {
                 <Select value={fileForm.materialType} onValueChange={(value) => setFileForm((current) => ({ ...current, materialType: value, type: value }))}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="arquivo">arquivo</SelectItem>
-                    <SelectItem value="imagem_print">imagem/print</SelectItem>
-                    <SelectItem value="link">link</SelectItem>
-                    <SelectItem value="nota">nota</SelectItem>
-                    <SelectItem value="acesso">acesso</SelectItem>
-                    <SelectItem value="google_drive">Google Drive</SelectItem>
-                    <SelectItem value="modelo_referencia">modelo/referencia</SelectItem>
+                    <SelectItem value="arquivo">Arquivo</SelectItem>
+                    <SelectItem value="link">Link</SelectItem>
+                    <SelectItem value="nota">Nota</SelectItem>
+                    <SelectItem value="acesso">Acesso</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -3041,7 +3103,7 @@ export default function ProjectsPage() {
                     ...current,
                     provider: value,
                     storageProvider: value,
-                    autoSyncDrive: value === 'google_drive' || value === 'google_drive_upload_future'
+                    autoSyncDrive: value === 'google_drive_upload_future'
                   }))}
                 >
                   <SelectTrigger><SelectValue /></SelectTrigger>
@@ -3053,7 +3115,7 @@ export default function ProjectsPage() {
                 </Select>
               </div>
               <div className="space-y-2 md:col-span-2">
-                <Label>Link do Google Drive / link externo</Label>
+                <Label>{fileForm.provider === 'google_drive' ? 'Link do arquivo existente no Google Drive' : 'Link externo'}</Label>
                 <Input value={fileForm.externalLink} onChange={(event) => setFileForm((current) => ({ ...current, externalLink: event.target.value }))} placeholder="https://..." />
               </div>
 
@@ -3075,14 +3137,12 @@ export default function ProjectsPage() {
                       placeholder="ID da pasta no Drive"
                     />
                   </div>
-                  <div className="space-y-2 md:col-span-2 flex items-center gap-2 rounded-lg border border-border px-3 py-2">
-                    <input
-                      type="checkbox"
-                      checked={Boolean(fileForm.autoSyncDrive)}
-                      onChange={(event) => setFileForm((current) => ({ ...current, autoSyncDrive: event.target.checked }))}
-                    />
-                    <p className="text-sm text-muted-foreground">Criar/atualizar documento automaticamente no Google Drive ao salvar</p>
-                  </div>
+                  {fileForm.provider === 'google_drive_upload_future' && (
+                    <div className="space-y-2 md:col-span-2 rounded-lg border border-border px-3 py-2">
+                      <p className="text-sm font-medium text-foreground">Criar ou atualizar documento</p>
+                      <p className="text-sm text-muted-foreground">O conteúdo será sincronizado na pasta do projeto ao salvar.</p>
+                    </div>
+                  )}
                 </>
               )}
 
@@ -3520,6 +3580,36 @@ export default function ProjectsPage() {
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+
+        <Dialog open={isMergeDialogOpen} onOpenChange={setIsMergeDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Mesclar projeto</DialogTitle>
+              <DialogDescription>
+                Todo o conteúdo de {selectedProject} será movido para o projeto escolhido. A origem será excluída somente após a movimentação remota.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-2">
+              <Label>Projeto de destino</Label>
+              <Select value={mergeTargetName} onValueChange={setMergeTargetName}>
+                <SelectTrigger><SelectValue placeholder="Escolha o destino" /></SelectTrigger>
+                <SelectContent>
+                  {allProjects.filter((projectName) => projectName !== selectedProject).map((projectName) => (
+                    <SelectItem key={projectName} value={projectName}>{projectName}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setIsMergeDialogOpen(false)} disabled={isMergingProject}>Cancelar</Button>
+              <Button onClick={confirmMergeProject} disabled={!mergeTargetName || isMergingProject}>
+                <GitMerge className="mr-2 h-4 w-4" /> {isMergingProject ? 'Mesclando...' : 'Mesclar projetos'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
           <AlertDialogContent>

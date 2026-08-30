@@ -1,4 +1,4 @@
-import pb from '@/lib/pocketbaseClient.js';
+import apiClient from '@/lib/apiClient.js';
 import { appendProjectHistory } from '@/services/projectHistoryService.js';
 
 const STORAGE_KEY = 'clareia_waiting_return_v1';
@@ -107,8 +107,20 @@ export function deleteWaitingReturn(id) {
   return true;
 }
 
+export async function deleteWaitingReturnEverywhere(id) {
+  const item = readAll().find((candidate) => candidate.id === id);
+  if (item?.cloudId && userIdOrNull()) {
+    try {
+      await apiClient.collection(REMOTE_COLLECTION).delete(item.cloudId, { $autoCancel: false });
+    } catch (error) {
+      if (error?.status !== 404) throw error;
+    }
+  }
+  return deleteWaitingReturn(id);
+}
+
 function userIdOrNull() {
-  return pb?.authStore?.model?.id || null;
+  return apiClient?.authStore?.model?.id || null;
 }
 
 function fromRemote(record) {
@@ -153,7 +165,7 @@ export async function syncWaitingReturnsWithCloud() {
 
   try {
     const localItems = readAll();
-    const remoteItems = await pb.collection(REMOTE_COLLECTION).getFullList({
+    const remoteItems = await apiClient.collection(REMOTE_COLLECTION).getFullList({
       filter: `userId = "${userId}"`,
       sort: '-updated',
       $autoCancel: false
@@ -185,13 +197,13 @@ export async function syncWaitingReturnsWithCloud() {
       const payload = toRemote(item, userId);
       if (item.cloudId) {
         try {
-          await pb.collection(REMOTE_COLLECTION).update(item.cloudId, payload, { $autoCancel: false });
+          await apiClient.collection(REMOTE_COLLECTION).update(item.cloudId, payload, { $autoCancel: false });
         } catch {
           // Keep local as source of truth when update fails.
         }
       } else {
         try {
-          const created = await pb.collection(REMOTE_COLLECTION).create(payload, { $autoCancel: false });
+          const created = await apiClient.collection(REMOTE_COLLECTION).create(payload, { $autoCancel: false });
           item.cloudId = created.id;
         } catch {
           // Keep local only when create fails.

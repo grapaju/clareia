@@ -60,6 +60,22 @@ export function listTaskHistoryByProject(projectId) {
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 }
 
+export function reassignTaskHistoryProject(sourceProjectId, targetProjectId) {
+  const source = String(sourceProjectId || '').trim();
+  const target = String(targetProjectId || '').trim();
+  if (!source || !target || source === target) return 0;
+
+  const items = readAll();
+  let moved = 0;
+  const updated = items.map((item) => {
+    if (String(item.projectId || '').trim() !== source) return item;
+    moved += 1;
+    return { ...item, projectId: target };
+  });
+  if (moved > 0) writeAll(updated);
+  return moved;
+}
+
 export function getTaskLastCompletionDate(taskId) {
   return listTaskHistory(taskId).find((item) => item.type === 'task_completed')?.createdAt || null;
 }

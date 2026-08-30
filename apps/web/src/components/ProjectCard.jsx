@@ -5,12 +5,13 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { FolderKanban, AlertCircle, CheckCircle2, Pencil } from 'lucide-react';
 import EditTaskModal from '@/components/EditTaskModal.jsx';
+import { isTaskOpenStatus } from '@/lib/taskExecution.js';
 
 export default function ProjectCard({ project, tasks }) {
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [taskToEdit, setTaskToEdit] = useState(null);
 
-  const projectTasks = tasks.filter(t => t.project === project && t.status !== 'completed' && t.status !== 'Concluída');
+  const projectTasks = tasks.filter(t => t.project === project && isTaskOpenStatus(t.status));
   const urgentTasks = projectTasks.filter(t => {
     const deadline = t.dueDate ? new Date(t.dueDate) : null;
     const daysDiff = deadline ? Math.ceil((deadline - new Date()) / (1000 * 60 * 60 * 24)) : null;

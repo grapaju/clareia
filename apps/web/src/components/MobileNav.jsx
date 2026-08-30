@@ -1,45 +1,55 @@
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useLocation, Link } from 'react-router-dom';
-import { Home, Sparkles, FolderKanban, Settings, NotebookPen, Clock3, BarChart3, CalendarDays, BookOpen, UserRound } from 'lucide-react';
-import { Repeat } from 'lucide-react';
+import { Home, Sparkles, FolderKanban, Settings, Clock3, BarChart3, CalendarDays, BookOpen, UserRound, MoreHorizontal, Repeat, Bookmark } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useAppMode } from '@/contexts/AppModeContext.jsx';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { useAuth } from '@/contexts/AuthContext.jsx';
+import { countPendingUnsortedNotes, subscribeToUnsortedNotes } from '@/lib/unsortedNotesStorage.js';
 
 const navItems = [
   { icon: Home, label: 'Hoje', path: '/' },
-  { icon: NotebookPen, label: 'Descarregar', path: '/descarregar-mente' },
-  { icon: CalendarDays, label: 'Calend.', path: '/calendario' },
-  { icon: Clock3, label: 'Aguard.', path: '/aguardando-retorno' },
-  { icon: Repeat, label: 'Rotinas', path: '/rotinas' },
   { icon: Sparkles, label: 'Plano', path: '/plano-clareado' },
   { icon: FolderKanban, label: 'Projetos', path: '/projects' },
+];
+
+const moreItems = [
+  { icon: Bookmark, label: 'Guardados', path: '/guardados' },
+  { icon: CalendarDays, label: 'Calendário', path: '/calendario' },
+  { icon: Clock3, label: 'Aguardando retorno', path: '/aguardando-retorno' },
+  { icon: Repeat, label: 'Rotinas', path: '/rotinas' },
   { icon: BarChart3, label: 'Relat.', path: '/relatorios' },
-  { icon: Settings, label: 'Config.', path: '/configuracoes' },
+  { icon: Settings, label: 'Preferências', path: '/configuracoes' },
+  { icon: BookOpen, label: 'Ajuda', path: '/guia' },
   { icon: UserRound, label: 'Conta', path: '/conta' },
-  { icon: BookOpen, label: 'Guia', path: '/guia' },
 ];
 
 export default function MobileNav() {
   const location = useLocation();
-  const { isDailyMode, dailyNavPaths } = useAppMode();
-  const visibleItems = isDailyMode
-    ? navItems.filter((item) => dailyNavPaths.includes(item.path))
-    : navItems;
+  const { currentUser } = useAuth();
+  const [savedCount, setSavedCount] = useState(0);
+
+  useEffect(() => {
+    const sync = () => setSavedCount(countPendingUnsortedNotes(currentUser?.id));
+    sync();
+    return subscribeToUnsortedNotes(sync);
+  }, [currentUser?.id]);
 
   const isActive = (path) => {
     return location.pathname === path;
   };
 
+  const isMoreActive = moreItems.some((item) => isActive(item.path));
+
   return (
-    <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-card border-t border-border z-50 pb-safe">
-      <div className="flex items-center justify-around px-1 py-2">
-        {visibleItems.map((item) => (
+    <nav aria-label="Navegação mobile" className="md:hidden fixed bottom-0 left-0 right-0 bg-card border-t border-border z-50 pb-safe">
+      <div className="flex min-h-16 items-stretch justify-around px-1 py-1">
+        {navItems.map((item) => (
           <Link
             key={item.path}
             to={item.path}
             className={cn(
-              "flex min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-lg py-1 transition-colors",
+              "flex min-h-11 min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-md py-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               isActive(item.path)
                 ? "text-primary"
                 : "text-muted-foreground hover:text-foreground"
@@ -48,9 +58,28 @@ export default function MobileNav() {
             <div className="relative">
               <item.icon className={cn("w-5 h-5", isActive(item.path) && "fill-primary/20")} />
             </div>
-            <span className="max-w-full truncate px-0.5 text-[9px] font-medium">{item.label}</span>
+            <span className="max-w-full truncate px-0.5 text-[11px] font-medium">{item.label}</span>
           </Link>
         ))}
+        <DropdownMenu>
+          <DropdownMenuTrigger className={cn(
+            'flex min-h-11 min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-md py-1 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+            isMoreActive ? 'text-primary' : 'text-muted-foreground hover:text-foreground'
+          )}>
+            <MoreHorizontal className="h-5 w-5" aria-hidden="true" />
+            <span>Mais</span>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" sideOffset={8} className="mb-1 min-w-56">
+            {moreItems.map((item) => (
+              <DropdownMenuItem key={item.path} asChild>
+                <Link to={item.path} className="flex min-h-11 items-center gap-3">
+                  <item.icon className="h-5 w-5" aria-hidden="true" />
+                  {item.label}{item.path === '/guardados' && savedCount > 0 ? ` (${savedCount})` : ''}
+                </Link>
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </nav>
   );

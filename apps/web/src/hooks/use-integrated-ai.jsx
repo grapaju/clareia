@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from '@/hooks/use-toast';
 import { integratedAiClient } from '@/lib/integratedAiClient';
-import { pocketbaseClient } from '@/lib/pocketbaseClient';
+import { apiClient } from '@/lib/apiClient';
 
 /**
  * @typedef {object} TextContentBlock
@@ -174,11 +174,11 @@ function useIntegratedAi() {
 	useEffect(() => {
 		async function loadHistory() {
 			try {
-				if (!pocketbaseClient.authStore.isValid) {
+				if (!apiClient.authStore.isValid) {
 					return [];
 				}
 			
-				const records = await pocketbaseClient.collection('_integratedAiMessages').getFullList({
+				const records = await apiClient.collection('_integratedAiMessages').getFullList({
 					sort: 'created',
 				});
 			

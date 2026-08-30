@@ -1,11 +1,12 @@
 
-import React, { createContext, useState, useEffect } from 'react';
+import React, { createContext, useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/contexts/AuthContext.jsx';
 import { toast } from 'sonner';
 import {
   createFocusSessionInApi,
   createTaskInApi,
   createTaskNoteInApi,
+  completeTaskInApi,
   deleteTaskInApi,
   listFocusSessionsFromApi,
   listTaskNotesFromApi,
@@ -24,6 +25,7 @@ import {
   normalizeTaskStatus,
   TASK_STATUS
 } from '@/lib/taskExecution.js';
+import { normalizeTaskInput } from '@/lib/taskInput.js';
 
 export const TaskContext = createContext();
 
@@ -50,6 +52,7 @@ function normalizeCheckInValue(value, field) {
   }
 
   if (field === 'tempo') {
+    if (text === '15 min' || text === '15min') return '15min';
     if (text === '30 min' || text === '30min') return '30min';
     if (text === '1h') return '1h';
     if (text === '2h') return '2h';
@@ -66,6 +69,7 @@ export function TaskProvider({ children }) {
   const [tasks, setTasks] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedTask, setSelectedTask] = useState(null);
+  const completionPromisesRef = useRef(new Map());
   
   // Daily check-in state
   const [checkIn, setCheckIn] = useState(null);
@@ -205,12 +209,12 @@ export function TaskProvider({ children }) {
   const addTask = async (taskData) => {
     try {
       const accountId = currentUser?.currentAccountId || '';
-      const payload = normalizeTaskPayload({
+      const payload = normalizeTaskPayload(normalizeTaskInput({
         ...taskData,
         status: taskData?.status || TASK_STATUS.PENDENTE,
         userId: currentUser?.id,
         ...(accountId ? { accountId } : {})
-      });
+      }));
       const record = await createTaskInApi(payload);
       const normalized = normalizeTaskRecord(record);
       setTasks(prev => [normalized, ...prev]);
@@ -226,7 +230,7 @@ export function TaskProvider({ children }) {
       return normalized;
     } catch (error) {
       console.error(error);
-      toast.error('Erro ao adicionar tarefa.');
+      toast.error(error?.message || 'Erro ao adicionar tarefa.');
       throw error;
     }
   };
@@ -264,7 +268,7 @@ export function TaskProvider({ children }) {
     }
   };
 
-  const completeTask = async (id, options = {}) => {
+  const completeTaskOnce = async (id, options = {}) => {
     const task = tasks.find((item) => item.id === id);
     if (!task) return { blocked: false, task: null };
     if (isTaskCompletedStatus(task.status)) return { blocked: false, task };
@@ -306,28 +310,22 @@ export function TaskProvider({ children }) {
     }
 
     let registeredMinutes = 0;
+    let completionSession = null;
     const activeSession = getActiveWorkSession();
     const hasActiveSessionForTask = Boolean(activeSession?.id && activeSession.taskId === id);
 
     if (hasActiveSessionForTask) {
       const finishedSession = finishActiveWorkSessionForTask(id);
       registeredMinutes = Number(finishedSession?.durationMinutes || 0);
-    } else if (options.timeMode === 'planned') {
-      const plannedMinutes = Number(workingTask?.timeEstimate || 0);
-      if (plannedMinutes > 0) {
-        addManualWorkSession({
-          projectId: workingTask?.project || 'Pessoal',
-          taskId: id,
-          durationMinutes: plannedMinutes,
-          title: `Conclusão: ${workingTask?.title || 'Tarefa'}`,
-          notes: 'Tempo registrado ao concluir tarefa (tempo planejado).'
-        });
-        registeredMinutes = plannedMinutes;
-      }
+      completionSession = finishedSession ? {
+        ...finishedSession,
+        ...options.focusSession,
+        idempotencyKey: finishedSession.id,
+      } : null;
     } else if (options.timeMode === 'custom') {
       const customMinutes = Number(options.customMinutes || 0);
       if (customMinutes > 0) {
-        addManualWorkSession({
+        const manualSession = addManualWorkSession({
           projectId: workingTask?.project || 'Pessoal',
           taskId: id,
           durationMinutes: customMinutes,
@@ -335,14 +333,35 @@ export function TaskProvider({ children }) {
           notes: 'Tempo registrado ao concluir tarefa (valor informado).'
         });
         registeredMinutes = customMinutes;
+        completionSession = manualSession ? {
+          ...manualSession,
+          idempotencyKey: manualSession.id,
+        } : null;
       }
     }
 
-    const completedTask = await updateTask(id, {
-      status: TASK_STATUS.CONCLUIDA,
+    const accountId = currentUser?.currentAccountId || '';
+    const completion = await completeTaskInApi(id, {
       completedAt: new Date().toISOString(),
-      lastActiveSubtaskId: ''
+      ...(completionSession ? {
+        session: {
+          ...completionSession,
+          ...(accountId ? { accountId } : {})
+        }
+      } : {})
     });
+    const completedTask = normalizeTaskRecord(completion.item);
+    setTasks((previous) => previous.map((item) => item.id === id ? completedTask : item));
+
+    if (completion.alreadyCompleted) {
+      return {
+        blocked: false,
+        task: completedTask,
+        pendingSnapshot,
+        registeredMinutes
+      };
+    }
+
     if (workingTask?.project) {
       appendProjectHistory(workingTask.project, 'Tarefa concluída', workingTask.title || 'Tarefa sem título');
     }
@@ -426,6 +445,19 @@ export function TaskProvider({ children }) {
       pendingSnapshot,
       registeredMinutes
     };
+  };
+
+  const completeTask = async (id, options = {}) => {
+    const existing = completionPromisesRef.current.get(id);
+    if (existing) return existing;
+
+    const operation = completeTaskOnce(id, options);
+    completionPromisesRef.current.set(id, operation);
+    try {
+      return await operation;
+    } finally {
+      completionPromisesRef.current.delete(id);
+    }
   };
 
   const startTask = async (id, options = {}) => {
@@ -517,7 +549,10 @@ export function TaskProvider({ children }) {
     const task = tasks.find((item) => item.id === id);
     if (!task) return null;
 
-    const reopened = await updateTask(id, { status: normalizeTaskStatus(destination) });
+    const reopened = await updateTask(id, {
+      status: normalizeTaskStatus(destination),
+      completedAt: null
+    });
     addTaskHistoryEvent({
       taskId: id,
       projectId: task?.project || 'Pessoal',

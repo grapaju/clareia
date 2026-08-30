@@ -7,7 +7,7 @@ import { AuthProvider } from '@/contexts/AuthContext.jsx';
 import { TaskProvider } from '@/contexts/TaskContext.jsx';
 import { AppModeProvider } from '@/contexts/AppModeContext.jsx';
 import ProtectedRoute from '@/components/ProtectedRoute.jsx';
-import ModeRouteGuard from '@/components/ModeRouteGuard.jsx';
+import AdminRoute from '@/components/AdminRoute.jsx';
 
 import LoginPage from './pages/LoginPage.jsx';
 import SignupPage from './pages/SignupPage.jsx';
@@ -25,13 +25,11 @@ import RoutinesPage from './pages/RoutinesPage.jsx';
 import ReportsPage from './pages/ReportsPage.jsx';
 import CalendarPage from './pages/CalendarPage.jsx';
 import GuidePage from './pages/GuidePage.jsx';
+import LaboratoryPage from './pages/LaboratoryPage.jsx';
+import SavedItemsPage from './pages/SavedItemsPage.jsx';
 
 function App() {
-  const withProtectedMode = (element) => (
-    <ProtectedRoute>
-      <ModeRouteGuard>{element}</ModeRouteGuard>
-    </ProtectedRoute>
-  );
+  const withProtectedMode = (element) => <ProtectedRoute>{element}</ProtectedRoute>;
 
   return (
     <ThemeProvider>
@@ -44,10 +42,11 @@ function App() {
                 <Route path="/signup" element={<SignupPage />} />
                 
                 <Route path="/" element={withProtectedMode(<HomePage />)} />
-                <Route path="/descarregar-mente" element={withProtectedMode(<UnloadMindPage />)} />
                 <Route path="/criar-plano" element={withProtectedMode(<UnloadMindPage />)} />
-                <Route path="/notas" element={<Navigate to="/descarregar-mente" replace />} />
-                <Route path="/inbox" element={<Navigate to="/descarregar-mente" replace />} />
+                <Route path="/descarregar-mente" element={<Navigate to="/criar-plano" replace />} />
+                <Route path="/notas" element={<Navigate to="/criar-plano" replace />} />
+                <Route path="/inbox" element={<Navigate to="/criar-plano" replace />} />
+                <Route path="/guardados" element={withProtectedMode(<SavedItemsPage />)} />
                 <Route path="/plano-clareado" element={withProtectedMode(<ClearPlanPage />)} />
                 <Route path="/prioridades" element={withProtectedMode(<PrioritiesPage />)} />
                 <Route path="/projects" element={withProtectedMode(<ProjectsPage />)} />
@@ -59,6 +58,7 @@ function App() {
                 <Route path="/guia" element={withProtectedMode(<GuidePage />)} />
                 <Route path="/configuracoes" element={withProtectedMode(<SettingsPage />)} />
                 <Route path="/conta" element={withProtectedMode(<AccountPage />)} />
+                <Route path="/laboratorio" element={withProtectedMode(<AdminRoute><LaboratoryPage /></AdminRoute>)} />
                 <Route path="/integracoes/google-drive-oauth" element={withProtectedMode(<GoogleDriveOAuthPage />)} />
                 
                 <Route path="*" element={withProtectedMode(<HomePage />)} />

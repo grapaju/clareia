@@ -23,6 +23,20 @@ export async function updateTaskInApi(id, payload) {
   return result?.item || null;
 }
 
+export async function completeTaskInApi(id, payload = {}) {
+  const result = await integratedAiClient.fetch(`/tasks/${id}/complete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return {
+    item: result?.item || null,
+    alreadyCompleted: result?.alreadyCompleted === true,
+    session: result?.session || null,
+    alreadyRecorded: result?.alreadyRecorded === true,
+  };
+}
+
 export async function deleteTaskInApi(id) {
   await integratedAiClient.fetch(`/tasks/${id}`, {
     method: 'DELETE',

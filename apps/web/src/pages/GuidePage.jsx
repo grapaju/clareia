@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Helmet } from 'react-helmet';
 import {
   BookOpen,
@@ -9,13 +9,20 @@ import {
   NotebookPen,
   Settings,
   Sparkles,
-  BarChart3
+  BarChart3,
+  Bookmark
 } from 'lucide-react';
 import Header from '@/components/Header.jsx';
 import Sidebar from '@/components/Sidebar.jsx';
 import MobileNav from '@/components/MobileNav.jsx';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import { createUserSuggestion } from '@/services/userSuggestionService.js';
+import { toast } from 'sonner';
 
 const STEPS = [
   {
@@ -24,7 +31,7 @@ const STEPS = [
   },
   {
     title: '2) Esvazie a cabeça sem organizar',
-    description: 'Na tela Descarregar mente, escreva tudo que lembrar (pessoal e trabalho). Depois clique para gerar o Plano Clareado.'
+    description: 'Na tela Tirar da cabeça, escreva tudo que lembrar. Depois escolha organizar agora ou guardar para revisar depois.'
   },
   {
     title: '3) Revise o Plano Clareado antes de criar',
@@ -39,8 +46,13 @@ const STEPS = [
 const FEATURES = [
   {
     icon: NotebookPen,
-    title: 'Descarregar mente',
+    title: 'Tirar da cabeça',
     howTo: 'Escreva como vier, sem filtro. No fim, use o botão de organizar para transformar em plano.'
+  },
+  {
+    icon: Bookmark,
+    title: 'Guardados',
+    howTo: 'Organizar agora transforma o texto em tarefas para revisar. Guardar para depois salva em Mais → Guardados. Transformar em nota salva como referência, sem virar tarefa.'
   },
   {
     icon: Sparkles,
@@ -69,12 +81,28 @@ const FEATURES = [
   },
   {
     icon: Settings,
-    title: 'Configurações',
+    title: 'Preferências',
     howTo: 'Ajuste dias úteis, regras de agenda e modo de baixa estimulação conforme seu estilo.'
   }
 ];
 
 export default function GuidePage() {
+  const [suggestion, setSuggestion] = useState({ title: '', message: '' });
+  const [isSending, setIsSending] = useState(false);
+
+  const handleSendSuggestion = async () => {
+    setIsSending(true);
+    try {
+      await createUserSuggestion(suggestion);
+      setSuggestion({ title: '', message: '' });
+      toast.success('Sugestão enviada. Obrigado por ajudar o Clareia a melhorar.');
+    } catch (error) {
+      toast.error(error?.message || 'Não foi possível enviar sua sugestão. O texto foi preservado.');
+    } finally {
+      setIsSending(false);
+    }
+  };
+
   return (
     <>
       <Helmet><title>Guia de Uso - Clareia</title></Helmet>
@@ -142,7 +170,7 @@ export default function GuidePage() {
                     </div>
                     <div className="rounded-lg border border-border p-3 bg-muted/20">
                       <p className="text-sm font-medium text-foreground mb-1">Quero transformar ideias em tarefas</p>
-                      <p className="text-sm text-muted-foreground">Descarregar mente → Plano Clareado → criar tarefas.</p>
+                      <p className="text-sm text-muted-foreground">Tirar da cabeça → Plano Clareado → criar tarefas.</p>
                     </div>
                     <div className="rounded-lg border border-border p-3 bg-muted/20">
                       <p className="text-sm font-medium text-foreground mb-1">Quero acompanhar pendências de terceiros</p>
@@ -161,7 +189,7 @@ export default function GuidePage() {
                   <h2 className="text-xl font-medium text-foreground">Rotina sugerida para teste (7 dias)</h2>
                   <p className="text-sm text-muted-foreground">Use este roteiro para validar o Clareia sem sobrecarga.</p>
                   <div className="space-y-2">
-                    <p className="text-sm text-foreground"><strong>Dias 1 e 2:</strong> focar em check-in + descarregar mente + criar plano.</p>
+                    <p className="text-sm text-foreground"><strong>Dias 1 e 2:</strong> focar em check-in + Tirar da cabeça + criar plano.</p>
                     <p className="text-sm text-foreground"><strong>Dias 3 e 4:</strong> executar tarefas na tela Hoje e registrar pausas/retomadas.</p>
                     <p className="text-sm text-foreground"><strong>Dias 5 e 6:</strong> organizar um projeto com arquivos, links e notas.</p>
                     <p className="text-sm text-foreground"><strong>Dia 7:</strong> revisar Relatórios e Encerramento do dia para avaliar ganhos.</p>
@@ -192,6 +220,16 @@ export default function GuidePage() {
                   </div>
                 </CardContent>
               </Card>
+
+              <section id="enviar-sugestao" className="mt-8 scroll-mt-24 border-t border-border pt-8">
+                <h2 className="text-xl font-medium text-foreground">Enviar sugestão</h2>
+                <p className="mt-1 text-sm text-muted-foreground">Envie uma ideia ou conte o que dificultou seu uso.</p>
+                <div className="mt-5 max-w-2xl space-y-4">
+                  <div className="space-y-2"><Label htmlFor="suggestion-title">Assunto (opcional)</Label><Input id="suggestion-title" value={suggestion.title} onChange={(event) => setSuggestion((current) => ({ ...current, title: event.target.value }))} /></div>
+                  <div className="space-y-2"><Label htmlFor="suggestion-message">Sua sugestão</Label><Textarea id="suggestion-message" className="min-h-28" value={suggestion.message} onChange={(event) => setSuggestion((current) => ({ ...current, message: event.target.value }))} /></div>
+                  <Button onClick={handleSendSuggestion} disabled={isSending}>{isSending ? 'Enviando...' : 'Enviar sugestão'}</Button>
+                </div>
+              </section>
             </div>
           </main>
         </div>

@@ -29,6 +29,7 @@ export default function SignupPage() {
     setLoading(true);
     const result = await signup(email, password, passwordConfirm);
     if (result.success) {
+      localStorage.setItem('clareia_onboarding_requested', 'true');
       navigate('/');
     } else {
       setError(result.error);

@@ -12,12 +12,12 @@ export default function TaskCompletionDialog({
   onConfirm,
   isSubmitting = false
 }) {
-  const [mode, setMode] = useState('planned');
+  const [mode, setMode] = useState('none');
   const [customMinutes, setCustomMinutes] = useState(30);
 
   useEffect(() => {
     if (!isOpen) return;
-    setMode('planned');
+    setMode('none');
     setCustomMinutes(Number(task?.timeEstimate || 30));
   }, [isOpen, task?.id, task?.timeEstimate]);
 
@@ -25,6 +25,12 @@ export default function TaskCompletionDialog({
     const active = getActiveWorkSession();
     return Boolean(active?.id && task?.id && active.taskId === task.id);
   }, [task?.id, isOpen]);
+
+  const activeSessionMinutes = useMemo(() => {
+    const active = getActiveWorkSession();
+    if (!activeSessionForTask || !active?.startedAt) return 0;
+    return Math.max(1, Math.round((Date.now() - new Date(active.startedAt).getTime()) / 60000));
+  }, [activeSessionForTask, isOpen]);
 
   const handleConfirm = () => {
     onConfirm?.({
@@ -37,24 +43,16 @@ export default function TaskCompletionDialog({
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Tarefa concluída. Deseja registrar tempo?</DialogTitle>
+          <DialogTitle>{activeSessionForTask ? `Concluir tarefa e registrar ${activeSessionMinutes} min?` : 'Concluir tarefa?'}</DialogTitle>
           <DialogDescription>
             {activeSessionForTask
-              ? 'Existe uma sessão ativa para esta tarefa. O tempo real será usado automaticamente.'
-              : 'Escolha como deseja registrar o tempo desta tarefa concluída.'}
+              ? 'O tempo real da sessão ativa será salvo no Histórico e nos Relatórios.'
+              : 'Você pode informar o tempo realizado ou concluir sem registrar tempo.'}
           </DialogDescription>
         </DialogHeader>
 
         {!activeSessionForTask && (
           <div className="space-y-3">
-            <button
-              type="button"
-              className={`w-full rounded-lg border px-3 py-2 text-left text-sm ${mode === 'planned' ? 'border-primary bg-primary/10 text-primary' : 'border-border'}`}
-              onClick={() => setMode('planned')}
-            >
-              Usar tempo planejado ({Number(task?.timeEstimate || 0)} min)
-            </button>
-
             <button
               type="button"
               className={`w-full rounded-lg border px-3 py-2 text-left text-sm ${mode === 'custom' ? 'border-primary bg-primary/10 text-primary' : 'border-border'}`}
@@ -88,7 +86,7 @@ export default function TaskCompletionDialog({
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancelar
+            {activeSessionForTask ? 'Continuar trabalhando' : 'Cancelar'}
           </Button>
           <Button onClick={handleConfirm} disabled={isSubmitting || (mode === 'custom' && Number(customMinutes || 0) <= 0)}>
             Concluir tarefa

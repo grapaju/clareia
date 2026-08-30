@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext.jsx';
 import { ensureClareiaInternalProject } from '@/services/internalProjectService.js';
+import { isPrivilegedUser } from '@/lib/accessControl.js';
 import {
   DEFAULT_DEV_LOCK,
   isDevelopmentAllowed,
@@ -51,9 +52,9 @@ export function AppModeProvider({ children }) {
   }, [userId]);
 
   useEffect(() => {
-    if (!currentUser?.id) return;
+    if (!currentUser?.id || !isPrivilegedUser(currentUser)) return;
     ensureClareiaInternalProject();
-  }, [currentUser?.id]);
+  }, [currentUser]);
 
   const updateDevelopmentLock = (updates) => {
     const saved = writeDevelopmentLock(userId, updates);
@@ -87,7 +88,7 @@ export function AppModeProvider({ children }) {
 
   const value = useMemo(() => ({
     mode,
-    isDailyMode: mode === 'daily',
+    isDailyMode: false,
     isDevelopmentMode: mode === 'development',
     developmentLock: developmentLock || DEFAULT_DEV_LOCK,
     dailyNavPaths: DAILY_MODE_NAV_PATHS,

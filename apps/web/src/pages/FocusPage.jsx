@@ -26,6 +26,7 @@ import {
 } from '@/lib/taskExecution.js';
 import TaskPendingMicrotasksDialog from '@/components/TaskPendingMicrotasksDialog.jsx';
 import TaskPauseDialog from '@/components/TaskPauseDialog.jsx';
+import { getActiveWorkSession } from '@/services/workSessionService.js';
 
 export default function FocusPage() {
   const navigate = useNavigate();
@@ -71,6 +72,29 @@ export default function FocusPage() {
       }
     }
   }, [tasks, selectedTask, setSelectedTask]);
+
+  useEffect(() => {
+    if (!selectedTask?.id || phase !== 'setup') return;
+    const activeSession = getActiveWorkSession();
+    if (!activeSession?.id || activeSession.taskId !== selectedTask.id) return;
+
+    const totalSeconds = Number(selectedTask.timeEstimate || 30) * 60;
+    const elapsedSeconds = Math.max(0, Math.floor((Date.now() - new Date(activeSession.startedAt).getTime()) / 1000));
+    setTimeTotal(totalSeconds);
+    setTimeRemaining(Math.max(0, totalSeconds - elapsedSeconds));
+    setPhase(elapsedSeconds >= totalSeconds ? 'completed' : 'working');
+    setIsPaused(false);
+  }, [phase, selectedTask]);
+
+  useEffect(() => {
+    if (!selectedTask?.id || objective.trim()) return;
+    const progress = getTaskMicrotaskProgress(selectedTask);
+    const suggestedObjective = selectedTask.nextAction
+      || progress.nextPending?.title
+      || progress.nextPending?.descricao
+      || `Avançar de forma concreta em: ${selectedTask.title}`;
+    setObjective(suggestedObjective);
+  }, [objective, selectedTask]);
 
   useEffect(() => {
     let interval;
@@ -121,8 +145,10 @@ export default function FocusPage() {
     const durationSeconds = Math.max(0, timeTotal - timeRemaining);
     if (durationSeconds < 5) return;
 
+    const activeSession = getActiveWorkSession();
     await recordFocusSession({
       taskId: selectedTask.id,
+      idempotencyKey: activeSession?.taskId === selectedTask.id ? activeSession.id : undefined,
       durationSeconds,
       objective,
       result: sessionResult.trim(),
@@ -144,10 +170,21 @@ export default function FocusPage() {
     if (!selectedTask) return;
 
     try {
-      await persistFocusSession('Tarefa concluída');
       await persistNextAction();
-      setPendingCompletionPayload(payload);
-      const result = await completeTask(selectedTask.id, payload);
+      const durationSeconds = Math.max(0, timeTotal - timeRemaining);
+      const completionPayload = {
+        ...payload,
+        ...(durationSeconds >= 5 ? {
+          focusSession: {
+            durationSeconds,
+            objective,
+            result: sessionResult.trim(),
+            endReason: 'Tarefa concluída'
+          }
+        } : {})
+      };
+      setPendingCompletionPayload(completionPayload);
+      const result = await completeTask(selectedTask.id, completionPayload);
       if (result?.blocked) {
         setPendingCompletionData(result);
         setIsCompletionDialogOpen(false);
@@ -333,7 +370,7 @@ export default function FocusPage() {
 
                   <div className="space-y-6">
                     <div>
-                      <Label className="text-lg font-medium text-foreground mb-3 block">O que será considerado concluído neste bloco? *</Label>
+                      <Label className="text-lg font-medium text-foreground mb-3 block">Objetivo deste bloco</Label>
                       <Input 
                         value={objective}
                         onChange={e => setObjective(e.target.value)}
@@ -348,7 +385,7 @@ export default function FocusPage() {
                       disabled={!objective.trim()}
                       className="w-full bg-primary hover:bg-primary/90 text-primary-foreground text-lg h-16 rounded-2xl shadow-sm"
                     >
-                      <Play className="w-5 h-5 mr-2 fill-current" /> Iniciar imersão
+                      <Play className="w-5 h-5 mr-2 fill-current" /> Começar foco
                     </Button>
                   </div>
                 </CardContent>

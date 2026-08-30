@@ -6,8 +6,8 @@ Guia curto para agentes de IA trabalharem com rapidez e segurança neste monorep
 
 - `apps/web`: React + Vite (porta 3000)
 - `apps/api`: Node + Express (porta 3005)
-- `apps/pocketbase`: PocketBase (porta 8090)
-- Fluxo local esperado: web -> `/api` -> api e web -> `/hcgi/platform` -> pocketbase
+- PostgreSQL: banco de dados principal (porta 5432)
+- Fluxo local esperado: web -> `/hcgi/api` -> api -> PostgreSQL
 
 Arquitetura operacional detalhada: [docs/OPERACAO_SERVIDOR.md](docs/OPERACAO_SERVIDOR.md)
 
@@ -31,9 +31,6 @@ npm run build --prefix apps/web
 
 npm run dev --prefix apps/api
 npm run lint --prefix apps/api
-
-npm run dev --prefix apps/pocketbase
-npm run start --prefix apps/pocketbase
 ```
 
 ## Regras de execução para agentes
@@ -45,32 +42,26 @@ npm run start --prefix apps/pocketbase
 npm run test:calendar-date --prefix apps/web
 ```
 
-- Evitar iniciar uma segunda instância do PocketBase em paralelo quando `npm run dev` da raiz estiver ativo (conflito na porta 8090).
-
 ## Convenções de código do projeto
 
 - Frontend concentra regras de priorização/agendamento em libs de domínio, não em componentes de UI.
-- Backend usa middleware para autenticação PocketBase e rate-limit; manter lógica transversal em `apps/api/src/middleware`.
-- Mudanças de schema devem ser feitas via migrações em `apps/pocketbase/pb_migrations`.
-- Em hooks do PocketBase, usar `onBootstrap` com `e.next()` antes de acessar coleções.
+- Backend usa middleware para autenticação JWT e rate-limit; manter lógica transversal em `apps/api/src/middleware`.
+- Mudanças de schema PostgreSQL devem ser idempotentes e feitas em `apps/api/src/db/init.js`.
 
 Arquivos de referência de padrão:
 
 - `apps/web/src/lib/energyLogic.js`
 - `apps/web/src/lib/unloadMindLogic.js`
 - `apps/web/src/lib/schedulingRules.js`
-- `apps/api/src/middleware/pocketbase-auth.js`
+- `apps/api/src/middleware/auth.js`
 - `apps/api/src/middleware/global-rate-limit.js`
-- `apps/pocketbase/pb_hooks/superuser-sync.pb.js`
 
 ## Pitfalls importantes
 
-- Windows: o binário do PocketBase precisa ser compatível com o SO (`pocketbase.exe`).
-- `PB_ENCRYPTION_KEY` precisa ter tamanho AES válido (16, 24 ou 32 bytes).
-- Sem proxy `/hcgi/platform` no web, login/cadastro retornam 404 em ambiente local.
-- Segurança: não manter fallback de credenciais de superuser no código para produção; usar apenas variáveis de ambiente.
+- Sem proxy `/hcgi/api` no web, login/cadastro retornam 404 em ambiente local.
+- `DATABASE_URL` e `JWT_SECRET` devem estar definidos na API.
 
 ## Quando tocar em produção
 
 - Priorizar o procedimento oficial em [docs/OPERACAO_SERVIDOR.md](docs/OPERACAO_SERVIDOR.md).
-- Antes de alterações de PocketBase, garantir backup de `pb_data` (ou volume `/data`).
+- Antes de alterações de schema, garantir backup do PostgreSQL.

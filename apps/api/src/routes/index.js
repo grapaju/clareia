@@ -6,6 +6,7 @@ import googleDriveRouter from './google-drive.js';
 import tasksRouter from './tasks.js';
 import recordsRouter from './records.js';
 import projectsRouter from './projects.js';
+import plansRouter from './plans.js';
 
 const router = Router();
 
@@ -15,6 +16,7 @@ export default () => {
     router.use('/tasks', tasksRouter);
     router.use('/records', recordsRouter);
     router.use('/projects', projectsRouter);
+    router.use('/plans', plansRouter);
     router.use('/integrated-ai', integratedAiRouter);
     router.use('/google-drive', googleDriveRouter);
 

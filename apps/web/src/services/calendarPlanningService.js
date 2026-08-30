@@ -1,12 +1,7 @@
-import { listCalendarCommitments } from '@/services/calendarCommitmentService.js';
-import { getCalendarPreferences, isAllowedDayForTask } from '@/services/calendarPreferencesService.js';
-
-function toIsoDate(value) {
-  if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).toISOString().split('T')[0];
-}
+import { listCalendarCommitments } from './calendarCommitmentService.js';
+import { getCalendarPreferences, isAllowedDayForTask } from './calendarPreferencesService.js';
+import { isTaskArchivedStatus, isTaskCompletedStatus } from '../lib/taskExecution.js';
+import { toIsoDate } from '../lib/localDate.js';
 
 function stripAccents(value = '') {
   return value
@@ -39,20 +34,20 @@ export function classifyDayLoad(plannedMinutes, availableMinutes) {
   return 'leve';
 }
 
-export function plannedMinutesForDate({ dateIso, tasks = [], followups = [], focusBlocks = [] }) {
+export function plannedMinutesForDate({ dateIso, tasks = [], followups = [] }) {
   const taskMinutes = tasks
-    .filter((task) => toIsoDate(task.scheduledDate || task.dataSugeridaExecucao) === dateIso)
+    .filter((task) => (
+      !isTaskCompletedStatus(task.status)
+      && !isTaskArchivedStatus(task.status)
+      && toIsoDate(task.scheduledDate || task.dataSugeridaExecucao) === dateIso
+    ))
     .reduce((sum, task) => sum + Number(task.timeEstimate || task.estimatedMinutes || 30), 0);
 
   const followupMinutes = followups
     .filter((item) => toIsoDate(item.nextFollowUpDate || item.reminderDate) === dateIso && item.status !== 'Concluido')
     .reduce((sum) => sum + 15, 0);
 
-  const focusMinutes = focusBlocks
-    .filter((session) => toIsoDate(session.startedAt) === dateIso)
-    .reduce((sum, session) => sum + Number(session.durationMinutes || 0), 0);
-
-  return taskMinutes + followupMinutes + focusMinutes;
+  return taskMinutes + followupMinutes;
 }
 
 function businessAwareDate(baseDate, task, preferences) {

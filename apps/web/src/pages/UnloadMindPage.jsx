@@ -22,14 +22,15 @@ import {
   AlertDialogHeader,
   AlertDialogTitle
 } from '@/components/ui/alert-dialog';
-import pb from '@/lib/pocketbaseClient.js';
+import apiClient from '@/lib/apiClient.js';
 import { useAuth } from '@/contexts/AuthContext.jsx';
-import { generateClarifiedText, normalizeTaskTypeForTaskCollection, parseUnloadMindToPlan } from '@/lib/unloadMindLogic.js';
+import { normalizeTaskTypeForTaskCollection, parseUnloadMindToPlan } from '@/lib/unloadMindLogic.js';
 import { toast } from 'sonner';
-import { getCurrentAccountId } from '@/lib/pocketbaseClient.js';
+import { getCurrentAccountId } from '@/lib/apiClient.js';
 import { useTaskContext } from '@/hooks/useTaskContext.js';
 import { createProjectNote } from '@/services/projectNoteService.js';
 import { appendProjectHistory } from '@/services/projectHistoryService.js';
+import { createOrReusePlanDraft } from '@/services/planDraftService.js';
 import {
   createUnsortedNote,
   formatNoteDateTime,
@@ -39,118 +40,14 @@ import {
   updateUnsortedNote
 } from '@/lib/unsortedNotesStorage.js';
 
-function analyzeClarifiedText(text) {
-  const raw = (text || '').trim();
-  const createIssue = (item, criterion, detail, recommendedAction, severity = 'media') => ({
-    id: `${item}-${criterion}-${detail}`,
-    item,
-    criterion,
-    detail,
-    recommendedAction,
-    severity
-  });
-
-  if (!raw) {
-    return [createIssue('-', 'Conteúdo', 'O texto clareado está vazio.', 'Escreva ao menos um item numerado com ação e contexto.', 'critica')];
-  }
-
-  const lines = raw
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => /^\d+\.\s+/.test(line));
-
-  if (lines.length === 0) {
-    return [createIssue('-', 'Formato', 'Não foi possível identificar itens numerados.', 'Use o padrão "1. ...", "2. ..." para cada ação.', 'critica')];
-  }
-
-  const issues = [];
-  const actionVerbPattern = /\b(testar|acompanhar|verificar|conferir|enviar|resolver|criar|retomar|avaliar|agendar|cobrar|alinhar|validar|revisar|atualizar|publicar|corrigir|finalizar|priorizar|organizar|mapear|contatar|ligar)\b/i;
-  const projectContextPattern = /\b(CRM|Google Ads|Fluxo de Caixa|IDTPR|Corcril|Expocentro|Leone|gov\.br|projeto|cliente|site|campanha|evento|or[çc]amento|cobran[çc]a|proposta|faturas?|sistema|reuni[aã]o|contador|comercial|financeir[oa])\b/i;
-  const objectPattern = /\b(para|de|do|da|no|na|com|sobre|em)\s+[a-z0-9à-ÿ][\wÀ-ÿ.-]{2,}/i;
-  const weakLinePattern = /^(testar|acompanhar|verificar|conferir|enviar|resolver|criar|retomar|avaliar)\.?$/i;
-
-  lines.forEach((numberedLine, index) => {
-    const line = numberedLine.replace(/^\d+\.\s+/, '').trim();
-    const words = line
-      .replace(/[.,;:!?()]/g, ' ')
-      .split(/\s+/)
-      .filter(Boolean);
-
-    if (weakLinePattern.test(line)) {
-      issues.push(
-        createIssue(
-          index + 1,
-          'Especificidade',
-          `Item genérico: "${line}".`,
-          'Descreva ação + objeto + contexto do projeto.',
-          'alta'
-        )
-      );
-      return;
-    }
-
-    if (words.length < 4) {
-      issues.push(
-        createIssue(
-          index + 1,
-          'Completude',
-          `Item curto demais: "${line}".`,
-          'Adicione detalhes mínimos para execução imediata.',
-          'alta'
-        )
-      );
-      return;
-    }
-
-    if (!actionVerbPattern.test(line)) {
-      issues.push(
-        createIssue(
-          index + 1,
-          'Ação',
-          `Sem ação executável clara: "${line}".`,
-          'Inicie com verbo operacional (revisar, enviar, validar, alinhar, priorizar...).',
-          'alta'
-        )
-      );
-      return;
-    }
-
-    if (!objectPattern.test(line)) {
-      issues.push(
-        createIssue(
-          index + 1,
-          'Objeto',
-          `Sem objeto claro: "${line}".`,
-          'Especifique exatamente o que será feito.',
-          'alta'
-        )
-      );
-      return;
-    }
-
-    if (!projectContextPattern.test(line)) {
-      issues.push(
-        createIssue(
-          index + 1,
-          'Contexto',
-          `Sem projeto/contexto explícito: "${line}".`,
-          'Cite cliente, projeto, sistema ou frente responsável.',
-          'media'
-        )
-      );
-    }
-  });
-
-  return issues;
-}
-
 export default function UnloadMindPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { currentUser } = useAuth();
   const { addTask } = useTaskContext();
-  const userId = currentUser?.id || pb.authStore?.model?.id || '';
+  const userId = currentUser?.id || apiClient.authStore?.model?.id || '';
   const accountId = currentUser?.currentAccountId || getCurrentAccountId();
+  const draftKey = `clareia_plan_draft_${userId || 'anonymous'}`;
   const isCreatePlanView = location.pathname === '/criar-plano' || new URLSearchParams(location.search).get('modo') === 'plano';
   const [text, setText] = useState(location.state?.prefillText || '');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -163,13 +60,6 @@ export default function UnloadMindPage() {
   const [showPendingSelector, setShowPendingSelector] = useState(false);
   const [pendingDeleteNoteId, setPendingDeleteNoteId] = useState(null);
   const [postActionDialog, setPostActionDialog] = useState({ open: false, noteId: null, mode: 'plan' });
-  const [textReview, setTextReview] = useState({
-    open: false,
-    original: '',
-    clarified: '',
-    noteId: null,
-    editing: false
-  });
   const postActionResolverRef = useRef(null);
 
   const planTemplates = [
@@ -200,26 +90,6 @@ export default function UnloadMindPage() {
   ];
 
   const pendingNotesCount = useMemo(() => savedNotes.length, [savedNotes.length]);
-  const clarifiedIssues = useMemo(() => {
-    const priority = { critica: 0, alta: 1, media: 2 };
-    const issues = analyzeClarifiedText(textReview.clarified);
-
-    return [...issues].sort((a, b) => {
-      const severityDiff = (priority[a.severity] ?? 99) - (priority[b.severity] ?? 99);
-      if (severityDiff !== 0) return severityDiff;
-
-      const itemA = Number(a.item);
-      const itemB = Number(b.item);
-      const hasNumericA = Number.isFinite(itemA);
-      const hasNumericB = Number.isFinite(itemB);
-
-      if (hasNumericA && hasNumericB) return itemA - itemB;
-      if (hasNumericA) return -1;
-      if (hasNumericB) return 1;
-      return String(a.item).localeCompare(String(b.item), 'pt-BR');
-    });
-  }, [textReview.clarified]);
-
   useEffect(() => {
     const syncNotes = () => {
       setSavedNotes(listUnsortedNotes(userId, 'pendente'));
@@ -230,6 +100,18 @@ export default function UnloadMindPage() {
 
     return unsubscribe;
   }, [userId]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || location.state?.prefillText) return;
+    const savedDraft = window.localStorage.getItem(draftKey);
+    if (savedDraft) setText(savedDraft);
+  }, [draftKey, location.state?.prefillText]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (text.trim()) window.localStorage.setItem(draftKey, text);
+    else window.localStorage.removeItem(draftKey);
+  }, [draftKey, text]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -282,21 +164,12 @@ export default function UnloadMindPage() {
           .map((task) => String(task.project || '').trim())
           .filter(Boolean);
 
-        // Save to DB to pass state robustly and keep history
-        const record = await pb.collection('planosClareados').create({
+        const record = await createOrReusePlanDraft({
+          text: originalContent,
           userId,
-          ...(accountId ? { accountId } : {}),
-          conteudoOriginal: originalContent,
-          planoGerado: {
-            ...plan,
-            meta: {
-              status: 'pending',
-              createdAt: new Date().toISOString(),
-              textoOriginal: originalContent,
-              textoClareado: content
-            }
-          }
-        }, { $autoCancel: false });
+          accountId,
+          origin: 'plano-clareado',
+        });
         
         if (!customText) {
           toast.success('Plano gerado com sucesso!');
@@ -315,6 +188,8 @@ export default function UnloadMindPage() {
           }
         }
 
+        setText('');
+        window.localStorage.removeItem(draftKey);
         navigate('/plano-clareado', { state: { planRecord: record } });
       }
     } catch (err) {
@@ -323,36 +198,6 @@ export default function UnloadMindPage() {
     } finally {
       setIsProcessing(false);
     }
-  };
-
-  const handlePrepareClarifiedText = (customText = null, noteId = null) => {
-    const content = typeof customText === 'string' ? customText : text;
-    if (!content.trim()) return;
-
-    const clarified = generateClarifiedText(content);
-    setTextReview({
-      open: true,
-      original: content,
-      clarified,
-      noteId,
-      editing: false
-    });
-  };
-
-  const handleApproveClarifiedText = async () => {
-    await handleOrganizePlan(textReview.clarified, textReview.noteId, textReview.original);
-    setTextReview({
-      open: false,
-      original: '',
-      clarified: '',
-      noteId: null,
-      editing: false
-    });
-  };
-
-  const handleBackToOriginalText = () => {
-    setText(textReview.original || text);
-    setTextReview((prev) => ({ ...prev, open: false, editing: false }));
   };
 
   const handleCreateTasks = async (customText = null, noteId = null) => {
@@ -377,7 +222,7 @@ export default function UnloadMindPage() {
       for (const t of allTasks) {
         const scheduledDate = t.scheduledDate || t.dataSugeridaExecucao || new Date().toISOString().split('T')[0];
         const scheduledPeriod = t.scheduledPeriod || t.periodoSugerido || 'tarde';
-        await pb.collection('tasks').create({
+        await apiClient.collection('tasks').create({
           userId,
           ...(accountId ? { accountId } : {}),
           title: t.title,
@@ -502,7 +347,10 @@ export default function UnloadMindPage() {
     });
 
     if (note) {
-      toast.success('Pendência guardada. Você pode organizar isso depois.');
+      toast.success('Guardado para você revisar depois.', {
+        action: { label: 'Ver guardado', onClick: () => navigate('/guardados') },
+        cancel: { label: 'Desfazer', onClick: () => removeUnsortedNote(note.id, userId) },
+      });
       setText('');
     } else {
       toast.error('Erro ao guardar pendência.');
@@ -576,7 +424,7 @@ export default function UnloadMindPage() {
     }
 
     const mergedContent = selectedNotes.map((note, index) => `${index + 1}. ${note.content}`).join('\n');
-    handlePrepareClarifiedText(mergedContent);
+    handleOrganizePlan(mergedContent);
   };
 
   return (
@@ -596,7 +444,7 @@ export default function UnloadMindPage() {
                 <h1 className="text-3xl md:text-4xl font-medium text-foreground mb-4">{isCreatePlanView ? 'Criar plano' : 'Descarregar mente'}</h1>
                 {isCreatePlanView ? (
                   <p className="text-lg text-muted-foreground max-w-xl mx-auto leading-relaxed">
-                    Use quando tiver várias coisas misturadas e quiser que o Clareia organize prioridades, passos e ordem de execução.
+                    Escreva tudo do seu jeito. Pode misturar clientes, compromissos e assuntos pessoais. O Clareia separa para você.
                   </p>
                 ) : (
                   <p className="text-lg text-muted-foreground max-w-xl mx-auto leading-relaxed">
@@ -616,83 +464,7 @@ export default function UnloadMindPage() {
                 />
               </div>
 
-              {isCreatePlanView && textReview.open && (
-                <Card className="bg-card border-border shadow-sm mb-6">
-                  <CardContent className="p-5 space-y-5">
-                    <div>
-                      <h2 className="text-xl font-medium text-foreground">Texto organizado</h2>
-                      <p className="text-sm text-muted-foreground">
-                        Revise a versão clareada antes de gerar o plano. O texto original será mantido no histórico.
-                      </p>
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label>Texto original</Label>
-                      <Textarea value={textReview.original} readOnly className="min-h-[140px] bg-muted/30" />
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label>Texto clareado</Label>
-                      <Textarea
-                        value={textReview.clarified}
-                        readOnly={!textReview.editing}
-                        onChange={(event) => setTextReview((prev) => ({ ...prev, clarified: event.target.value }))}
-                        className="min-h-[180px]"
-                      />
-                    </div>
-
-                    {clarifiedIssues.length > 0 && (
-                      <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3">
-                        <p className="text-sm font-medium text-destructive mb-2">
-                          Qualidade do texto: pendências para liberar a geração do plano
-                        </p>
-                        <p className="text-xs text-destructive/90 mb-2">
-                          Ordem de priorização: Crítica, Alta e Média.
-                        </p>
-                        <div className="space-y-2 text-sm text-destructive">
-                          {clarifiedIssues.map((issue) => (
-                            <div
-                              key={issue.id}
-                              className="rounded-md border border-destructive/25 bg-background/60 p-2"
-                            >
-                              <p>
-                                <span className="font-medium">Severidade:</span>{' '}
-                                {issue.severity === 'critica' ? 'Crítica' : issue.severity === 'alta' ? 'Alta' : 'Média'}
-                              </p>
-                              <p>
-                                <span className="font-medium">Item:</span> {issue.item}
-                              </p>
-                              <p>
-                                <span className="font-medium">Critério:</span> {issue.criterion}
-                              </p>
-                              <p>
-                                <span className="font-medium">Detalhe:</span> {issue.detail}
-                              </p>
-                              <p>
-                                <span className="font-medium">Ação recomendada:</span> {issue.recommendedAction}
-                              </p>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    <div className="flex flex-wrap gap-3">
-                      <Button onClick={handleApproveClarifiedText} disabled={!textReview.clarified.trim() || clarifiedIssues.length > 0 || isProcessing}>
-                        Está correto, gerar plano
-                      </Button>
-                      <Button variant="outline" onClick={() => setTextReview((prev) => ({ ...prev, editing: true }))}>
-                        Editar texto clareado
-                      </Button>
-                      <Button variant="outline" onClick={handleBackToOriginalText}>
-                        Voltar ao original
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
-
-              {isCreatePlanView && (
+              {isCreatePlanView && !text.trim() && (
                 <Card className="bg-card border-border shadow-sm mb-6">
                   <CardContent className="p-4 space-y-4">
                     <div>
@@ -761,12 +533,12 @@ export default function UnloadMindPage() {
                 {isCreatePlanView && (
                   <Button 
                     size="lg" 
-                    onClick={() => handlePrepareClarifiedText()} 
+                    onClick={() => handleOrganizePlan(null, location.state?.savedNoteId || null)}
                     disabled={!text.trim() || isProcessing}
                     className="bg-primary hover:bg-primary/90 text-primary-foreground h-14 px-8 text-base rounded-2xl shadow-sm"
                   >
                     <Sparkles className="w-5 h-5 mr-2" />
-                    Organizar em plano
+                    Clarear minhas tarefas
                   </Button>
                 )}
                 {!isCreatePlanView && (

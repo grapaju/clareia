@@ -154,7 +154,7 @@ const SquashableSSEEventTypes = new Set([
  * @param {{ files: Express.Multer.File[] }} params
  * @returns {Promise<string[]>}
  */
-export async function uploadImagesToPocketBase({ images }) {
+export async function uploadImagesLocally({ images }) {
 	const uploadsDir = path.resolve(process.cwd(), 'uploads', 'integrated-ai');
 	await fs.mkdir(uploadsDir, { recursive: true });
 

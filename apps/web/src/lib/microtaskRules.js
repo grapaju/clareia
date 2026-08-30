@@ -28,12 +28,11 @@ export function generateMicrotasks(taskType, taskTitle = '', timeEstimate = 30) 
 
   if (type === 'cobrança' || title.includes('cobrança') || title.includes('fatura')) {
     return createTasks([
-      'Abrir o sistema ou planilha financeira',
-      'Verificar o valor exato e a data de vencimento',
-      'Gerar o link de pagamento ou nota fiscal',
-      'Escrever mensagem amigável de lembrete',
-      'Enviar para o cliente',
-      'Registrar que a cobrança foi enviada'
+      `Abrir o e-mail e localizar a conversa relacionada a “${taskTitle}”`,
+      'Identificar a pendência e o vencimento mais recentes',
+      'Abrir a conversa ou o documento de cobrança',
+      'Escrever e revisar a mensagem',
+      'Enviar e registrar o retorno esperado'
     ]);
   }
 
@@ -53,8 +52,7 @@ export function generateMicrotasks(taskType, taskTitle = '', timeEstimate = 30) 
       'Localizar a seção que precisa de ajuste',
       'Preparar textos ou imagens novos',
       'Aplicar as mudanças de layout ou conteúdo',
-      'Testar visualização no celular',
-      'Publicar alterações'
+      'Testar no celular e publicar as alterações'
     ]);
   }
 
@@ -80,18 +78,40 @@ export function generateMicrotasks(taskType, taskTitle = '', timeEstimate = 30) 
   // Generic fallback especially if time > 60
   if (timeEstimate > 60) {
     return createTasks([
-      'Reunir todas as informações e ferramentas',
-      'Fazer a primeira parte do trabalho (foco em começar)',
-      'Avançar no desenvolvimento da tarefa principal',
-      'Fazer uma pausa rápida',
-      'Revisar o que foi feito',
-      'Finalizar e comunicar os envolvidos'
+      `Abrir os materiais necessários para “${taskTitle}”`,
+      `Identificar a primeira entrega concreta de “${taskTitle}”`,
+      'Produzir essa primeira entrega',
+      'Verificar o resultado obtido',
+      'Registrar o próximo passo específico'
     ]);
   }
 
   return createTasks([
-    'Reunir o que é necessário para começar',
-    'Focar na execução principal',
-    'Revisar e concluir'
+    `Abrir o material necessário para “${taskTitle}”`,
+    `Fazer a primeira ação concreta de “${taskTitle}”`,
+    `Verificar o resultado de “${taskTitle}”`
   ]);
+}
+
+export function suggestSmallerSteps(task = {}) {
+  const safeTask = task || {};
+  const pendingMicrotask = (Array.isArray(safeTask.microtarefas) ? safeTask.microtarefas : [])
+    .find((item) => !item?.completed && String(item?.title || item?.descricao || '').trim());
+  if (pendingMicrotask) {
+    return [String(pendingMicrotask.title || pendingMicrotask.descricao).trim()];
+  }
+
+  const generated = generateMicrotasks(safeTask.taskType, safeTask.title, safeTask.timeEstimate)
+    .map((item) => item.title)
+    .filter(Boolean);
+  if (generated.length > 0 && safeTask.taskType && safeTask.taskType !== 'Outro') {
+    return generated.slice(0, 3);
+  }
+
+  const title = String(safeTask.title || 'esta tarefa').trim();
+  return [
+    `Abrir os materiais de “${title}”`,
+    `Escrever o primeiro resultado necessário para “${title}”`,
+    `Trabalhar por 5 minutos somente no início de “${title}”`,
+  ];
 }

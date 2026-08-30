@@ -1,53 +1,79 @@
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { Home, FolderKanban, Sparkles, Settings, NotebookPen, Clock3, BarChart3, CalendarDays, BookOpen, UserRound } from 'lucide-react';
-import { Repeat } from 'lucide-react';
+import { Home, FolderKanban, Sparkles, Settings, Clock3, BarChart3, CalendarDays, BookOpen, UserRound, MoreHorizontal, Repeat, Bookmark } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useAppMode } from '@/contexts/AppModeContext.jsx';
+import { useAuth } from '@/contexts/AuthContext.jsx';
+import { countPendingUnsortedNotes, subscribeToUnsortedNotes } from '@/lib/unsortedNotesStorage.js';
 
-const navItems = [
+const primaryItems = [
   { icon: Home, label: 'Hoje', path: '/' },
-  { icon: NotebookPen, label: 'Descarregar mente', path: '/descarregar-mente' },
-  { icon: Sparkles, label: 'Plano Clareado', path: '/plano-clareado' },
-  { icon: Clock3, label: 'Aguardando retorno', path: '/aguardando-retorno' },
-  { icon: CalendarDays, label: 'Calendário', path: '/calendario' },
-  { icon: Repeat, label: 'Rotinas', path: '/rotinas' },
+  { icon: Sparkles, label: 'Plano', path: '/plano-clareado' },
   { icon: FolderKanban, label: 'Projetos', path: '/projects' },
+  { icon: CalendarDays, label: 'Calendário', path: '/calendario' },
+];
+
+const secondaryItems = [
+  { icon: Bookmark, label: 'Guardados', path: '/guardados' },
+  { icon: Clock3, label: 'Aguardando retorno', path: '/aguardando-retorno' },
+  { icon: Repeat, label: 'Rotinas', path: '/rotinas' },
   { icon: BarChart3, label: 'Relatórios', path: '/relatorios' },
-  { icon: Settings, label: 'Configurações', path: '/configuracoes' },
+];
+
+const supportItems = [
+  { icon: Settings, label: 'Preferências', path: '/configuracoes' },
+  { icon: BookOpen, label: 'Ajuda', path: '/guia' },
   { icon: UserRound, label: 'Conta', path: '/conta' },
-  { icon: BookOpen, label: 'Guia de uso', path: '/guia' },
 ];
 
 export default function Sidebar({ compact = false }) {
-  const { isDailyMode, dailyNavPaths } = useAppMode();
-  const visibleItems = isDailyMode
-    ? navItems.filter((item) => dailyNavPaths.includes(item.path))
-    : navItems;
+  const { currentUser } = useAuth();
+  const [savedCount, setSavedCount] = useState(0);
+
+  useEffect(() => {
+    const sync = () => setSavedCount(countPendingUnsortedNotes(currentUser?.id));
+    sync();
+    return subscribeToUnsortedNotes(sync);
+  }, [currentUser?.id]);
+
+  const renderItem = (item) => (
+    <NavLink
+      key={item.path}
+      to={item.path}
+      className={({ isActive }) => cn(
+        'flex min-h-11 items-center gap-3 rounded-md text-sm font-medium transition-colors',
+        compact ? 'px-2.5 py-2' : 'px-3 py-2.5',
+        isActive
+          ? 'bg-primary/10 text-primary'
+          : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+      )}
+    >
+      <item.icon className={cn('h-5 w-5 shrink-0', compact && 'h-4.5 w-4.5')} aria-hidden="true" />
+      <span className={cn(compact && 'text-[13px]')}>{item.label}</span>
+      {item.path === '/guardados' && savedCount > 0 && <span className="ml-auto text-xs tabular-nums text-muted-foreground">{savedCount}</span>}
+    </NavLink>
+  );
 
   return (
     <aside className={cn(
       'hidden md:flex flex-col border-r border-border bg-card/50 min-h-[calc(100vh-4rem)] sticky top-16',
       compact ? 'w-52' : 'w-64'
     )}>
-      <nav className={cn('flex-1 py-6 space-y-1.5', compact ? 'px-3' : 'px-4')}>
-        {visibleItems.map((item) => (
-          <NavLink
-            key={item.path}
-            to={item.path}
-            className={({ isActive }) => cn(
-              'flex items-center gap-3 rounded-lg text-sm font-medium transition-colors',
-              compact ? 'px-2.5 py-2' : 'px-3 py-2.5',
-              isActive 
-                ? 'bg-primary/10 text-primary' 
-                : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-            )}
-          >
-            <item.icon className={cn('h-5 w-5', compact && 'h-4.5 w-4.5')} />
-            <span className={cn(compact && 'text-[13px]')}>{item.label}</span>
-          </NavLink>
-        ))}
+      <nav aria-label="Navegação principal" className={cn('flex flex-1 flex-col py-6', compact ? 'px-3' : 'px-4')}>
+        <div className="space-y-1.5">{primaryItems.map(renderItem)}</div>
+
+        <details className="group mt-2">
+          <summary className={cn(
+            'flex min-h-11 cursor-pointer list-none items-center gap-3 rounded-md text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground',
+            compact ? 'px-2.5 py-2' : 'px-3 py-2.5'
+          )}>
+            <MoreHorizontal className="h-5 w-5 shrink-0" aria-hidden="true" />
+            <span>Mais</span>
+          </summary>
+          <div className="mt-1 space-y-1 border-l border-border pl-2">{secondaryItems.map(renderItem)}</div>
+        </details>
+
+        <div className="mt-auto space-y-1.5 border-t border-border pt-4">{supportItems.map(renderItem)}</div>
       </nav>
     </aside>
   );

@@ -5,11 +5,13 @@
   "private": true,
   "scripts": {
     "dev": "vite --host :: --port 3000",
-    "build": "node tools/generate-llms.js || true && vite build --outDir ../../dist/apps/web",
+    "build": "(node tools/generate-llms.js || echo llms.txt generation skipped) && vite build --outDir ../../dist/apps/web",
     "start": "vite preview --outDir ../../dist/apps/web --host :: --port 3000",
     "lint": "eslint . --quiet",
     "lint:warn": "eslint .",
-    "test:calendar-date": "node --test src/lib/localDate.test.mjs"
+    "test:calendar-date": "node --test src/lib/localDate.test.mjs",
+    "test:task-input": "node --test src/lib/taskInput.test.mjs",
+    "test:domain": "node --test src/lib/*.test.mjs src/services/*.test.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
@@ -51,7 +53,6 @@
     "lucide-react": "^0.469.0",
     "next-themes": "^0.4.6",
     "papaparse": "^5.5.4",
-    "pocketbase": "^0.27.0",
     "react": "^18.3.1",
     "react-day-picker": "^9.14.0",
     "react-dom": "^18.3.1",

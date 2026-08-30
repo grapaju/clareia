@@ -1,8 +1,10 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { toast } from 'sonner';
-import { createWaitingReturn, listWaitingReturns, syncWaitingReturnsWithCloud } from '@/services/waitingReturnService.js';
+import { createWaitingReturn, deleteWaitingReturnEverywhere, listWaitingReturns, syncWaitingReturnsWithCloud } from '@/services/waitingReturnService.js';
 import { addTaskHistoryEvent } from '@/services/taskHistoryService.js';
 
 const BLOCK_REASONS = [
@@ -66,10 +68,19 @@ const BLOCK_REASONS = [
   }
 ];
 
-export default function BlockedHelpDialog({ task, isOpen, onOpenChange, onRequestBreakDown, updateTaskById, createSupportTask }) {
+export default function BlockedHelpDialog({ task, isOpen, onOpenChange, onRequestBreakDown, updateTaskById, createSupportTask, deleteSupportTask }) {
   const [selectedId, setSelectedId] = useState(BLOCK_REASONS[0].id);
   const [isApplying, setIsApplying] = useState(false);
-  const [noPriorityDestination, setNoPriorityDestination] = useState('esta-semana');
+  const [noPriorityDestination, setNoPriorityDestination] = useState('reagendar');
+  const [dependencyContact, setDependencyContact] = useState('');
+  const [followUpDate, setFollowUpDate] = useState('');
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setDependencyContact('');
+    setFollowUpDate('');
+    setNoPriorityDestination('reagendar');
+  }, [isOpen, task?.id]);
 
   const selectedReason = useMemo(() => BLOCK_REASONS.find((item) => item.id === selectedId) || BLOCK_REASONS[0], [selectedId]);
 
@@ -83,9 +94,11 @@ export default function BlockedHelpDialog({ task, isOpen, onOpenChange, onReques
       const created = createWaitingReturn({
         title: `Dependencia: ${task.title || 'Tarefa'}`,
         project: task.project || 'Pessoal',
-        contactName: 'A definir',
+        contactName: dependencyContact,
         waitingFor: task.nextAction || task.title || 'Retorno para continuidade da tarefa',
-        nextFollowUp: 'Definir responsavel e data de retorno',
+        reminderDate: followUpDate,
+        nextFollowUpDate: followUpDate,
+        nextFollowUp: `Retomar contato com ${dependencyContact}`,
         observations: `Criado automaticamente via Estou travada (${reason}). ${marker}`,
         status: 'Aguardando retorno'
       });
@@ -94,26 +107,54 @@ export default function BlockedHelpDialog({ task, isOpen, onOpenChange, onReques
         throw new Error('Nao foi possivel criar item em aguardando retorno.');
       }
 
-      syncWaitingReturnsWithCloud();
+      await syncWaitingReturnsWithCloud();
+      await updateTaskById(task.id, { status: 'aguardando_retorno' });
+      addTaskHistoryEvent({
+        taskId: task.id,
+        projectId: task.project || 'Pessoal',
+        type: 'task_moved_to_waiting_return',
+        message: `Aguardando retorno de ${dependencyContact} em ${followUpDate}`
+      });
+      return { createdWaitingId: created.id };
     }
 
-    // Usa um status válido da agenda para evitar falha de persistência em tarefas.
-    await updateTaskById(task.id, { status: 'Backlog' });
+    await updateTaskById(task.id, { status: 'aguardando_retorno' });
     addTaskHistoryEvent({
       taskId: task.id,
       projectId: task.project || 'Pessoal',
       type: 'task_moved_to_waiting_return',
-      message: 'Tarefa movida para aguardando retorno'
+      message: `Aguardando retorno de ${dependencyContact} em ${followUpDate}`
     });
+    return { createdWaitingId: null };
   };
 
   const handleApply = async () => {
     if (!task?.id || !selectedReason) return;
+    const requiresDependencyDetails = selectedReason.id === 'falta-informacao' || selectedReason.id === 'depende-de-alguem';
+    if (requiresDependencyDetails && (!dependencyContact.trim() || !followUpDate)) {
+      toast.error('Informe a pessoa e a data para acompanhar o retorno.');
+      return;
+    }
+    if (selectedReason.id === 'nao-prioridade' && noPriorityDestination === 'reagendar' && !followUpDate) {
+      toast.error('Escolha a nova data da tarefa.');
+      return;
+    }
+
     setIsApplying(true);
+    const previousTask = {
+      status: task.status,
+      scheduledDate: task.scheduledDate || null,
+      dataSugeridaExecucao: task.dataSugeridaExecucao || null,
+      scheduledPeriod: task.scheduledPeriod || null,
+      energiaNecessaria: task.energiaNecessaria || null,
+      nextAction: task.nextAction || ''
+    };
+    let createdWaitingId = null;
+    let createdSupportTaskId = null;
     try {
       if (selectedReason.id === 'falta-informacao') {
         if (createSupportTask) {
-          await createSupportTask({
+          const supportTask = await createSupportTask({
             title: `Buscar informação: ${task.title}`,
             project: task.project || 'Pessoal',
             taskType: 'Administrativo',
@@ -125,13 +166,18 @@ export default function BlockedHelpDialog({ task, isOpen, onOpenChange, onReques
             scheduledDate: new Date().toISOString().split('T')[0],
             scheduledPeriod: 'tarde'
           });
+          createdSupportTaskId = supportTask?.id || null;
         }
-        await moveTaskToWaitingReturn({ reason: 'Falta informação' });
+        ({ createdWaitingId } = await moveTaskToWaitingReturn({ reason: 'Falta informação' }));
       } else if (selectedReason.id === 'depende-de-alguem') {
-        await moveTaskToWaitingReturn({ reason: 'Depende de alguem' });
+        ({ createdWaitingId } = await moveTaskToWaitingReturn({ reason: 'Depende de alguem' }));
       } else if (selectedReason.id === 'nao-prioridade') {
         await updateTaskById(task.id, {
-          status: noPriorityDestination === 'arquivar' ? 'Backlog' : 'Esta semana'
+          status: noPriorityDestination === 'arquivar' ? 'arquivada' : 'pendente',
+          ...(noPriorityDestination === 'reagendar' ? {
+            scheduledDate: followUpDate,
+            dataSugeridaExecucao: followUpDate
+          } : {})
         });
       } else {
         await selectedReason.apply({
@@ -141,7 +187,20 @@ export default function BlockedHelpDialog({ task, isOpen, onOpenChange, onReques
         });
       }
 
-      toast.success(selectedReason.recommendation);
+      toast.success(selectedReason.recommendation, {
+        action: {
+          label: 'Desfazer',
+          onClick: async () => {
+            await updateTaskById(task.id, previousTask);
+            if (createdWaitingId) {
+              await deleteWaitingReturnEverywhere(createdWaitingId);
+            }
+            if (createdSupportTaskId && deleteSupportTask) {
+              await deleteSupportTask(createdSupportTaskId);
+            }
+          }
+        }
+      });
       onOpenChange(false);
     } catch (error) {
       console.error(error);
@@ -176,6 +235,19 @@ export default function BlockedHelpDialog({ task, isOpen, onOpenChange, onReques
           <p className="text-sm text-foreground">{selectedReason.recommendation}</p>
         </div>
 
+        {(selectedReason.id === 'falta-informacao' || selectedReason.id === 'depende-de-alguem') && (
+          <div className="grid gap-3 rounded-lg border border-border bg-card p-3 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="blocked-contact">De quem depende?</Label>
+              <Input id="blocked-contact" value={dependencyContact} onChange={(event) => setDependencyContact(event.target.value)} placeholder="Nome da pessoa" />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="blocked-follow-up">Quando acompanhar?</Label>
+              <Input id="blocked-follow-up" type="date" value={followUpDate} onChange={(event) => setFollowUpDate(event.target.value)} />
+            </div>
+          </div>
+        )}
+
         {selectedReason.id === 'nao-prioridade' && (
           <div className="rounded-lg border border-border bg-card p-3">
             <p className="text-xs font-medium uppercase text-muted-foreground mb-2">Destino</p>
@@ -183,10 +255,10 @@ export default function BlockedHelpDialog({ task, isOpen, onOpenChange, onReques
               <Button
                 type="button"
                 size="sm"
-                variant={noPriorityDestination === 'esta-semana' ? 'default' : 'outline'}
-                onClick={() => setNoPriorityDestination('esta-semana')}
+                variant={noPriorityDestination === 'reagendar' ? 'default' : 'outline'}
+                onClick={() => setNoPriorityDestination('reagendar')}
               >
-                Esta semana
+                Reagendar
               </Button>
               <Button
                 type="button"
@@ -197,6 +269,12 @@ export default function BlockedHelpDialog({ task, isOpen, onOpenChange, onReques
                 Arquivar
               </Button>
             </div>
+            {noPriorityDestination === 'reagendar' && (
+              <div className="mt-3 space-y-2">
+                <Label htmlFor="blocked-reschedule-date">Nova data</Label>
+                <Input id="blocked-reschedule-date" type="date" value={followUpDate} onChange={(event) => setFollowUpDate(event.target.value)} />
+              </div>
+            )}
           </div>
         )}
 

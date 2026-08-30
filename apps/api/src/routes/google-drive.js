@@ -15,7 +15,7 @@ import {
 	syncGoogleDriveDocument,
 	testGoogleDriveConnection,
 } from '../api/google-drive.js';
-import { pocketbaseAuth } from '../middleware/pocketbase-auth.js';
+import { requireAuth } from '../middleware/auth.js';
 
 const router = Router();
 
@@ -34,15 +34,15 @@ router.use('/oauth/callback', async (req, res) => {
 	return res.redirect(`${url.pathname}${url.search}`);
 });
 
-router.use(pocketbaseAuth);
+router.use(requireAuth);
 
 router.get('/status', async (req, res) => {
-	const result = await getGoogleDriveStatus({ userId: req.pocketbaseUserId });
+	const result = await getGoogleDriveStatus({ userId: req.userId });
 	res.json(result);
 });
 
 router.get('/config-checklist', async (req, res) => {
-	const result = await getGoogleDriveConfigChecklist({ userId: req.pocketbaseUserId });
+	const result = await getGoogleDriveConfigChecklist({ userId: req.userId });
 	res.json(result);
 });
 
@@ -64,7 +64,7 @@ router.post('/oauth-user-config', async (req, res) => {
 
 router.get('/auth-url', async (req, res) => {
 	const result = getGoogleDriveAuthUrl({
-		userId: req.pocketbaseUserId,
+		userId: req.userId,
 		projectId: String(req.query.projectId || ''),
 		projectName: String(req.query.projectName || ''),
 		projectType: String(req.query.projectType || ''),
@@ -76,7 +76,7 @@ router.get('/auth-url', async (req, res) => {
 
 router.get('/project-folder', async (req, res) => {
 	const config = await getGoogleDriveProjectFolderConfig({
-		userId: req.pocketbaseUserId,
+		userId: req.userId,
 		projectId: String(req.query.projectId || ''),
 	});
 
@@ -85,7 +85,7 @@ router.get('/project-folder', async (req, res) => {
 
 router.post('/project-folder', async (req, res) => {
 	const config = await saveGoogleDriveProjectFolderConfig({
-		userId: req.pocketbaseUserId,
+		userId: req.userId,
 		projectId: req.body?.projectId,
 		projectName: req.body?.projectName,
 		projectType: req.body?.projectType,
@@ -98,7 +98,7 @@ router.post('/project-folder', async (req, res) => {
 
 router.delete('/project-folder', async (req, res) => {
 	const result = await removeGoogleDriveProjectFolderConfig({
-		userId: req.pocketbaseUserId,
+		userId: req.userId,
 		projectId: String(req.query.projectId || ''),
 	});
 
@@ -107,7 +107,7 @@ router.delete('/project-folder', async (req, res) => {
 
 router.post('/default-parent-folder', async (req, res) => {
 	const status = await saveGoogleDriveDefaultParentFolder({
-		userId: req.pocketbaseUserId,
+		userId: req.userId,
 		parentFolderId: req.body?.parentFolderId,
 		parentFolderUrl: req.body?.parentFolderUrl,
 	});
@@ -117,7 +117,7 @@ router.post('/default-parent-folder', async (req, res) => {
 
 router.post('/projects/bootstrap', async (req, res) => {
 	const result = await bootstrapGoogleDriveProjectFolders({
-		userId: req.pocketbaseUserId,
+		userId: req.userId,
 		projectId: req.body?.projectId,
 		projectName: req.body?.projectName,
 		projectType: req.body?.projectType,
@@ -128,13 +128,13 @@ router.post('/projects/bootstrap', async (req, res) => {
 });
 
 router.post('/disconnect', async (req, res) => {
-	const result = await disconnectGoogleDrive({ userId: req.pocketbaseUserId });
+	const result = await disconnectGoogleDrive({ userId: req.userId });
 	res.json(result);
 });
 
 router.post('/documents/sync', async (req, res) => {
 	const result = await syncGoogleDriveDocument({
-		userId: req.pocketbaseUserId,
+		userId: req.userId,
 		projectId: req.body?.projectId,
 		projectName: req.body?.projectName,
 		projectType: req.body?.projectType,
@@ -149,7 +149,7 @@ router.post('/documents/sync', async (req, res) => {
 
 router.post('/test-connection', async (req, res) => {
 	const result = await testGoogleDriveConnection({
-		userId: req.pocketbaseUserId,
+		userId: req.userId,
 		folderId: req.body?.folderId,
 	});
 

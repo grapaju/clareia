@@ -5,7 +5,6 @@ import inlineEditPlugin from './plugins/visual-editor/vite-plugin-react-inline-e
 import editModeDevPlugin from './plugins/visual-editor/vite-plugin-edit-mode.js';
 import selectionModePlugin from './plugins/selection-mode/vite-plugin-selection-mode.js';
 import iframeRouteRestorationPlugin from './plugins/vite-plugin-iframe-route-restoration.js';
-import pocketbaseAuthPlugin from './plugins/vite-plugin-pocketbase-auth.js';
 
 import { readFileSync } from 'node:fs';
 
@@ -290,7 +289,7 @@ export default defineConfig({
 	},
 	customLogger: logger,
 	plugins: [
-		...(isDev ? [inlineEditPlugin(), editModeDevPlugin(), selectionModePlugin(), iframeRouteRestorationPlugin(), pocketbaseAuthPlugin()] : []),
+		...(isDev ? [inlineEditPlugin(), editModeDevPlugin(), selectionModePlugin(), iframeRouteRestorationPlugin()] : []),
 		react(),
 		addTransformIndexHtml
 	],
@@ -305,12 +304,6 @@ export default defineConfig({
 				target: 'http://127.0.0.1:3005',
 				changeOrigin: true,
 				rewrite: (path) => path.replace(/^\/hcgi\/api/, ''),
-			},
-			'/hcgi/platform': {
-				target: 'http://127.0.0.1:8090',
-				changeOrigin: true,
-				ws: true,
-				rewrite: (path) => path.replace(/^\/hcgi\/platform/, ''),
 			},
 		},
 		allowedHosts: [
@@ -332,6 +325,7 @@ export default defineConfig({
 		},
 	},
 	build: {
+		emptyOutDir: true,
 		rollupOptions: {
 			external: [
 				'@babel/parser',
