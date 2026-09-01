@@ -64,9 +64,13 @@ app.use((req, res) => {
 
 export async function startServer(port = process.env.PORT || 3005) {
 	await ensurePostgresSchema();
-	return new Promise((resolve) => {
-		const server = app.listen(port, () => {
-			logger.info(`API Server running on http://localhost:${server.address().port}`);
+	return new Promise((resolve, reject) => {
+		const server = app.listen(port);
+		server.once('error', reject);
+		server.once('listening', () => {
+			const address = server.address();
+			const listeningPort = typeof address === 'object' && address ? address.port : port;
+			logger.info(`API Server running on http://localhost:${listeningPort}`);
 			resolve(server);
 		});
 	});
@@ -75,7 +79,7 @@ export async function startServer(port = process.env.PORT || 3005) {
 const isMainModule = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
 if (isMainModule) {
 	startServer().catch((error) => {
-		logger.error('Falha ao inicializar schema PostgreSQL:', error);
+		logger.error(`Falha ao iniciar API na porta ${process.env.PORT || 3005}:`, error);
 		process.exit(1);
 	});
 }

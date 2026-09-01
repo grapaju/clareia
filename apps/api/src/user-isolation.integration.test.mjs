@@ -16,6 +16,16 @@ async function api(baseUrl, path, { token = '', method = 'GET', body } = {}) {
   return { status: response.status, payload };
 }
 
+test('propaga o erro original quando a porta da API está ocupada', async () => {
+  const server = await startServer(0);
+
+  try {
+    await assert.rejects(() => startServer(server.address().port), { code: 'EADDRINUSE' });
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('isola projetos, tarefas, sessões, notas e Guardados entre usuários A e B', async (context) => {
   const server = await startServer(0);
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
