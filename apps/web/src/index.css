@@ -6,8 +6,9 @@
 
 body {
   font-family: 'Outfit', sans-serif;
+  font-size: var(--font-size-body);
   overflow-x: clip;
-  line-height: 1.625;
+  line-height: 1.55;
   background-color: hsl(var(--background));
   color: hsl(var(--foreground));
   -webkit-font-smoothing: antialiased;
@@ -18,7 +19,6 @@ html {
 }
 
 html[data-text-size='grande'] { font-size: 112.5%; }
-html[data-text-size='maior'] { font-size: 125%; }
 html[data-density='confortavel'] { --radius: 0.5rem; }
 html.high-contrast { --muted-foreground: 220 20% 32%; --border: 220 15% 70%; }
 
@@ -40,6 +40,13 @@ html.high-contrast { --muted-foreground: 220 20% 32%; --border: 220 15% 70%; }
 
 @layer base {
   :root {
+    --font-size-body: 1.0625rem;
+    --font-size-meta: 0.9375rem;
+    --font-size-control: 1rem;
+    --font-size-next-action: 1.125rem;
+    --font-size-task-title: 1.5rem;
+    --font-size-section-title: 1.25rem;
+    --font-size-page-title: 2.125rem;
     /* Calm, clean, welcoming design system */
     --background: 60 20% 98%; /* Warm off-white */
     --foreground: 220 20% 20%; /* Slate gray for text, softer than black */
@@ -115,6 +122,10 @@ html.high-contrast { --muted-foreground: 220 20% 32%; --border: 220 15% 70%; }
   h1 { font-size: 2.5rem; }
   h2 { font-size: 1.75rem; }
   h3 { font-size: 1.25rem; }
+
+  button, input, textarea, select {
+    font-size: var(--font-size-control);
+  }
 }
 
 @layer components {
@@ -140,6 +151,9 @@ html.high-contrast { --muted-foreground: 220 20% 32%; --border: 220 15% 70%; }
 }
 
 @layer utilities {
+  .text-sm { font-size: var(--font-size-meta); line-height: 1.5; }
+  .text-xs { font-size: 0.875rem; line-height: 1.45; }
+
   .pb-safe {
     padding-bottom: env(safe-area-inset-bottom);
   }

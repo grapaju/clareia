@@ -493,9 +493,9 @@ export default function CalendarPage() {
     toast.success('Tarefa concluída.');
   };
 
-  const handlePauseFromPending = async (note) => {
+  const handlePauseFromPending = async (note, pauseOptions = {}) => {
     if (!pendingCompletionData?.task?.id) return;
-    await pauseTask(pendingCompletionData.task.id, { note });
+    await pauseTask(pendingCompletionData.task.id, { note, ...pauseOptions });
     setIsPauseDialogOpen(false);
     setPendingCompletionData(null);
     setPendingCompletionPayload(null);
@@ -1318,6 +1318,7 @@ export default function CalendarPage() {
         isOpen={isPauseDialogOpen}
         onOpenChange={setIsPauseDialogOpen}
         defaultValue={pendingCompletionData?.task?.pauseNote || ''}
+        task={pendingCompletionData?.task}
         onConfirm={handlePauseFromPending}
       />
 

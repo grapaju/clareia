@@ -11,6 +11,7 @@ import {
   saveAuthSession,
   signupWithApi,
 } from '@/services/authApiService.js';
+import { stopUserWorkTimer } from '@/services/workSessionService.js';
 
 const AuthContext = createContext();
 
@@ -59,6 +60,7 @@ export function AuthProvider({ children }) {
         return { success: false, error: 'Resposta de login invalida.' };
       }
 
+      if (currentUser?.id && currentUser.id !== authData.user.id) stopUserWorkTimer(currentUser.id);
       saveAuthSession({ token: authData.token, user: authData.user });
       setToken(authData.token);
       setCurrentUser(authData.user);
@@ -92,6 +94,7 @@ export function AuthProvider({ children }) {
   };
 
   const logout = () => {
+    if (currentUser?.id) stopUserWorkTimer(currentUser.id);
     clearAuthSession();
     setToken('');
     setCurrentUser(null);

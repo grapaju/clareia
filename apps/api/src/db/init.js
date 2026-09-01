@@ -68,6 +68,17 @@ CREATE TABLE IF NOT EXISTS integrated_ai_messages (
 CREATE INDEX IF NOT EXISTS idx_integrated_ai_messages_user_created
   ON integrated_ai_messages(user_id, created_at ASC);
 
+CREATE TABLE IF NOT EXISTS data_ownership_audit (
+  issue_type TEXT NOT NULL,
+  table_name TEXT NOT NULL,
+  record_id TEXT NOT NULL,
+  details JSONB NOT NULL DEFAULT '{}'::jsonb,
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at TIMESTAMPTZ,
+  PRIMARY KEY (issue_type, table_name, record_id)
+);
+
 CREATE TABLE IF NOT EXISTS google_drive_connections (
   user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   email TEXT DEFAULT '',
@@ -186,7 +197,56 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_focus_sessions_user_task_idempotency
   WHERE COALESCE(data->>'idempotencyKey', '') <> '';
 `;
 
+const ownershipAuditSql = `
+INSERT INTO data_ownership_audit (issue_type, table_name, record_id, details)
+SELECT 'missing_owner', 'integrated_ai_messages', message.id::text,
+       jsonb_build_object('createdAt', message.created_at)
+FROM integrated_ai_messages AS message
+WHERE message.user_id IS NULL
+ON CONFLICT (issue_type, table_name, record_id)
+DO UPDATE SET last_seen_at = now(), details = EXCLUDED.details, resolved_at = NULL;
+
+INSERT INTO data_ownership_audit (issue_type, table_name, record_id, details)
+SELECT 'task_owner_mismatch', 'task_notes', note.id,
+       jsonb_build_object('taskId', note.task_id, 'recordUserId', note.user_id, 'taskUserId', task.user_id)
+FROM task_notes AS note
+LEFT JOIN tasks AS task ON task.id = note.task_id
+WHERE task.id IS NULL OR task.user_id <> note.user_id
+ON CONFLICT (issue_type, table_name, record_id)
+DO UPDATE SET last_seen_at = now(), details = EXCLUDED.details, resolved_at = NULL;
+
+INSERT INTO data_ownership_audit (issue_type, table_name, record_id, details)
+SELECT 'task_owner_mismatch', 'focus_sessions', session.id,
+       jsonb_build_object('taskId', session.task_id, 'recordUserId', session.user_id, 'taskUserId', task.user_id)
+FROM focus_sessions AS session
+LEFT JOIN tasks AS task ON task.id = session.task_id
+WHERE task.id IS NULL OR task.user_id <> session.user_id
+ON CONFLICT (issue_type, table_name, record_id)
+DO UPDATE SET last_seen_at = now(), details = EXCLUDED.details, resolved_at = NULL;
+
+INSERT INTO data_ownership_audit (issue_type, table_name, record_id, details)
+SELECT 'payload_owner_mismatch', 'tasks', task.id,
+       jsonb_build_object('rowUserId', task.user_id, 'payloadUserId', task.data->>'userId')
+FROM tasks AS task
+WHERE COALESCE(task.data->>'userId', '') <> ''
+  AND task.data->>'userId' <> task.user_id::text
+ON CONFLICT (issue_type, table_name, record_id)
+DO UPDATE SET last_seen_at = now(), details = EXCLUDED.details, resolved_at = NULL;
+
+INSERT INTO data_ownership_audit (issue_type, table_name, record_id, details)
+SELECT 'payload_owner_mismatch', 'app_records', record.id,
+       jsonb_build_object('collection', record.collection_name, 'rowUserId', record.user_id, 'payloadUserId', record.data->>'userId')
+FROM app_records AS record
+WHERE COALESCE(record.data->>'userId', '') <> ''
+  AND record.data->>'userId' <> record.user_id::text
+ON CONFLICT (issue_type, table_name, record_id)
+DO UPDATE SET last_seen_at = now(), details = EXCLUDED.details, resolved_at = NULL;
+`;
+
 export async function ensurePostgresSchema() {
   await runQuery(schemaSql);
-  await withTransaction((client) => client.query(lifecycleRepairSql));
+  await withTransaction(async (client) => {
+    await client.query(lifecycleRepairSql);
+    await client.query(ownershipAuditSql);
+  });
 }

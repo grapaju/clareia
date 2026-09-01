@@ -19,12 +19,13 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/contexts/AuthContext.jsx';
 import apiClient, { getCurrentAccountId } from '@/lib/apiClient.js';
 import {
-  formatNoteDateTime,
+  formatSavedWaitingTime,
   listUnsortedNotes,
   removeUnsortedNote,
   subscribeToUnsortedNotes,
@@ -53,6 +54,7 @@ export default function SavedItemsPage() {
   const [items, setItems] = useState([]);
   const [filter, setFilter] = useState('aguardando_organizacao');
   const [search, setSearch] = useState('');
+  const [sortBy, setSortBy] = useState('recentes');
   const [editingId, setEditingId] = useState('');
   const [editingContent, setEditingContent] = useState('');
   const [deleteId, setDeleteId] = useState('');
@@ -66,12 +68,17 @@ export default function SavedItemsPage() {
 
   const filteredItems = useMemo(() => {
     const query = search.trim().toLocaleLowerCase('pt-BR');
-    return items.filter((item) => item.status === filter).filter((item) => (
+    const matching = items.filter((item) => item.status === filter).filter((item) => (
       !query
       || item.content.toLocaleLowerCase('pt-BR').includes(query)
       || item.project.toLocaleLowerCase('pt-BR').includes(query)
     ));
-  }, [filter, items, search]);
+    return [...matching].sort((left, right) => {
+      if (sortBy === 'projeto') return (left.project || 'Sem projeto').localeCompare(right.project || 'Sem projeto', 'pt-BR');
+      const difference = new Date(left.createdAt || 0).getTime() - new Date(right.createdAt || 0).getTime();
+      return sortBy === 'antigos' ? difference : -difference;
+    });
+  }, [filter, items, search, sortBy]);
 
   const counts = useMemo(() => Object.fromEntries(FILTERS.map(([status]) => [
     status,
@@ -175,6 +182,17 @@ export default function SavedItemsPage() {
                 </TabsList>
               </Tabs>
 
+              <div className="mb-5 max-w-xs">
+                <Select value={sortBy} onValueChange={setSortBy}>
+                  <SelectTrigger aria-label="Ordenar guardados"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="antigos">Mais antigos primeiro</SelectItem>
+                    <SelectItem value="recentes">Mais recentes primeiro</SelectItem>
+                    <SelectItem value="projeto">Por projeto</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
               {filteredItems.length === 0 ? (
                 <div className="rounded-md border border-dashed border-border px-6 py-12 text-center">
                   <p className="font-medium">Nada aqui por enquanto.</p>
@@ -195,7 +213,7 @@ export default function SavedItemsPage() {
                         )}
 
                         <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                          <span>{formatNoteDateTime(item.updatedAt || item.createdAt)}</span>
+                          <span>{formatSavedWaitingTime(item.createdAt)}</span>
                           <span>{sourceLabel(item.source)}</span>
                           {item.project && <span>Projeto: {item.project}</span>}
                         </div>

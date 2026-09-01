@@ -1,334 +1,210 @@
-
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Helmet } from 'react-helmet';
-import { Play, CheckCircle2, MoreHorizontal, Eye, Pencil, Archive, Trash2 } from 'lucide-react';
+import { Eye, ListTodo, MoreHorizontal, Play } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { toast } from 'sonner';
 import Header from '@/components/Header.jsx';
 import Sidebar from '@/components/Sidebar.jsx';
 import MobileNav from '@/components/MobileNav.jsx';
-import TaskCard from '@/components/TaskCard.jsx';
-import CheckInCard from '@/components/CheckInCard.jsx';
 import PreferencesOnboarding from '@/components/PreferencesOnboarding.jsx';
+import CheckInCard from '@/components/CheckInCard.jsx';
+import TodayTaskRow from '@/components/TodayTaskRow.jsx';
 import TaskDetailsModal from '@/components/TaskDetailsModal.jsx';
 import EditTaskModal from '@/components/EditTaskModal.jsx';
-import { Button } from '@/components/ui/button';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger
-} from '@/components/ui/dropdown-menu';
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle
-} from '@/components/ui/alert-dialog';
-import { useTaskContext } from '@/hooks/useTaskContext.js';
-import { getTodayCapacity, reorganizeTasksByEnergy } from '@/lib/energyLogic.js';
-import { useNavigate } from 'react-router-dom';
-import { toast } from 'sonner';
-import { useTheme } from '@/contexts/ThemeContext.jsx';
-import { useAuth } from '@/contexts/AuthContext.jsx';
-import { listFollowUpsForDate, listWaitingReturns } from '@/services/waitingReturnService.js';
-import { listUnsortedNotes } from '@/lib/unsortedNotesStorage.js';
-import apiClient from '@/lib/apiClient.js';
-import BlockedHelpDialog from '@/components/BlockedHelpDialog.jsx';
-import { getNextRecurringDate, getStatusForScheduledDate } from '@/lib/recurrenceLogic.js';
 import TaskCompletionDialog from '@/components/TaskCompletionDialog.jsx';
-import CreateFollowUpFromTaskDialog from '@/components/CreateFollowUpFromTaskDialog.jsx';
-import { getTaskMicrotaskProgress, isTaskActionableStatus, normalizeTaskStatus, TASK_STATUS } from '@/lib/taskExecution.js';
 import TaskPendingMicrotasksDialog from '@/components/TaskPendingMicrotasksDialog.jsx';
 import TaskPauseDialog from '@/components/TaskPauseDialog.jsx';
-import DailyWrapUpDialog from '@/components/DailyWrapUpDialog.jsx';
-import { useAppMode } from '@/contexts/AppModeContext.jsx';
-import QuickCaptureDialog from '@/components/QuickCaptureDialog.jsx';
 import TaskPickerDialog from '@/components/TaskPickerDialog.jsx';
 import SmallerStepDialog from '@/components/SmallerStepDialog.jsx';
-import { toIsoDate } from '@/lib/localDate.js';
+import BlockedHelpDialog from '@/components/BlockedHelpDialog.jsx';
+import QuickCaptureDialog from '@/components/QuickCaptureDialog.jsx';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
+import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { useTaskContext } from '@/hooks/useTaskContext.js';
+import { useAuth } from '@/contexts/AuthContext.jsx';
+import { useTheme } from '@/contexts/ThemeContext.jsx';
+import { getTodayCapacity, reorganizeTasksByEnergy } from '@/lib/energyLogic.js';
+import { buildTodayGroups, getOpenPlannedMinutes, getTaskNextActionPresentation, getTaskRowMetadata, getTodayCapacityState, getTodayHighlight, getTodayPresentation, getVisibleTodayTasks } from '@/lib/todayViewLogic.js';
+import { getTaskMicrotaskProgress, isTaskActionableStatus, normalizeTaskStatus, TASK_STATUS } from '@/lib/taskExecution.js';
+import { listWaitingReturns, syncWaitingReturnsWithCloud } from '@/services/waitingReturnService.js';
+import { listUnsortedNotes, subscribeToUnsortedNotes, syncUnsortedNotesFromApi } from '@/lib/unsortedNotesStorage.js';
+import { getActiveWorkSession } from '@/services/workSessionService.js';
+import { readUserPreferences } from '@/services/userPreferencesService.js';
 
-const WEEK_REVIEW_KEY = 'clareia_week_review_seen';
-
-function getWeekStorageKey() {
-  const now = new Date();
-  const firstDayOfYear = new Date(now.getFullYear(), 0, 1);
-  const pastDays = Math.floor((now.getTime() - firstDayOfYear.getTime()) / 86400000);
-  const weekNumber = Math.ceil((pastDays + firstDayOfYear.getDay() + 1) / 7);
-  return `${now.getFullYear()}-W${weekNumber}`;
+function formatMinutes(minutes) {
+  const safe = Math.max(0, Number(minutes || 0));
+  const hours = Math.floor(safe / 60);
+  const rest = safe % 60;
+  if (!hours) return `${rest} min`;
+  return rest ? `${hours}h${String(rest).padStart(2, '0')}` : `${hours}h`;
 }
 
-function readProjectHealth() {
-  if (typeof window === 'undefined') return { staleProjectsCount: 0 };
+function currentDateLabel() {
+  return new Intl.DateTimeFormat('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date());
+}
 
-  const profiles = JSON.parse(window.localStorage.getItem('clareia_project_profiles_v1') || '[]');
-  const history = JSON.parse(window.localStorage.getItem('clareia_project_history_v1') || '{}');
-  const tenDaysAgo = Date.now() - (10 * 24 * 60 * 60 * 1000);
-
-  const staleProjects = (Array.isArray(profiles) ? profiles : []).filter((project) => {
-    const events = history?.[project?.name] || [];
-    if (events.length === 0) return true;
-    const latest = new Date(events[0]?.createdAt || 0).getTime();
-    return !latest || latest < tenDaysAgo;
-  });
-
-  return { staleProjectsCount: staleProjects.length };
+function pluralize(count, singular, plural) {
+  return `${count} ${count === 1 ? singular : plural}`;
 }
 
 export default function HomePage() {
-  const {
-    tasks,
-    addTask,
-    completeTask,
-    deleteTask,
-    updateTask,
-    checkIn,
-    openCheckInEditor,
-    setSelectedTask,
-    startTask,
-    resumeTask,
-    pauseTask,
-    getTaskWorkedMinutes
-  } = useTaskContext();
-  const { lowStimulationMode } = useTheme();
-  const { isDailyMode } = useAppMode();
+  const { tasks, addTask, updateTask, deleteTask, completeTask, reopenTask, startTask, resumeTask, pauseTask, setSelectedTask, checkIn, openCheckInEditor, getTaskWorkedMinutes, isLoading, loadError, refreshTasks } = useTaskContext();
   const { currentUser } = useAuth();
+  const { lowStimulationMode, setLowStimulationMode } = useTheme();
   const navigate = useNavigate();
-  const userId = currentUser?.id || apiClient.authStore?.model?.id || null;
-
+  const userId = currentUser?.id || '';
   const [detailsTask, setDetailsTask] = useState(null);
   const [editTask, setEditTask] = useState(null);
+  const [completionTask, setCompletionTask] = useState(null);
   const [deleteTaskTarget, setDeleteTaskTarget] = useState(null);
-  const [showOtherTasks, setShowOtherTasks] = useState(false);
-  const [isBlockedDialogOpen, setIsBlockedDialogOpen] = useState(false);
-  const [completionTaskTarget, setCompletionTaskTarget] = useState(null);
-  const [followUpTaskTarget, setFollowUpTaskTarget] = useState(null);
   const [pendingCompletionData, setPendingCompletionData] = useState(null);
   const [pendingCompletionPayload, setPendingCompletionPayload] = useState(null);
   const [isPauseDialogOpen, setIsPauseDialogOpen] = useState(false);
-  const [isWrapUpOpen, setIsWrapUpOpen] = useState(false);
-  const [skippedSuggestionIds, setSkippedSuggestionIds] = useState([]);
-  const [selectedRecommendationId, setSelectedRecommendationId] = useState('');
   const [isTaskPickerOpen, setIsTaskPickerOpen] = useState(false);
   const [smallStepTask, setSmallStepTask] = useState(null);
+  const [smallStepMinutes, setSmallStepMinutes] = useState(null);
+  const [isBlockedDialogOpen, setIsBlockedDialogOpen] = useState(false);
+  const [skippedSuggestionIds, setSkippedSuggestionIds] = useState([]);
+  const [selectedRecommendationId, setSelectedRecommendationId] = useState('');
+  const [suggestionAnnouncement, setSuggestionAnnouncement] = useState('');
+  const [dismissedHighlightIds, setDismissedHighlightIds] = useState([]);
+  const [isHardDayOpen, setIsHardDayOpen] = useState(false);
+  const [isNoAlternativeOpen, setIsNoAlternativeOpen] = useState(false);
+  const [waitingItems, setWaitingItems] = useState([]);
+  const [guardedItems, setGuardedItems] = useState([]);
+  const calmTitleRef = useRef(null);
+  const openingPreferenceUserRef = useRef('');
 
-  const { recommended: rankedRecommendation, agora, alertasImportantes = [] } = reorganizeTasksByEnergy(tasks, checkIn);
-  const eligibleOpenTasks = useMemo(() => {
-    const ranked = [rankedRecommendation, ...agora]
-      .filter(Boolean)
-      .filter((task) => isTaskActionableStatus(task.status));
-    return [...new Map(ranked.map((task) => [task.id, task])).values()];
-  }, [agora, rankedRecommendation]);
-  const recommended = useMemo(() => {
-    const selected = eligibleOpenTasks.find((task) => task.id === selectedRecommendationId);
-    if (selected) return selected;
-    return eligibleOpenTasks.find((task) => !skippedSuggestionIds.includes(task.id)) || null;
-  }, [eligibleOpenTasks, selectedRecommendationId, skippedSuggestionIds]);
-  const alternativeTasks = useMemo(() => eligibleOpenTasks.filter((task) => (
-    task.id !== recommended?.id && !skippedSuggestionIds.includes(task.id)
-  )), [eligibleOpenTasks, recommended?.id, skippedSuggestionIds]);
-  const todayCapacity = getTodayCapacity(tasks, checkIn);
+  useEffect(() => {
+    if (!userId || openingPreferenceUserRef.current === userId) return;
+    openingPreferenceUserRef.current = userId;
+    const openingPreference = readUserPreferences(userId).openingPreference;
+    setLowStimulationMode(openingPreference === 'tranquilo', { persist: false });
+  }, [setLowStimulationMode, userId]);
 
-  const todayIso = useMemo(() => toIsoDate(new Date()), []);
-  const overdueTasks = useMemo(() => alertasImportantes.filter((task) => {
-    const scheduledDate = toIsoDate(task.scheduledDate || task.dataSugeridaExecucao);
-    const dueDate = toIsoDate(task.dueDate || task.dataLimite);
-    return (scheduledDate && scheduledDate < todayIso) || (dueDate && dueDate < todayIso);
-  }), [alertasImportantes, todayIso]);
+  useEffect(() => {
+    setSkippedSuggestionIds([]);
+    setSelectedRecommendationId('');
+    setDismissedHighlightIds([]);
+  }, [userId]);
 
-  const recurringTasks = useMemo(() => {
-    return tasks.filter((task) => {
-      if (normalizeTaskStatus(task.status) === TASK_STATUS.CONCLUIDA) return false;
-      return task.recurrenceFrequency === 'Semanal' || task.recurrenceFrequency === 'Mensal';
+  useEffect(() => {
+    if (!lowStimulationMode) return;
+    window.requestAnimationFrame(() => calmTitleRef.current?.focus());
+  }, [lowStimulationMode]);
+
+  useEffect(() => {
+    let active = true;
+    setWaitingItems([]);
+    setGuardedItems([]);
+    if (!userId) return undefined;
+
+    const refreshGuarded = () => {
+      if (active) setGuardedItems(listUnsortedNotes(userId, 'aguardando_organizacao'));
+    };
+    const unsubscribe = subscribeToUnsortedNotes(refreshGuarded);
+    syncUnsortedNotesFromApi(userId).then(refreshGuarded);
+    syncWaitingReturnsWithCloud().then(() => {
+      if (active) setWaitingItems(listWaitingReturns().filter((item) => item.status !== 'Concluido'));
     });
-  }, [tasks]);
 
-  const overdueRecurring = useMemo(() => {
-    return recurringTasks
-      .filter((task) => {
-        const scheduled = toIsoDate(task.scheduledDate || task.dataSugeridaExecucao);
-        return Boolean(scheduled && scheduled < todayIso);
-      })
-      .sort((a, b) => {
-        const aDate = new Date(`${toIsoDate(a.scheduledDate || a.dataSugeridaExecucao) || '2999-12-31'}T12:00:00`).getTime();
-        const bDate = new Date(`${toIsoDate(b.scheduledDate || b.dataSugeridaExecucao) || '2999-12-31'}T12:00:00`).getTime();
-        return aDate - bDate;
-      });
-  }, [recurringTasks, todayIso]);
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [userId]);
 
-  const recurringThisWeekCount = useMemo(() => {
-    const start = new Date(`${todayIso}T12:00:00`);
-    const end = new Date(start);
-    end.setDate(end.getDate() + 7);
+  const canonical = useMemo(() => buildTodayGroups(tasks), [tasks]);
+  const visibleTodayTasks = useMemo(() => getVisibleTodayTasks(canonical.groups), [canonical.groups]);
+  const visibleTaskIds = useMemo(() => new Set(visibleTodayTasks.map((task) => task.id)), [visibleTodayTasks]);
+  const { recommended: rankedRecommendation, agora = [] } = reorganizeTasksByEnergy(tasks, checkIn);
+  const recommendationCandidates = useMemo(() => {
+    const ranked = [rankedRecommendation, ...agora, ...visibleTodayTasks]
+      .filter(Boolean)
+      .filter((task) => visibleTaskIds.has(task.id) && isTaskActionableStatus(task.status));
+    return [...new Map(ranked.map((task) => [task.id, task])).values()];
+  }, [rankedRecommendation, agora, visibleTaskIds, visibleTodayTasks]);
+  const recommended = useMemo(() => recommendationCandidates.find((task) => task.id === selectedRecommendationId) || recommendationCandidates.find((task) => !skippedSuggestionIds.includes(task.id)) || null, [recommendationCandidates, selectedRecommendationId, skippedSuggestionIds]);
+  const activeSession = getActiveWorkSession();
+  const highlightCandidates = useMemo(() => tasks.filter((task) => !dismissedHighlightIds.includes(task.id)), [dismissedHighlightIds, tasks]);
+  const highlight = useMemo(() => getTodayHighlight(highlightCandidates, recommended, activeSession), [activeSession?.id, activeSession?.taskId, highlightCandidates, recommended]);
+  const presentation = useMemo(() => getTodayPresentation(visibleTodayTasks, highlight, lowStimulationMode), [highlight, lowStimulationMode, visibleTodayTasks]);
+  const highlightTask = presentation.highlight;
+  const otherTasks = presentation.visibleTasks;
+  const highlightMetadata = highlightTask ? getTaskRowMetadata(highlightTask) : null;
+  const nextActionPresentation = highlightTask ? getTaskNextActionPresentation(highlightTask) : null;
+  const highlightProgress = nextActionPresentation?.progress || null;
+  const nextStep = nextActionPresentation?.action || '';
+  const lastCompletedStep = highlightProgress?.normalized?.filter((item) => item.completed).at(-1)?.title || '';
+  const isResumeHighlight = ['active_session', 'paused', 'started'].includes(highlight.reason);
+  const workedMinutes = highlightTask ? getTaskWorkedMinutes(highlightTask.id) : 0;
+  const capacity = getTodayCapacity(tasks, checkIn);
+  const plannedMinutes = getOpenPlannedMinutes(canonical.groups);
+  const capacityState = getTodayCapacityState(plannedMinutes, capacity.availableMinutes);
+  const waitingCount = canonical.groups.waiting.length + waitingItems.length;
+  const overdueCount = canonical.groups.overdue.length;
+  const otherOpenCount = Math.max(0, visibleTodayTasks.length - overdueCount);
+  const summaryItems = [
+    overdueCount > 0 ? { label: pluralize(overdueCount, 'tarefa atrasada', 'tarefas atrasadas'), destination: 'tasks' } : null,
+    overdueCount > 0 && otherOpenCount > 0
+      ? { label: pluralize(otherOpenCount, 'outra tarefa aberta', 'outras tarefas abertas'), destination: 'tasks' }
+      : overdueCount === 0 && visibleTodayTasks.length > 0
+        ? { label: pluralize(visibleTodayTasks.length, 'tarefa aberta', 'tarefas abertas'), destination: 'tasks' }
+        : null,
+    guardedItems.length > 0 ? { label: pluralize(guardedItems.length, 'guardado para organizar', 'guardados para organizar'), destination: 'guarded' } : null,
+  ].filter(Boolean);
+  const completedPlannedToday = canonical.completedToday.filter((task) => getTaskRowMetadata(task).situation.startsWith('Hoje')).length;
+  const plannedTaskCount = canonical.groups.today.length + completedPlannedToday;
 
-    return recurringTasks.filter((task) => {
-      const scheduled = toIsoDate(task.scheduledDate || task.dataSugeridaExecucao);
-      if (!scheduled) return false;
-      const date = new Date(`${scheduled}T12:00:00`);
-      return date > start && date <= end;
-    }).length;
-  }, [recurringTasks, todayIso]);
-
-  const followUpsToday = useMemo(() => listFollowUpsForDate(todayIso), [todayIso, tasks.length]);
-
-  const weeklyReview = useMemo(() => {
-    const overdueTasks = tasks.filter((task) => normalizeTaskStatus(task.status) !== TASK_STATUS.CONCLUIDA && task.dueDate && task.dueDate < todayIso).length;
-    const stalledTasks = tasks.filter((task) => {
-      if (normalizeTaskStatus(task.status) === TASK_STATUS.CONCLUIDA) return false;
-      const updatedAt = new Date(task.updated || task.updatedAt || task.created || task.createdAt || 0).getTime();
-      if (!updatedAt) return false;
-      return updatedAt < Date.now() - (7 * 24 * 60 * 60 * 1000);
-    }).length;
-    const billingSoon = tasks.filter((task) => {
-      const type = String(task.taskType || '').toLocaleLowerCase('pt-BR');
-      if (!type.includes('cobran')) return false;
-      if (!task.dueDate) return false;
-      const diff = new Date(`${task.dueDate}T12:00:00`).getTime() - new Date(`${todayIso}T12:00:00`).getTime();
-      const days = Math.floor(diff / (24 * 60 * 60 * 1000));
-      return days >= 0 && days <= 7;
-    }).length;
-    const pendingInbox = listUnsortedNotes(userId, 'pendente').length;
-    const waitingCount = listWaitingReturns().filter((item) => item.status !== 'Concluido').length;
-    const { staleProjectsCount } = readProjectHealth();
-
-    return { overdueTasks, stalledTasks, billingSoon, staleProjectsCount, pendingInbox, waitingCount };
-  }, [tasks, todayIso, userId]);
-
-  const showWeeklyReviewPrompt = useMemo(() => {
-    if (typeof window === 'undefined') return false;
-    const seenWeek = window.localStorage.getItem(WEEK_REVIEW_KEY);
-    const hasReviewItems = Object.values(weeklyReview).some((value) => Number(value) > 0);
-    const isReviewDay = new Date().getDay() === 1;
-    return (hasReviewItems || isReviewDay) && seenWeek !== getWeekStorageKey();
-  }, [weeklyReview]);
-
-  const pausedTasks = useMemo(() => {
-    return tasks.filter((task) => normalizeTaskStatus(task.status) === TASK_STATUS.PAUSADA);
-  }, [tasks]);
-
-  const handleStartTask = async (task) => {
-    const updatedTask = normalizeTaskStatus(task?.status) === TASK_STATUS.PAUSADA
-      ? await resumeTask(task.id)
-      : await startTask(task.id);
-    setSelectedTask(updatedTask || task);
+  const handleStartTask = async (task, options = {}) => {
+    const updated = normalizeTaskStatus(task.status) === TASK_STATUS.PAUSADA ? await resumeTask(task.id) : await startTask(task.id);
+    setSelectedTask({ ...(updated || task), ...(options.blockMinutes ? { focusBlockMinutes: options.blockMinutes } : {}) });
     navigate('/foco');
   };
-
   const handleAnotherSuggestion = () => {
-    if (!recommended || alternativeTasks.length === 0) {
-      toast.info('Não encontrei outra tarefa que combine com este momento.');
-      return;
-    }
-    setSkippedSuggestionIds((current) => [...new Set([...current, recommended.id])]);
+    if (!recommended || recommendationCandidates.length < 2) { setIsNoAlternativeOpen(true); return; }
+    const updatedSkippedIds = [...new Set([...skippedSuggestionIds, recommended.id])];
+    setSkippedSuggestionIds(updatedSkippedIds);
     setSelectedRecommendationId('');
+    const next = recommendationCandidates.find((task) => !updatedSkippedIds.includes(task.id));
+    setSuggestionAnnouncement(next ? `Nova sugestão: ${next.title}` : 'Sugestão atualizada.');
   };
-
-  const handleSelectRecommendation = (task) => {
-    setSkippedSuggestionIds((current) => current.filter((id) => id !== task.id));
-    setSelectedRecommendationId(task.id);
-  };
-
   const handleCompleteTask = async (payload) => {
-    if (!completionTaskTarget?.id) return;
+    if (!completionTask?.id) return;
     setPendingCompletionPayload(payload);
-    const result = await completeTask(completionTaskTarget.id, payload);
-    if (result?.blocked) {
-      setPendingCompletionData(result);
-      setCompletionTaskTarget(null);
+    const result = await completeTask(completionTask.id, payload);
+    if (result?.blocked) { setPendingCompletionData(result); setCompletionTask(null); return; }
+    setCompletionTask(null);
+  };
+  const handleMarkRemainingAsDone = async () => {
+    const result = await completeTask(pendingCompletionData.task.id, { ...(pendingCompletionPayload || {}), markRemainingAsDone: true });
+    if (!result?.blocked) setPendingCompletionData(null);
+  };
+  const handleForceComplete = async () => {
+    const result = await completeTask(pendingCompletionData.task.id, { ...(pendingCompletionPayload || {}), forceComplete: true });
+    if (!result?.blocked) setPendingCompletionData(null);
+  };
+  const rowProps = (task) => ({ task, onStart: handleStartTask, onOpen: setDetailsTask, onEdit: setEditTask, onComplete: setCompletionTask, onReopen: (item) => reopenTask(item.id, 'Hoje'), onWaiting: (item) => updateTask(item.id, { status: TASK_STATUS.AGUARDANDO_RETORNO }), onArchive: (item) => updateTask(item.id, { status: TASK_STATUS.ARQUIVADA }), onDelete: setDeleteTaskTarget });
+
+  const handleDismissHighlight = () => {
+    if (!highlightTask?.id) return;
+    setDismissedHighlightIds((current) => [...new Set([...current, highlightTask.id])]);
+    toast.info('A tarefa continua na lista para quando fizer sentido retomá-la.');
+  };
+
+  const handleLowEnergyChoice = () => {
+    const lowEnergyTask = recommendationCandidates.find((task) => String(task.energiaNecessaria || task.energyLevel || '').toLocaleLowerCase('pt-BR').includes('baixa'));
+    if (!lowEnergyTask) {
+      toast.info('Não há outra tarefa de baixa energia disponível agora.');
       return;
     }
-    setCompletionTaskTarget(null);
-  };
-
-  const handlePauseFromPending = async (note) => {
-    if (!pendingCompletionData?.task?.id) return;
-    await pauseTask(pendingCompletionData.task.id, { note });
-    setIsPauseDialogOpen(false);
-    setPendingCompletionData(null);
-    setPendingCompletionPayload(null);
-    toast.success('Tarefa pausada.');
-  };
-
-  const handleMarkRemainingAsDone = async () => {
-    if (!pendingCompletionData?.task?.id) return;
-    const result = await completeTask(pendingCompletionData.task.id, {
-      ...(pendingCompletionPayload || {}),
-      markRemainingAsDone: true
-    });
-    if (!result?.blocked) {
-      setPendingCompletionData(null);
-      setPendingCompletionPayload(null);
-      toast.success('Tarefa concluída.');
-    }
-  };
-
-  const handleForceComplete = async () => {
-    if (!pendingCompletionData?.task?.id) return;
-    const result = await completeTask(pendingCompletionData.task.id, {
-      ...(pendingCompletionPayload || {}),
-      forceComplete: true
-    });
-    if (!result?.blocked) {
-      setPendingCompletionData(null);
-      setPendingCompletionPayload(null);
-      toast.success('Tarefa concluída manualmente.');
-    }
-  };
-
-  const handleArchiveTask = async (task) => {
-    if (!task?.id) return;
-    await updateTask(task.id, { status: TASK_STATUS.ARQUIVADA });
-    toast.success('Tarefa arquivada no backlog.');
-  };
-
-  const handleDeleteTask = async () => {
-    if (!deleteTaskTarget?.id) return;
-    await deleteTask(deleteTaskTarget.id);
-    toast.success('Tarefa excluída.');
-    setDeleteTaskTarget(null);
-  };
-
-  const handleDismissWeekPrompt = () => {
-    if (typeof window === 'undefined') return;
-    window.localStorage.setItem(WEEK_REVIEW_KEY, getWeekStorageKey());
-  };
-
-  const handleScheduleRecurringToday = async (task) => {
-    try {
-      await updateTask(task.id, {
-        scheduledDate: todayIso,
-        dataSugeridaExecucao: todayIso,
-        status: TASK_STATUS.PENDENTE
-      });
-      toast.success('Rotina agendada para hoje.');
-    } catch (error) {
-      console.error(error);
-      toast.error('Não foi possível agendar a rotina para hoje.');
-    }
-  };
-
-  const handleDeferRecurring = async (task) => {
-    try {
-      const nextDate = getNextRecurringDate(task);
-      if (!nextDate) {
-        toast.error('Não foi possível calcular a próxima recorrência.');
-        return;
-      }
-
-      await updateTask(task.id, {
-        scheduledDate: nextDate,
-        dataSugeridaExecucao: nextDate,
-        status: getStatusForScheduledDate(nextDate),
-        recurrenceAnchorDate: nextDate
-      });
-      toast.success('Rotina adiada para a próxima execução.');
-    } catch (error) {
-      console.error(error);
-      toast.error('Não foi possível adiar a rotina.');
-    }
+    setDismissedHighlightIds([]);
+    setSelectedRecommendationId(lowEnergyTask.id);
+    setSkippedSuggestionIds([]);
+    setIsHardDayOpen(false);
+    setSuggestionAnnouncement(`Tarefa de baixa energia: ${lowEnergyTask.title}`);
   };
 
   return (
@@ -339,345 +215,189 @@ export default function HomePage() {
         <div className="flex">
           <Sidebar />
           <main className="min-w-0 flex-1 pb-20 md:pb-8">
-            <div className="page-container section-spacing max-w-4xl">
-
-              <PreferencesOnboarding />
-
-              <div className="mb-10">
-                <h1 className="text-3xl md:text-4xl font-medium text-foreground mb-3">Hoje</h1>
-                <p className="text-lg text-muted-foreground max-w-2xl">O que eu faço agora?</p>
-                {!!checkIn?.prioridadePrincipal && (
-                  <p className="mt-2 text-sm text-foreground">Prioridade principal de hoje: <span className="font-medium">{checkIn.prioridadePrincipal}</span></p>
-                )}
-                {!isDailyMode && <Button className="mt-3" variant="ghost" onClick={() => navigate('/calendario')}>Ver no calendário</Button>}
-              </div>
-
-              <CheckInCard compact={lowStimulationMode} />
-
-              {overdueTasks.length > 0 && (
-                <div className="mb-8 flex flex-col gap-4 border-y border-primary/20 py-5 sm:flex-row sm:items-center sm:justify-between" role="status">
-                  <div>
-                    <h2 className="font-medium text-foreground">
-                      {overdueTasks.length === 1 ? 'Uma tarefa ficou de um dia anterior' : `${overdueTasks.length} tarefas ficaram de dias anteriores`}
-                    </h2>
-                    <p className="mt-1 text-sm text-muted-foreground">Vamos cuidar de uma por vez. Escolha uma nova data para continuar.</p>
-                    <p className="mt-2 text-sm font-medium text-foreground">{overdueTasks[0].title}</p>
-                  </div>
-                  <Button variant="outline" onClick={() => setEditTask(overdueTasks[0])} className="shrink-0">
-                    Replanejar {overdueTasks.length === 1 ? 'tarefa' : 'primeira tarefa'}
-                  </Button>
-                </div>
+            <div className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6 lg:px-8">
+              {!lowStimulationMode && <PreferencesOnboarding />}
+              {!lowStimulationMode && (
+                <header className="mb-5">
+                  <h1 className="text-3xl font-medium text-foreground">Hoje</h1>
+                  <p className="mt-1 text-sm text-muted-foreground">{currentDateLabel()}</p>
+                </header>
               )}
 
-              {recommended ? (
-                <div className="mb-12 animate-in fade-in duration-700">
-                  {!lowStimulationMode && (
-                    <h2 className="text-sm uppercase tracking-widest font-bold text-primary mb-4 flex items-center gap-2">
-                      Comece por aqui
-                    </h2>
-                  )}
-                  <div className="bg-card border-2 border-primary/20 shadow-lg rounded-3xl p-6 md:p-8">
-                    <div className="mb-8">
-                      <div>
-                        <h3 className="text-2xl font-medium text-foreground mb-2">{recommended.title}</h3>
-                        <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
-                          {recommended.project && <span className="bg-secondary text-secondary-foreground px-2 py-1 rounded-md font-medium">{recommended.project}</span>}
-                          {!lowStimulationMode && <span>{recommended.timeEstimate} minutos</span>}
-                          {!lowStimulationMode && <span className="capitalize text-xs font-medium border border-border px-2 py-0.5 rounded-full">{recommended.energiaNecessaria} energia</span>}
-                          {!lowStimulationMode && recommended.executionDifficulty && <span className="text-xs font-medium border border-border px-2 py-0.5 rounded-full">{recommended.executionDifficulty}</span>}
-                          {!lowStimulationMode && <span className="capitalize text-xs font-medium border border-border px-2 py-0.5 rounded-full">{recommended.whenToExecute || 'agora'}</span>}
-                        </div>
-                      </div>
-                    </div>
-
-                    {(recommended.firstAction || recommended.nextAction) && (
-                      <div className="bg-secondary/40 rounded-2xl p-5 border border-border">
-                        <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2">Primeira ação</p>
-                        <p className="text-foreground text-lg">{recommended.firstAction || recommended.nextAction}</p>
-                      </div>
-                    )}
-
-                    <div className="flex items-center gap-3 mt-6 flex-wrap">
-                      <Button onClick={() => handleStartTask(recommended)} className="rounded-xl bg-primary text-primary-foreground hover:bg-primary/90 min-w-[160px] flex-1 sm:flex-none">
-                        <Play className="w-4 h-4 mr-2" /> Começar agora
-                      </Button>
-
-                      <Button variant="outline" onClick={handleAnotherSuggestion} disabled={alternativeTasks.length === 0} className="rounded-xl border-border hover:bg-muted text-foreground min-w-[140px] flex-1 sm:flex-none">
-                        Outra sugestão
-                      </Button>
-
-                      <Button variant="outline" onClick={() => setDetailsTask(recommended)} className="rounded-xl border-border hover:bg-muted text-foreground min-w-[140px] flex-1 sm:flex-none">
-                        Ver contexto
-                      </Button>
-
-                      <Button variant="ghost" onClick={() => setIsBlockedDialogOpen(true)}>Não consigo fazer isso agora</Button>
-
-                      {!lowStimulationMode && (
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="outline" className="rounded-xl border-border hover:bg-muted text-foreground w-10 h-10 px-0" aria-label="Mais ações">
-                            <MoreHorizontal className="w-4 h-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => setDetailsTask(recommended)}>
-                            <Eye className="w-4 h-4" /> Ver detalhes
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => setEditTask(recommended)}>
-                            <Pencil className="w-4 h-4" /> Editar
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => setFollowUpTaskTarget(recommended)}>
-                            <CheckCircle2 className="w-4 h-4" /> Criar acompanhamento
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => setCompletionTaskTarget(recommended)}>
-                            <CheckCircle2 className="w-4 h-4" /> Concluir
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => handleArchiveTask(recommended)}>
-                            <Archive className="w-4 h-4" /> Arquivar tarefa
-                          </DropdownMenuItem>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem onClick={() => setDeleteTaskTarget(recommended)} className="text-destructive focus:text-destructive">
-                            <Trash2 className="w-4 h-4" /> Excluir
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                      )}
-                    </div>
-                  </div>
-
-                  {lowStimulationMode && (
-                    <div className="mt-4 flex justify-center">
-                      <Button variant="outline" onClick={() => setShowOtherTasks((prev) => !prev)}>
-                        {showOtherTasks ? 'Ocultar outras tarefas' : 'Ver outras tarefas'}
-                      </Button>
-                    </div>
-                  )}
+              {isLoading ? (
+                <div className="space-y-3 py-6" role="status" aria-label="Carregando tarefas">
+                  <div className="h-12 animate-pulse rounded bg-muted" />
+                  <div className="h-48 animate-pulse rounded bg-muted" />
+                  <div className="h-28 animate-pulse rounded bg-muted" />
+                </div>
+              ) : loadError ? (
+                <div className="my-6 border-y border-destructive/30 py-6" role="alert">
+                  <p className="font-medium text-foreground">{loadError}</p>
+                  <Button className="mt-3" variant="outline" onClick={refreshTasks}>Tentar novamente</Button>
                 </div>
               ) : (
-                <div className="border-y border-border py-10 mb-12">
-                  <h2 className="text-xl font-medium text-foreground mb-2">
-                    {tasks.length === 0 ? 'Sua lista está livre por enquanto. Quer tirar algo da cabeça?' : 'Não encontrei algo que combine com este momento.'}
-                  </h2>
-                  {tasks.length === 0 ? (
-                    <QuickCaptureDialog triggerLabel="Organizar agora" />
-                  ) : (
-                    <div className="flex flex-wrap gap-2">
-                      <Button onClick={() => setSmallStepTask(eligibleOpenTasks[0] || null)} disabled={eligibleOpenTasks.length === 0}>Encontrar um passo menor</Button>
-                      <Button variant="ghost" onClick={() => setIsTaskPickerOpen(true)}>Escolher outra tarefa</Button>
-                      <Button variant="ghost" onClick={openCheckInEditor}>Ajustar energia e tempo</Button>
-                    </div>
+                <>
+                  <CheckInCard compact={lowStimulationMode} />
+
+                  {lowStimulationMode ? (
+                    <section className="mx-auto max-w-2xl py-4" aria-labelledby="calm-mode-title">
+                      <h1 ref={calmTitleRef} tabIndex={-1} id="calm-mode-title" className="text-2xl font-medium text-foreground focus:outline-none">Um passo de cada vez</h1>
+                      {highlightTask ? (
+                        <div className="mt-6 border-y border-border py-6">
+                          <p className="text-sm text-muted-foreground">{isResumeHighlight ? 'Continue de onde parou' : 'Para começar agora'}</p>
+                          <h2 className="mt-2 text-xl font-medium text-foreground">{highlightTask.title}</h2>
+                          <p className="mt-5 text-sm font-medium text-muted-foreground">Agora</p>
+                          <p className="mt-1 text-base text-foreground">{nextStep}</p>
+                          {nextActionPresentation.actionMinutes > 0 && <p className="mt-2 text-sm text-muted-foreground">Cerca de {nextActionPresentation.actionMinutes} minutos</p>}
+                          <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                            <Button onClick={() => handleStartTask(highlightTask)}><Play className="mr-1.5 h-4 w-4" aria-hidden="true" /> {isResumeHighlight ? 'Continuar' : 'Começar'}</Button>
+                            <Button variant="outline" onClick={() => setIsBlockedDialogOpen(true)}>Não consigo agora</Button>
+                            <Button variant="ghost" onClick={() => setLowStimulationMode(false)}>Ver todas as tarefas</Button>
+                          </div>
+                          <Button className="mt-4 px-0" variant="link" onClick={() => setIsHardDayOpen(true)}>Hoje está difícil</Button>
+                        </div>
+                      ) : (
+                        <div className="mt-6 border-y border-border py-6">
+                          <p className="text-foreground">Nenhuma tarefa para mostrar agora.</p>
+                          <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                            <QuickCaptureDialog />
+                            <Button variant="outline" onClick={() => navigate('/guardados')}>Ver Guardados</Button>
+                            <Button variant="ghost" onClick={() => setLowStimulationMode(false)}>Sair do Modo tranquilo</Button>
+                          </div>
+                        </div>
+                      )}
+                    </section>
+                  ) : <>
+                  {(summaryItems.length > 0 || plannedMinutes > 0 || completedPlannedToday > 0) && (
+                    <section className="mb-6" aria-label="Resumo de hoje">
+                      {summaryItems.length > 0 && (
+                        <p className="text-sm text-foreground">
+                          {summaryItems.map((item, index) => (
+                            <React.Fragment key={`${item.destination}-${item.label}`}>
+                              {index > 0 && <span aria-hidden="true"> · </span>}
+                              <button type="button" className="rounded-sm underline decoration-border underline-offset-4 hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => item.destination === 'guarded' ? navigate('/guardados') : document.getElementById('open-tasks')?.scrollIntoView({ behavior: 'smooth' })}>{item.label}</button>
+                            </React.Fragment>
+                          ))}
+                        </p>
+                      )}
+                      {completedPlannedToday > 0 && plannedTaskCount > 1 && <p className="mt-1 text-sm text-muted-foreground">{completedPlannedToday} de {plannedTaskCount} tarefas planejadas concluídas</p>}
+                      {plannedMinutes > 0 && (
+                        <p className={`mt-1 text-sm ${capacityState.isOverCapacity ? 'text-destructive' : 'text-muted-foreground'}`}>
+                          {formatMinutes(plannedMinutes)} planejadas · {formatMinutes(capacity.availableMinutes)} disponíveis
+                          {capacityState.isNearCapacity && ' · Sua agenda está quase completa.'}
+                          {capacityState.isOverCapacity && ` · ${formatMinutes(capacityState.differenceMinutes)} acima do disponível.`}
+                        </p>
+                      )}
+                    </section>
                   )}
-                </div>
-              )}
 
-              {alternativeTasks.length > 0 && (!lowStimulationMode || showOtherTasks) && (
-                <div className="mb-12 animate-in fade-in slide-in-from-bottom-4 duration-500 delay-100 fill-mode-both">
-                  <h3 className="text-xl font-medium text-foreground mb-6">Depois disso</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                    {alternativeTasks.slice(0, lowStimulationMode ? 1 : 2).map((task) => (
-                      <TaskCard key={task.id} task={task} minimal />
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {!lowStimulationMode && !isDailyMode && (
-                <div className="mb-8 flex flex-col gap-1 border-l-2 border-primary/30 pl-4 text-sm sm:flex-row sm:items-center sm:justify-between">
-                  <p className="font-medium text-foreground">{todayCapacity.plannedMinutes} min agendados para {todayCapacity.availableMinutes} min disponíveis</p>
-                  <p className={todayCapacity.isOverCapacity ? 'text-destructive' : 'text-muted-foreground'}>
-                    {todayCapacity.isOverCapacity ? 'A agenda passou do seu tempo disponível.' : `${todayCapacity.remainingMinutes} min livres.`}
-                  </p>
-                </div>
-              )}
-
-              {!lowStimulationMode && followUpsToday.length > 0 && (
-                <div className="mb-8 rounded-xl border border-border bg-card p-5">
-                  <h2 className="text-base font-medium text-foreground">Aguardando retorno</h2>
-                  <ul className="mt-3 space-y-2">
-                    {followUpsToday.slice(0, 2).map((item) => <li key={item.id} className="text-sm text-foreground">{item.title} - {item.contactName}</li>)}
-                  </ul>
-                  <Button variant="outline" className="mt-4" onClick={() => navigate('/aguardando-retorno')}>Ver acompanhamentos</Button>
-                </div>
-              )}
-
-              {!lowStimulationMode && !isDailyMode && showWeeklyReviewPrompt && (
-                <div className="mb-8 rounded-xl border border-border bg-card p-5">
-                  <h2 className="text-base font-medium text-foreground">Quer revisar sua semana?</h2>
-                  <div className="mt-3 grid grid-cols-2 md:grid-cols-3 gap-2 text-sm text-muted-foreground">
-                    {weeklyReview.overdueTasks > 0 && <p>Tarefas vencidas: {weeklyReview.overdueTasks}</p>}
-                    {weeklyReview.stalledTasks > 0 && <p>Tarefas paradas: {weeklyReview.stalledTasks}</p>}
-                    {weeklyReview.billingSoon > 0 && <p>Cobranças próximas: {weeklyReview.billingSoon}</p>}
-                    {weeklyReview.staleProjectsCount > 0 && <p>Projetos sem movimento: {weeklyReview.staleProjectsCount}</p>}
-                    {weeklyReview.pendingInbox > 0 && <p>Pendências guardadas: {weeklyReview.pendingInbox}</p>}
-                    {weeklyReview.waitingCount > 0 && <p>Aguardando retorno: {weeklyReview.waitingCount}</p>}
-                  </div>
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <Button onClick={() => { handleDismissWeekPrompt(); navigate('/prioridades'); }}>Revisar agora</Button>
-                    <Button variant="ghost" onClick={handleDismissWeekPrompt}>Lembrar depois</Button>
-                  </div>
-                </div>
-              )}
-
-              {!lowStimulationMode && !isDailyMode && recurringThisWeekCount > 0 && (
-                <div className="mb-6 rounded-xl border border-border bg-card px-4 py-3 flex items-center justify-between gap-3">
-                  <p className="text-sm text-muted-foreground">Rotinas: {recurringThisWeekCount} esta semana.</p>
-                  <Button size="sm" variant="outline" onClick={() => navigate('/rotinas')}>Ver rotinas</Button>
-                </div>
-              )}
-
-              {!lowStimulationMode && !isDailyMode && overdueRecurring.length > 0 && (
-                <div className="mb-6 rounded-xl border border-border bg-card px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                  <p className="text-sm text-foreground">Rotina pendente: {overdueRecurring[0].title}</p>
-                  <div className="flex gap-2">
-                    <Button size="sm" onClick={() => handleScheduleRecurringToday(overdueRecurring[0])}>Agendar para hoje</Button>
-                    <Button size="sm" variant="ghost" onClick={() => handleDeferRecurring(overdueRecurring[0])}>Adiar</Button>
-                  </div>
-                </div>
-              )}
-
-              {pausedTasks.length > 0 && (
-                <div className="mb-8 rounded-xl border border-border bg-card p-5">
-                  <h2 className="text-base font-medium text-foreground">Continuar de onde parei</h2>
-                  {pausedTasks.slice(0, 1).map((task) => {
-                    const progress = getTaskMicrotaskProgress(task);
-                    return (
-                      <div key={task.id} className="mt-3">
-                        <p className="text-sm text-foreground">{task.title}</p>
-                        <p className="text-xs text-muted-foreground">Próximo passo: {progress.nextPending?.title || progress.nextPending?.descricao || 'Revisar contexto da tarefa'} · {getTaskWorkedMinutes(task.id)} min trabalhados</p>
-                        <Button className="mt-2" size="sm" onClick={() => handleStartTask(task)}>Continuar</Button>
+                  {highlightTask && (
+                    <section className="mb-7 rounded-lg border border-primary/25 bg-card p-5 shadow-sm" aria-labelledby="recommendation-title">
+                      <p className="mb-2 text-sm font-semibold text-primary">{isResumeHighlight ? (highlight.reason === 'active_session' ? 'Sessão em andamento' : 'Você parou aqui') : 'Sugestão para começar'}</p>
+                      <button type="button" className="block w-full rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => setDetailsTask(highlightTask)}>
+                        <h2 id="recommendation-title" className="text-xl font-medium text-foreground">{highlightTask.title}</h2>
+                        <p className="mt-2 flex flex-wrap gap-x-2 text-sm text-muted-foreground">
+                          <span>{highlightTask.project || 'Pessoal'}</span>
+                          {highlightMetadata.minutes > 0 && <span>{highlightMetadata.minutes} min no total</span>}
+                          <span>{highlightMetadata.situation}</span>
+                          {(highlightTask.energiaNecessaria || highlightTask.energyLevel) && <span>{highlightTask.energiaNecessaria || highlightTask.energyLevel} energia</span>}
+                          {highlightMetadata.isRoutine && <span>Rotina</span>}
+                          {workedMinutes > 0 && <span>{workedMinutes} min registrados</span>}
+                        </p>
+                      </button>
+                      <div className="mt-4 rounded-md bg-muted/60 px-4 py-3">
+                        {lastCompletedStep && isResumeHighlight && <p className="mb-1 text-xs text-muted-foreground">Último passo concluído: {lastCompletedStep}</p>}
+                        <p className="text-xs font-medium text-muted-foreground">Próximo passo</p>
+                        <p className="mt-1 text-sm text-foreground">{nextStep}</p>
+                        {nextActionPresentation.actionMinutes > 0 && <p className="mt-1 text-xs text-muted-foreground">Próximo passo: cerca de {nextActionPresentation.actionMinutes} minutos</p>}
+                        {!isResumeHighlight && nextActionPresentation.blockMinutes > 0 && <p className="mt-1 text-xs text-muted-foreground">Bloco de foco sugerido: {nextActionPresentation.blockMinutes} minutos</p>}
+                        {highlightTask.pauseNote && <p className="mt-2 text-sm text-muted-foreground">Onde você parou: {highlightTask.pauseNote}</p>}
                       </div>
-                    );
-                  })}
-                </div>
+                      <div className="mt-4 flex flex-wrap items-center gap-2">
+                        <Button onClick={() => handleStartTask(highlightTask)}><Play className="mr-1.5 h-4 w-4" aria-hidden="true" /> {isResumeHighlight ? 'Continuar de onde parei' : 'Começar agora'}</Button>
+                        {!isResumeHighlight && <Button variant="outline" onClick={handleAnotherSuggestion}>Outra sugestão</Button>}
+                        {isResumeHighlight && <Button variant="outline" onClick={handleDismissHighlight}>Não vou continuar agora</Button>}
+                        <Button variant="ghost" onClick={() => setDetailsTask(highlightTask)}><Eye className="mr-1.5 h-4 w-4" aria-hidden="true" /> Ver contexto</Button>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button size="icon" variant="ghost" aria-label="Mais ações da sugestão"><MoreHorizontal className="h-4 w-4" aria-hidden="true" /></Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => setIsTaskPickerOpen(true)}><ListTodo className="h-4 w-4" /> Escolher outra tarefa</DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => setIsBlockedDialogOpen(true)}>Não consigo agora</DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => setSmallStepTask(highlightTask)}>Encontrar um passo menor</DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => navigate('/calendario')}>Replanejar</DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
+                      <p className="sr-only" aria-live="polite">{suggestionAnnouncement}</p>
+                    </section>
+                  )}
+
+                  {otherTasks.length > 0 && (
+                    <section id="open-tasks" className="mb-6 scroll-mt-24" aria-labelledby="other-tasks-title">
+                      <h2 id="other-tasks-title" className="mb-2 text-lg font-medium text-foreground">{highlightTask ? 'Outras tarefas abertas' : 'Tarefas abertas'} ({otherTasks.length})</h2>
+                      <ul className="overflow-hidden rounded-lg border border-border bg-card">
+                        {otherTasks.map((task) => <TodayTaskRow key={task.id} {...rowProps(task)} />)}
+                      </ul>
+                    </section>
+                  )}
+
+                  {(guardedItems.length > 0 || waitingCount > 0) && (
+                    <nav className="mb-6 flex flex-col gap-2 sm:flex-row" aria-label="Pendências para consultar">
+                      {guardedItems.length > 0 && <Button variant="outline" className="justify-between" onClick={() => navigate('/guardados')}><span>{pluralize(guardedItems.length, 'guardado para organizar', 'guardados para organizar')}</span><span>Ver guardados</span></Button>}
+                      {waitingCount > 0 && <Button variant="outline" className="justify-between" onClick={() => navigate('/aguardando-retorno')}><span>{pluralize(waitingCount, 'item aguardando retorno', 'itens aguardando retorno')}</span><span>Ver itens</span></Button>}
+                    </nav>
+                  )}
+
+                  {canonical.completedToday.length > 0 && (
+                    <details className="rounded-lg border border-border bg-card">
+                      <summary className="cursor-pointer px-4 py-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Concluídas hoje ({canonical.completedToday.length})</summary>
+                      <ul className="border-t border-border">{canonical.completedToday.map((task) => <TodayTaskRow key={task.id} {...rowProps(task)} completed workedMinutes={getTaskWorkedMinutes(task.id)} />)}</ul>
+                    </details>
+                  )}
+
+                  {!highlightTask && otherTasks.length === 0 && waitingCount === 0 && guardedItems.length === 0 && (
+                    <p className="my-8 text-sm text-muted-foreground">Você não tem tarefas abertas. Se lembrar de algo, use Tirar da cabeça.</p>
+                  )}
+                  </>}
+                </>
               )}
-
-              {alertasImportantes.filter((task) => task.id !== recommended?.id && !overdueTasks.some((overdue) => overdue.id === task.id)).length > 0 && (!lowStimulationMode || showOtherTasks) && (
-                <div className="mb-12 animate-in fade-in slide-in-from-bottom-4 duration-500 delay-300 fill-mode-both">
-                  <h3 className="text-xl font-medium text-foreground mb-6">Alertas importantes</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                    {alertasImportantes
-                      .filter((task) => task.id !== recommended?.id && !overdueTasks.some((overdue) => overdue.id === task.id))
-                      .slice(0, lowStimulationMode ? 1 : 4)
-                      .map((task) => (
-                        <TaskCard key={task.id} task={task} />
-                      ))}
-                  </div>
-                </div>
-              )}
-
-              <div className="mt-8 border-t border-border pt-4 text-right">
-                <Button variant="ghost" onClick={() => setIsWrapUpOpen(true)}>Encerrar o dia</Button>
-              </div>
-
             </div>
           </main>
         </div>
         <MobileNav />
-
-        {detailsTask && (
-          <TaskDetailsModal
-            task={detailsTask}
-            isOpen={!!detailsTask}
-            onClose={() => setDetailsTask(null)}
-          />
-        )}
-
-        <BlockedHelpDialog
-          task={recommended}
-          isOpen={isBlockedDialogOpen}
-          onOpenChange={setIsBlockedDialogOpen}
-          onRequestBreakDown={() => {
-            if (recommended) {
-              setSmallStepTask(recommended);
-            }
-            setIsBlockedDialogOpen(false);
-          }}
-          updateTaskById={updateTask}
-          createSupportTask={addTask}
-          deleteSupportTask={deleteTask}
-        />
-
-        <TaskCompletionDialog
-          isOpen={Boolean(completionTaskTarget)}
-          onOpenChange={(open) => {
-            if (!open) setCompletionTaskTarget(null);
-          }}
-          task={completionTaskTarget}
-          onConfirm={handleCompleteTask}
-        />
-
-        <TaskPendingMicrotasksDialog
-          isOpen={Boolean(pendingCompletionData)}
-          onOpenChange={(open) => {
-            if (!open) setPendingCompletionData(null);
-          }}
-          pendingData={pendingCompletionData}
-          onPause={() => setIsPauseDialogOpen(true)}
-          onBack={() => setPendingCompletionData(null)}
-          onMarkRemaining={handleMarkRemainingAsDone}
-          onForceComplete={handleForceComplete}
-        />
-
-        <TaskPauseDialog
-          isOpen={isPauseDialogOpen}
-          onOpenChange={setIsPauseDialogOpen}
-          defaultValue={pendingCompletionData?.task?.pauseNote || ''}
-          onConfirm={handlePauseFromPending}
-        />
-
-        <CreateFollowUpFromTaskDialog
-          isOpen={Boolean(followUpTaskTarget)}
-          onOpenChange={(open) => {
-            if (!open) setFollowUpTaskTarget(null);
-          }}
-          task={followUpTaskTarget}
-          onConfirmMarkTaskDone={() => {
-            setCompletionTaskTarget(followUpTaskTarget);
-            setFollowUpTaskTarget(null);
-          }}
-        />
-
-        {editTask && (
-          <EditTaskModal
-            task={editTask}
-            isOpen={!!editTask}
-            onClose={() => setEditTask(null)}
-          />
-        )}
-
-        <TaskPickerDialog
-          open={isTaskPickerOpen}
-          onOpenChange={setIsTaskPickerOpen}
-          tasks={eligibleOpenTasks}
-          onSelect={handleSelectRecommendation}
-          onViewAll={() => { setIsTaskPickerOpen(false); navigate('/prioridades'); }}
-        />
-
-        <SmallerStepDialog
-          task={smallStepTask}
-          open={Boolean(smallStepTask)}
-          onOpenChange={(open) => { if (!open) setSmallStepTask(null); }}
-          onApply={(nextAction) => updateTask(smallStepTask.id, { nextAction })}
-        />
-
-        <AlertDialog open={!!deleteTaskTarget} onOpenChange={(open) => !open && setDeleteTaskTarget(null)}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Tem certeza que deseja excluir esta tarefa?</AlertDialogTitle>
-              <AlertDialogDescription>
-                Esta ação remove a tarefa da agenda atual.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancelar</AlertDialogCancel>
-              <AlertDialogAction onClick={handleDeleteTask} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-                Excluir tarefa
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-
-        <DailyWrapUpDialog open={isWrapUpOpen} onOpenChange={setIsWrapUpOpen} />
+        {detailsTask && <TaskDetailsModal task={detailsTask} isOpen onClose={() => setDetailsTask(null)} />}
+        {editTask && <EditTaskModal task={editTask} isOpen onClose={() => setEditTask(null)} />}
+        <TaskCompletionDialog isOpen={Boolean(completionTask)} onOpenChange={(open) => !open && setCompletionTask(null)} task={completionTask} onConfirm={handleCompleteTask} />
+        <TaskPendingMicrotasksDialog isOpen={Boolean(pendingCompletionData)} onOpenChange={(open) => !open && setPendingCompletionData(null)} pendingData={pendingCompletionData} onPause={() => setIsPauseDialogOpen(true)} onBack={() => setPendingCompletionData(null)} onMarkRemaining={handleMarkRemainingAsDone} onForceComplete={handleForceComplete} />
+        <TaskPauseDialog isOpen={isPauseDialogOpen} onOpenChange={setIsPauseDialogOpen} defaultValue={pendingCompletionData?.task?.pauseNote || ''} task={pendingCompletionData?.task} onConfirm={async (note, pauseOptions) => { await pauseTask(pendingCompletionData.task.id, { note, ...pauseOptions }); setIsPauseDialogOpen(false); setPendingCompletionData(null); }} />
+        <TaskPickerDialog open={isTaskPickerOpen} onOpenChange={setIsTaskPickerOpen} tasks={recommendationCandidates} onSelect={(task) => { setSelectedRecommendationId(task.id); setSkippedSuggestionIds([]); setIsTaskPickerOpen(false); }} onViewAll={() => setIsTaskPickerOpen(false)} />
+        <SmallerStepDialog task={smallStepTask} open={Boolean(smallStepTask)} onOpenChange={(open) => { if (!open) { setSmallStepTask(null); setSmallStepMinutes(null); } }} onApply={(nextAction, options) => updateTask(smallStepTask.id, { nextAction, ...(smallStepMinutes ? { nextActionMinutes: options?.isUndo ? smallStepTask.nextActionMinutes || null : smallStepMinutes } : {}) })} />
+        <BlockedHelpDialog task={highlightTask} isOpen={isBlockedDialogOpen} onOpenChange={setIsBlockedDialogOpen} onRequestBreakDown={() => { setSmallStepTask(highlightTask); setIsBlockedDialogOpen(false); }} updateTaskById={updateTask} createSupportTask={addTask} deleteSupportTask={deleteTask} />
+        <Dialog open={isHardDayOpen} onOpenChange={setIsHardDayOpen}>
+          <DialogContent className="max-w-md">
+            <DialogHeader><DialogTitle>O que ajudaria agora?</DialogTitle><DialogDescription>Escolha um ajuste temporário para este momento.</DialogDescription></DialogHeader>
+            <div className="grid gap-2">
+              <Button variant="outline" className="justify-start" onClick={() => { setSmallStepMinutes(5); setSmallStepTask(highlightTask); setIsHardDayOpen(false); }}>Mostrar algo bem pequeno</Button>
+              <Button variant="outline" className="justify-start" onClick={handleLowEnergyChoice}>Escolher uma tarefa de baixa energia</Button>
+              <Button variant="outline" className="justify-start" onClick={() => handleStartTask(highlightTask, { blockMinutes: 5 })}>Fazer apenas 5 minutos</Button>
+              <QuickCaptureDialog triggerLabel="Só quero tirar coisas da cabeça" />
+              <Button variant="outline" className="justify-start" onClick={() => navigate('/calendario')}>Replanejar o restante do dia</Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+        <Dialog open={isNoAlternativeOpen} onOpenChange={setIsNoAlternativeOpen}>
+          <DialogContent className="max-w-md">
+            <DialogHeader><DialogTitle>Estas são as tarefas disponíveis para este momento.</DialogTitle><DialogDescription>Você pode ajustar o contexto ou reduzir a quantidade de decisões na tela.</DialogDescription></DialogHeader>
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+              <Button onClick={() => { setIsNoAlternativeOpen(false); openCheckInEditor(); }}>Ajustar energia e tempo</Button>
+              <Button variant="outline" onClick={() => { setIsNoAlternativeOpen(false); document.getElementById('open-tasks')?.scrollIntoView({ behavior: 'smooth' }); }}>Ver todas</Button>
+              <Button variant="ghost" onClick={() => { setIsNoAlternativeOpen(false); setLowStimulationMode(true); }}>Ativar Modo tranquilo</Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+        <AlertDialog open={Boolean(deleteTaskTarget)} onOpenChange={(open) => !open && setDeleteTaskTarget(null)}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Excluir esta tarefa?</AlertDialogTitle><AlertDialogDescription>Esta ação remove a tarefa da sua conta.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancelar</AlertDialogCancel><AlertDialogAction className="bg-destructive text-destructive-foreground" onClick={async () => { await deleteTask(deleteTaskTarget.id); setDeleteTaskTarget(null); }}>Excluir</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
       </div>
     </>
   );

@@ -12,11 +12,11 @@ export default function SmallerStepDialog({ task, open, onOpenChange, onApply })
 
   const applyStep = async () => {
     if (!activeStep) return;
-    await onApply(activeStep);
+    await onApply(activeStep, { isUndo: false });
     toast.success(`Primeiro passo atualizado: ${activeStep}`, {
       action: {
         label: 'Desfazer',
-        onClick: () => onApply(task?.nextAction || ''),
+        onClick: () => onApply(task?.nextAction || '', { isUndo: true }),
       },
     });
     setSelectedStep('');

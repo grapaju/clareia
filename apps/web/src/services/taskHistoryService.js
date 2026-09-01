@@ -1,17 +1,9 @@
+import { readUserScopedJson, writeUserScopedJson } from '@/lib/userScopedStorage.js';
+
 const STORAGE_KEY = 'clareia_task_history';
 
-function safeParse(value, fallback) {
-  try {
-    const parsed = JSON.parse(value);
-    return parsed ?? fallback;
-  } catch {
-    return fallback;
-  }
-}
-
 function readAll() {
-  if (typeof window === 'undefined') return [];
-  return safeParse(window.localStorage.getItem(STORAGE_KEY), []);
+  return readUserScopedJson(STORAGE_KEY, []);
 }
 
 export function listAllTaskHistory() {
@@ -19,8 +11,7 @@ export function listAllTaskHistory() {
 }
 
 function writeAll(items) {
-  if (typeof window === 'undefined') return;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+  writeUserScopedJson(STORAGE_KEY, items);
 }
 
 function uid(prefix = 'th') {

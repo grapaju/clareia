@@ -1,11 +1,13 @@
 
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useLayoutEffect, useState } from 'react';
+import { useAuth } from '@/contexts/AuthContext.jsx';
+import { applyUserPreferencesToRoot, loadUserPreferences, readUserPreferences, saveUserPreferences } from '@/services/userPreferencesService.js';
 
 const ThemeContext = createContext();
 
-const LOW_STIMULATION_KEY = 'clareia_low_stimulation_mode';
-
 export function ThemeProvider({ children }) {
+  const { currentUser } = useAuth();
+  const userId = currentUser?.id || '';
   const [themeSetting, setThemeSetting] = useState(() => {
     const saved = localStorage.getItem('clareia_theme');
     return ['light', 'dark', 'auto'].includes(saved) ? saved : 'auto';
@@ -13,7 +15,31 @@ export function ThemeProvider({ children }) {
   const [theme, setResolvedTheme] = useState(() => themeSetting === 'auto'
     ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
     : themeSetting);
-  const [lowStimulationMode, setLowStimulationMode] = useState(() => localStorage.getItem(LOW_STIMULATION_KEY) === 'true');
+  const [calmPreference, setCalmPreference] = useState(() => ({
+    userId,
+    enabled: userId ? readUserPreferences(userId).visualProfile === 'tranquilo' : false,
+  }));
+  const lowStimulationMode = calmPreference.userId === userId ? calmPreference.enabled : false;
+
+  useLayoutEffect(() => {
+    const preferences = userId ? readUserPreferences(userId) : readUserPreferences('');
+    applyUserPreferencesToRoot(preferences);
+    setCalmPreference({
+      userId,
+      enabled: userId ? preferences.visualProfile === 'tranquilo' : false,
+    });
+  }, [userId]);
+
+  useEffect(() => {
+    if (!userId) return;
+    let active = true;
+    loadUserPreferences(userId).then((preferences) => {
+      if (!active) return;
+      applyUserPreferencesToRoot(preferences);
+      setCalmPreference({ userId, enabled: preferences.visualProfile === 'tranquilo' });
+    });
+    return () => { active = false; };
+  }, [userId]);
 
   useEffect(() => {
     const root = window.document.documentElement;
@@ -34,7 +60,6 @@ export function ThemeProvider({ children }) {
   useEffect(() => {
     const root = window.document.documentElement;
     root.classList.toggle('low-stimulation', lowStimulationMode);
-    localStorage.setItem(LOW_STIMULATION_KEY, String(lowStimulationMode));
   }, [lowStimulationMode]);
 
   const toggleTheme = () => {
@@ -43,9 +68,13 @@ export function ThemeProvider({ children }) {
 
   const setTheme = (value) => setThemeSetting(['light', 'dark', 'auto'].includes(value) ? value : 'auto');
 
-  const toggleLowStimulationMode = () => {
-    setLowStimulationMode((prev) => !prev);
+  const setLowStimulationMode = (enabled, options = {}) => {
+    const nextEnabled = Boolean(enabled);
+    setCalmPreference({ userId, enabled: nextEnabled });
+    if (userId && options.persist !== false) void saveUserPreferences(userId, { visualProfile: nextEnabled ? 'tranquilo' : 'equilibrado' });
   };
+
+  const toggleLowStimulationMode = () => setLowStimulationMode(!lowStimulationMode);
 
   return (
     <ThemeContext.Provider value={{ theme, themeSetting, setTheme, toggleTheme, lowStimulationMode, setLowStimulationMode, toggleLowStimulationMode }}>

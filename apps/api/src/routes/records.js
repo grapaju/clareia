@@ -144,8 +144,10 @@ router.post('/:collection', async (req, res) => {
 
   const payload = { ...(req.body || {}) };
   const id = normalizeText(payload.id) || `rec-${Date.now()}-${randomUUID().slice(0, 8)}`;
-  const accountId = normalizeText(payload.accountId);
+  const accountId = normalizeText(req.authUser?.accountId);
   payload.id = id;
+  payload.userId = req.userId;
+  payload.accountId = accountId;
 
   const created = await runQuery(
     `INSERT INTO app_records (id, collection_name, user_id, account_id, data)
@@ -191,9 +193,11 @@ router.patch('/:collection/:id', async (req, res) => {
     ...(existing.data || {}),
     ...(req.body || {}),
     id,
+    userId: req.userId,
+    accountId: normalizeText(req.authUser?.accountId),
   };
 
-  const nextAccountId = normalizeText(merged.accountId || existing.account_id);
+  const nextAccountId = normalizeText(req.authUser?.accountId);
 
   const updated = await runQuery(
     `UPDATE app_records

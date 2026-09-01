@@ -32,7 +32,9 @@ import TaskCard from '@/components/TaskCard.jsx';
 import TaskModal from '@/components/TaskModal.jsx';
 import ManualTimeDialog from '@/components/ManualTimeDialog.jsx';
 import { useTaskContext } from '@/hooks/useTaskContext.js';
-import { isTaskArchivedStatus, isTaskCompletedStatus, isTaskOpenStatus } from '@/lib/taskExecution.js';
+import { getTaskWorkedMinutes, isTaskArchivedStatus, isTaskCompletedStatus, isTaskOpenStatus, normalizeTaskStatus, TASK_STATUS } from '@/lib/taskExecution.js';
+import { getTaskNextActionPresentation } from '@/lib/todayViewLogic.js';
+import { readUserScopedJson, writeUserScopedJson } from '@/lib/userScopedStorage.js';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -103,33 +105,20 @@ import {
 const LEGACY_PROJECT_PROFILES_KEY = 'clareia_project_profiles_v1';
 const PROJECT_HISTORY_KEY = 'clareia_project_history_v1';
 
-function safeParse(value, fallback) {
-  try {
-    const parsed = JSON.parse(value);
-    return parsed ?? fallback;
-  } catch {
-    return fallback;
-  }
-}
-
 function readProjectProfiles() {
-  if (typeof window === 'undefined') return [];
-  return safeParse(window.localStorage.getItem(LEGACY_PROJECT_PROFILES_KEY), []);
+  return readUserScopedJson(LEGACY_PROJECT_PROFILES_KEY, []);
 }
 
 function writeProjectProfiles(items) {
-  if (typeof window === 'undefined') return;
-  window.localStorage.setItem(LEGACY_PROJECT_PROFILES_KEY, JSON.stringify(items));
+  writeUserScopedJson(LEGACY_PROJECT_PROFILES_KEY, items);
 }
 
 function readProjectHistory() {
-  if (typeof window === 'undefined') return {};
-  return safeParse(window.localStorage.getItem(PROJECT_HISTORY_KEY), {});
+  return readUserScopedJson(PROJECT_HISTORY_KEY, {});
 }
 
 function writeProjectHistory(items) {
-  if (typeof window === 'undefined') return;
-  window.localStorage.setItem(PROJECT_HISTORY_KEY, JSON.stringify(items));
+  writeUserScopedJson(PROJECT_HISTORY_KEY, items);
 }
 
 function nowIso() {
@@ -235,7 +224,7 @@ const FILE_PROVIDER_OPTIONS = [
 ];
 
 export default function ProjectsPage() {
-  const { tasks, addTask, completeTask, reopenTask, updateTask, refreshTasks } = useTaskContext();
+  const { tasks, addTask, completeTask, reopenTask, updateTask, refreshTasks, resumeTask, setSelectedTask, startTask } = useTaskContext();
   const navigate = useNavigate();
 
   const [selectedProject, setSelectedProject] = useState(null);
@@ -771,21 +760,21 @@ export default function ProjectsPage() {
   const projectMainAccesses = useMemo(() => accesses.slice(0, 5), [accesses]);
   const projectWaitingReturns = useMemo(() => listProjectWaitingReturns(selectedProject || ''), [selectedProject, historyItems.length]);
   const projectAllTasks = useMemo(() => tasks.filter((item) => item.project === selectedProject), [tasks, selectedProject]);
+  const projectResumeTask = useMemo(() => {
+    const openTasks = projectAllTasks.filter((item) => isTaskOpenStatus(item.status));
+    return openTasks.find((item) => normalizeTaskStatus(item.status) === TASK_STATUS.PAUSADA)
+      || openTasks.find((item) => normalizeTaskStatus(item.status) === TASK_STATUS.EM_ANDAMENTO)
+      || openTasks.find((item) => normalizeTaskStatus(item.status) === TASK_STATUS.PENDENTE)
+      || null;
+  }, [projectAllTasks]);
+  const projectResumeAction = useMemo(() => projectResumeTask ? getTaskNextActionPresentation(projectResumeTask) : null, [projectResumeTask]);
+  const projectResumeMinutes = useMemo(() => projectResumeTask ? getTaskWorkedMinutes(projectResumeTask.id, workSessions) : 0, [projectResumeTask, workSessions]);
 
   const whereIStopped = useMemo(() => {
-    const lastDoneTask = [...projectAllTasks]
-      .filter((item) => item.status === 'Concluída')
-      .sort((a, b) => new Date(b.updated || b.updatedAt || b.created || b.createdAt || 0).getTime() - new Date(a.updated || a.updatedAt || a.created || a.createdAt || 0).getTime())[0];
-    if (lastDoneTask) return `Última tarefa concluída: ${lastDoneTask.title}`;
-
-    const latestNote = projectRecentNotes[0];
-    if (latestNote) return `Última nota: ${latestNote.title || 'Nota sem título'}`;
-
-    const latestHistory = historyItems[0];
-    if (latestHistory) return `${latestHistory.action}: ${latestHistory.details}`;
-
-    return 'Sem histórico recente. Comece registrando o primeiro passo do projeto.';
-  }, [projectAllTasks, projectRecentNotes, historyItems]);
+    if (!projectResumeTask) return 'Nenhuma próxima ação definida.';
+    if (normalizeTaskStatus(projectResumeTask.status) === TASK_STATUS.PAUSADA) return projectResumeTask.pauseNote || projectResumeAction?.action;
+    return projectResumeAction?.action || 'Nenhuma próxima ação definida.';
+  }, [projectResumeAction, projectResumeTask]);
 
   const reminderText = useMemo(() => {
     const waiting = projectWaitingReturns.find((item) => item.status !== 'Concluido');
@@ -795,11 +784,19 @@ export default function ProjectsPage() {
   }, [projectWaitingReturns, selectedProfile]);
 
   const nextActionRecommended = useMemo(() => {
-    const fromTasks = projectTasks.find((item) => item.nextAction)?.nextAction;
-    if (fromTasks) return fromTasks;
+    if (projectResumeAction?.action) return projectResumeAction.action;
     if (selectedProfile?.summary) return 'Revisar objetivo do projeto e definir a proxima tarefa executavel.';
     return 'Cadastrar objetivo e materiais principais para organizar o inicio da execucao.';
-  }, [projectTasks, selectedProfile]);
+  }, [projectResumeAction, selectedProfile]);
+
+  const handleProjectResume = async () => {
+    if (!projectResumeTask?.id) return;
+    const updated = normalizeTaskStatus(projectResumeTask.status) === TASK_STATUS.PAUSADA
+      ? await resumeTask(projectResumeTask.id)
+      : await startTask(projectResumeTask.id);
+    setSelectedTask(updated || projectResumeTask);
+    navigate('/foco');
+  };
 
   const searchResults = useMemo(() => {
     const normalized = searchTerm.trim().toLocaleLowerCase('pt-BR');
@@ -1838,7 +1835,7 @@ export default function ProjectsPage() {
   };
 
   const getProjectStats = (projectName) => {
-    const projectTasksOpen = tasks.filter((item) => item.project === projectName && item.status !== 'Concluída');
+    const projectTasksOpen = tasks.filter((item) => item.project === projectName && isTaskOpenStatus(item.status));
     const materialsCount =
       listProjectFiles(projectName).length +
       listProjectLinks(projectName).length +
@@ -1851,25 +1848,12 @@ export default function ProjectsPage() {
   };
 
   const getProjectWhereStoppedPreview = (projectName) => {
-    const lastDoneTask = [...tasks]
-      .filter((item) => item.project === projectName && item.status === 'Concluída')
-      .sort((a, b) => new Date(b.updated || b.updatedAt || b.created || b.createdAt || 0).getTime() - new Date(a.updated || a.updatedAt || a.created || a.createdAt || 0).getTime())[0];
-
-    if (lastDoneTask?.title) {
-      return `Última concluída: ${lastDoneTask.title}`;
-    }
-
-    const lastNote = listRecentProjectNotes(projectName, 1)[0];
-    if (lastNote?.title || lastNote?.content) {
-      return `Última nota: ${lastNote.title || 'Nota sem título'}`;
-    }
-
-    const history = readProjectHistory()[projectName] || [];
-    if (history[0]?.details) {
-      return `Último evento: ${history[0].details}`;
-    }
-
-    return 'Sem histórico recente';
+    const openTasks = tasks.filter((item) => item.project === projectName && isTaskOpenStatus(item.status));
+    const paused = openTasks.find((item) => normalizeTaskStatus(item.status) === TASK_STATUS.PAUSADA);
+    const next = paused || openTasks.find((item) => normalizeTaskStatus(item.status) === TASK_STATUS.EM_ANDAMENTO) || openTasks[0];
+    if (!next) return '';
+    const action = getTaskNextActionPresentation(next).action;
+    return paused ? `Onde parou: ${paused.pauseNote || action}` : `Próximo: ${action}`;
   };
 
   const clearProjectWorkspaceData = (projectName) => {
@@ -2125,7 +2109,20 @@ export default function ProjectsPage() {
                         const stats = getProjectStats(projectName);
                         const profile = profiles.find((item) => item.name === projectName);
                         return (
-                          <Card key={projectName} className="card-hover cursor-pointer border-border shadow-sm" onClick={() => setSelectedProject(projectName)}>
+                          <Card
+                            key={projectName}
+                            className="card-hover cursor-pointer border-border shadow-sm"
+                            role="button"
+                            tabIndex={0}
+                            aria-label={`Abrir projeto ${projectName}`}
+                            onClick={() => setSelectedProject(projectName)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault();
+                                setSelectedProject(projectName);
+                              }
+                            }}
+                          >
                             <CardContent className="p-6">
                               <div className="flex justify-between items-center mb-6">
                                 <h3 className="text-xl font-medium text-foreground truncate pr-4">{projectName}</h3>
@@ -2142,7 +2139,7 @@ export default function ProjectsPage() {
                                   <p className="text-2xl font-medium text-foreground">{stats.materialsCount}</p>
                                 </div>
                               </div>
-                              <p className="text-xs text-muted-foreground mt-4 line-clamp-2">{getProjectWhereStoppedPreview(projectName)}</p>
+                              {getProjectWhereStoppedPreview(projectName) && <p className="mt-4 line-clamp-1 text-sm text-muted-foreground" title={getProjectWhereStoppedPreview(projectName)}>{getProjectWhereStoppedPreview(projectName)}</p>}
                             </CardContent>
                           </Card>
                         );
@@ -2198,6 +2195,33 @@ export default function ProjectsPage() {
                       </div>
                     </div>
                   </div>
+
+                  <section className="mb-6 rounded-lg border border-border bg-card p-5" aria-labelledby="project-resume-title">
+                    <h2 id="project-resume-title" className="text-xl font-medium">
+                      {projectResumeTask
+                        ? normalizeTaskStatus(projectResumeTask.status) === TASK_STATUS.PAUSADA ? 'Onde você parou' : 'Próximo passo do projeto'
+                        : 'Nenhuma próxima ação definida.'}
+                    </h2>
+                    {projectResumeTask ? (
+                      <div className="mt-3">
+                        <p className="font-medium text-foreground">{projectResumeTask.title}</p>
+                        <p className="mt-1 text-lg text-foreground">{projectResumeAction?.action}</p>
+                        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
+                          {projectResumeMinutes > 0 && <span>{projectResumeMinutes} min registrados</span>}
+                          {projectResumeTask.pauseNote && <span>Onde você parou: {projectResumeTask.pauseNote}</span>}
+                        </div>
+                        <Button className="mt-4" onClick={handleProjectResume}>
+                          {normalizeTaskStatus(projectResumeTask.status) === TASK_STATUS.PAUSADA ? 'Continuar de onde parei' : 'Começar'}
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Button onClick={() => setIsCreateTaskDialogOpen(true)}>Criar tarefa</Button>
+                        <Button variant="outline" onClick={() => navigate('/descarregar-mente')}>Tirar da cabeça</Button>
+                        <Button variant="ghost" onClick={() => setActiveTab('tarefas')}>Ver tarefas do projeto</Button>
+                      </div>
+                    )}
+                  </section>
 
                   {searchTerm.trim() && (
                     <Card className="bg-card border-border shadow-sm mb-6">

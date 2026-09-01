@@ -1,4 +1,5 @@
 const STORAGE_KEY = 'clareia_calendar_preferences_v1';
+import { readUserScopedJson, writeUserScopedJson } from '../lib/userScopedStorage.js';
 
 const DEFAULT_PREFERENCES = {
   workDays: [1, 2, 3, 4, 5],
@@ -14,9 +15,8 @@ function sanitizeWorkDays(value) {
 
 export function getCalendarPreferences() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { ...DEFAULT_PREFERENCES };
-    const parsed = JSON.parse(raw);
+    const parsed = readUserScopedJson(STORAGE_KEY, null);
+    if (!parsed) return { ...DEFAULT_PREFERENCES };
     return {
       workDays: sanitizeWorkDays(parsed?.workDays),
       allowWeekendTasks: parsed?.allowWeekendTasks === true,
@@ -35,7 +35,7 @@ export function updateCalendarPreferences(partial = {}) {
     sundayIsRestDay: partial.sundayIsRestDay ?? current.sundayIsRestDay
   };
 
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+  writeUserScopedJson(STORAGE_KEY, next);
   return next;
 }
 

@@ -1,5 +1,6 @@
 const STORAGE_KEY = 'clareia_project_links_v1';
 import { appendProjectHistory } from '@/services/projectHistoryService.js';
+import { readUserScopedJson, writeUserScopedJson } from '../lib/userScopedStorage.js';
 
 const LINK_TYPES = [
   'site',
@@ -13,23 +14,13 @@ const LINK_TYPES = [
   'outro'
 ];
 
-function safeParse(value) {
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
 function readAll() {
-  if (typeof window === 'undefined') return [];
-  return safeParse(window.localStorage.getItem(STORAGE_KEY));
+  const items = readUserScopedJson(STORAGE_KEY, []);
+  return Array.isArray(items) ? items : [];
 }
 
 function writeAll(items) {
-  if (typeof window === 'undefined') return;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+  writeUserScopedJson(STORAGE_KEY, items);
 }
 
 function uid(prefix = 'link') {

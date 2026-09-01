@@ -32,8 +32,8 @@ function App() {
   const withProtectedMode = (element) => <ProtectedRoute>{element}</ProtectedRoute>;
 
   return (
-    <ThemeProvider>
-      <AuthProvider>
+    <AuthProvider>
+      <ThemeProvider>
         <AppModeProvider>
           <TaskProvider>
             <Router>
@@ -67,8 +67,8 @@ function App() {
             </Router>
           </TaskProvider>
         </AppModeProvider>
-      </AuthProvider>
-    </ThemeProvider>
+      </ThemeProvider>
+    </AuthProvider>
   );
 }
 

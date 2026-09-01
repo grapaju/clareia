@@ -1,22 +1,13 @@
+import { readUserScopedJson, writeUserScopedJson } from '@/lib/userScopedStorage.js';
+
 const PROJECT_HISTORY_KEY = 'clareia_project_history_v1';
 
-function safeParse(value, fallback) {
-  try {
-    const parsed = JSON.parse(value);
-    return parsed ?? fallback;
-  } catch {
-    return fallback;
-  }
-}
-
 function readHistoryMap() {
-  if (typeof window === 'undefined') return {};
-  return safeParse(window.localStorage.getItem(PROJECT_HISTORY_KEY), {});
+  return readUserScopedJson(PROJECT_HISTORY_KEY, {});
 }
 
 function writeHistoryMap(map) {
-  if (typeof window === 'undefined') return;
-  window.localStorage.setItem(PROJECT_HISTORY_KEY, JSON.stringify(map));
+  writeUserScopedJson(PROJECT_HISTORY_KEY, map);
 }
 
 export function appendProjectHistory(projectName, action, details = '') {

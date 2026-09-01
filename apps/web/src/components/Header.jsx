@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Bell, LogOut, Moon, Sparkles, Sun, UserRound } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -19,6 +19,7 @@ export default function Header({ notificationCount = 0, onOpenNotifications }) {
   const { currentUser, isAuthenticated, logout } = useAuth();
   const { theme, toggleTheme, lowStimulationMode, toggleLowStimulationMode } = useTheme();
   const navigate = useNavigate();
+  const [modeAnnouncement, setModeAnnouncement] = useState('');
 
   const handleLogout = () => {
     logout();
@@ -46,13 +47,20 @@ export default function Header({ notificationCount = 0, onOpenNotifications }) {
             <Button
               variant={lowStimulationMode ? 'default' : 'ghost'}
               size="sm"
-              onClick={toggleLowStimulationMode}
+              onClick={() => {
+                toggleLowStimulationMode();
+                setModeAnnouncement(lowStimulationMode
+                  ? 'Modo tranquilo desativado. Todas as tarefas estão visíveis.'
+                  : 'Modo tranquilo ativado. Mostrando apenas o próximo passo.');
+              }}
               className="min-h-11 px-2 sm:px-3"
               aria-pressed={lowStimulationMode}
+              aria-label={lowStimulationMode ? 'Sair do modo tranquilo' : 'Ativar modo tranquilo'}
             >
-              <span className="hidden sm:inline">Modo </span>tranquilo
+              {lowStimulationMode ? 'Sair do modo tranquilo' : <><span className="hidden sm:inline">Modo </span>tranquilo</>}
             </Button>
           )}
+          <p className="sr-only" aria-live="polite">{modeAnnouncement}</p>
 
           {isAuthenticated && (
             <Button

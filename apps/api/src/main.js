@@ -3,6 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import routes from './routes/index.js';
 import { errorMiddleware } from './middleware/error.js';
@@ -61,17 +62,22 @@ app.use((req, res) => {
 	res.status(404).json({ error: 'Route not found' });
 });
 
-const port = process.env.PORT || 3005;
-
-ensurePostgresSchema()
-	.then(() => {
-		app.listen(port, () => {
-			logger.info(`🚀 API Server running on http://localhost:${port}`);
+export async function startServer(port = process.env.PORT || 3005) {
+	await ensurePostgresSchema();
+	return new Promise((resolve) => {
+		const server = app.listen(port, () => {
+			logger.info(`API Server running on http://localhost:${server.address().port}`);
+			resolve(server);
 		});
-	})
-	.catch((error) => {
+	});
+}
+
+const isMainModule = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+if (isMainModule) {
+	startServer().catch((error) => {
 		logger.error('Falha ao inicializar schema PostgreSQL:', error);
 		process.exit(1);
 	});
+}
 
 export default app;

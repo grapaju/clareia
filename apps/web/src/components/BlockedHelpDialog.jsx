@@ -6,6 +6,7 @@ import { Label } from '@/components/ui/label';
 import { toast } from 'sonner';
 import { createWaitingReturn, deleteWaitingReturnEverywhere, listWaitingReturns, syncWaitingReturnsWithCloud } from '@/services/waitingReturnService.js';
 import { addTaskHistoryEvent } from '@/services/taskHistoryService.js';
+import { getTaskNextActionPresentation } from '@/lib/todayViewLogic.js';
 
 const BLOCK_REASONS = [
   {
@@ -13,9 +14,10 @@ const BLOCK_REASONS = [
     label: 'Nao sei começar',
     recommendation: 'Execute apenas a primeira ação por 5 minutos.',
     apply: async ({ task, updateTask }) => {
-      const firstAction = task?.nextAction || task?.microtarefas?.[0]?.descricao || `Abrir a tarefa e escrever o primeiro passo por 5 minutos`;
+      const firstAction = getTaskNextActionPresentation(task).action || 'Abrir a tarefa e escrever o primeiro passo';
       await updateTask(task.id, {
-        nextAction: `${firstAction} (apenas 5 minutos)`
+        nextAction: firstAction,
+        nextActionMinutes: 5
       });
     }
   },
@@ -147,7 +149,8 @@ export default function BlockedHelpDialog({ task, isOpen, onOpenChange, onReques
       dataSugeridaExecucao: task.dataSugeridaExecucao || null,
       scheduledPeriod: task.scheduledPeriod || null,
       energiaNecessaria: task.energiaNecessaria || null,
-      nextAction: task.nextAction || ''
+      nextAction: task.nextAction || '',
+      nextActionMinutes: task.nextActionMinutes || null
     };
     let createdWaitingId = null;
     let createdSupportTaskId = null;

@@ -1,5 +1,6 @@
 
 import { suggestTaskSchedule } from './schedulingRules.js';
+import { toIsoDate } from './localDate.js';
 
 const ACTION_VERBS = [
   'lançar',
@@ -31,6 +32,7 @@ const FOLLOW_UP_VERBS = ['acompanhar', 'avaliar', 'verificar', 'olhar'];
 const VERB_PATTERN = ACTION_VERBS.map(v => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
 
 const PROJECT_KEYWORDS = [
+  { pattern: /\binpacta\b/i, value: 'InPACTA' },
   { pattern: /\bleone\b/i, value: 'Leone' },
   { pattern: /\bcorcril\b/i, value: 'Corcril' },
   { pattern: /\bexpocentro\b/i, value: 'Expocentro' },
@@ -108,6 +110,12 @@ function detectAction(text) {
 function detectProject(text) {
   const hit = PROJECT_KEYWORDS.find(item => item.pattern.test(text));
   return hit?.value || null;
+}
+
+function detectSource(text) {
+  if (/\bwhats\s*app\b|\bwhatsapp\b/i.test(text)) return 'WhatsApp';
+  if (/\be-?mail\b|\bmensagem de e-?mail\b/i.test(text)) return 'E-mail';
+  return 'Texto colado';
 }
 
 function hasExplicitContextProjectReference(text) {
@@ -334,6 +342,18 @@ function generateTypedSubtasks(type, text) {
   }
 
   if (type === 'site') {
+    if (/whats\s*app|whatsapp/i.test(lower)) {
+      const contactMatch = text.match(/\b(?:o|a)\s+([\p{L}-]+)\s+(?:pediu|solicitou)/iu);
+      const contact = contactMatch?.[1] || 'responsável';
+      return [
+        `Abrir a conversa do ${contact} no WhatsApp e localizar o pedido`,
+        'Separar as fotos e os textos mencionados',
+        'Abrir a página que será alterada',
+        'Aplicar as alterações solicitadas',
+        'Revisar no desktop e no celular',
+        'Publicar ou enviar para aprovação'
+      ];
+    }
     return [
       'Separar nome, localização e descrição do empreendimento',
       'Separar imagens e materiais disponíveis',
@@ -858,6 +878,8 @@ export function parseBrainDumpToTasks(inputText) {
 
     parsed.push({
       title: entry.forcedTitle || toDisplayTitle(rawChunk),
+      originalText: rawChunk,
+      sourceType: detectSource(rawChunk),
       project: inferredProject || '',
       type: taskType,
       objective: `Concluir "${entry.forcedTitle || toDisplayTitle(rawChunk)}" com clareza e registro dos próximos passos.`,
@@ -944,7 +966,8 @@ export function parseUnloadMindToPlan(rawText) {
     const convertedTask = {
       id: uid('plan-task'),
       title: task.title,
-      originalText: task.title,
+      originalText: task.originalText || task.title,
+      sourceType: task.sourceType || detectSource(rawText),
       taskType: task.type,
       project: task.project,
       timeEstimate: task.estimatedMinutes,
@@ -983,4 +1006,58 @@ export function parseUnloadMindToPlan(rawText) {
   plan.baixa = [...plan.podeEsperar];
 
   return plan;
+}
+
+function availableMinutesFromPreference(value) {
+  const normalized = String(value || '').toLocaleLowerCase('pt-BR');
+  if (normalized === '30min' || normalized === '30 min') return 30;
+  if (normalized === '1h') return 60;
+  if (normalized === '2h') return 120;
+  if (normalized === '4h') return 240;
+  return 120;
+}
+
+export function applyPlanningPreferences(plan, preferences = {}) {
+  if (!plan) return null;
+  const detailLimit = preferences.microtaskDetail === 'poucos'
+    ? 3
+    : preferences.microtaskDetail === 'detalhado' ? 7 : 5;
+  const comfortableDuration = Math.max(5, Number(preferences.comfortableDuration || 30));
+  const maxDailyPriorities = Math.max(1, Number(preferences.maxDailyPriorities || 3));
+  const availableMinutes = availableMinutesFromPreference(preferences.availableTime);
+  const preferredPeriods = Array.isArray(preferences.preferredPeriods) && preferences.preferredPeriods.length
+    ? preferences.preferredPeriods
+    : ['Manhã', 'Tarde'];
+  const groupKeys = ['maxima', 'alta', 'media', 'podeEsperar', 'acompanharDepois'];
+
+  const next = { ...plan };
+  groupKeys.forEach((key) => {
+    next[key] = (plan[key] || []).map((task) => {
+      const scheduledPeriod = preferredPeriods.some((period) => normalizeForSignature(period) === normalizeForSignature(task.scheduledPeriod))
+        ? task.scheduledPeriod
+        : preferredPeriods[0];
+      return {
+        ...task,
+        scheduledPeriod,
+        periodoSugerido: scheduledPeriod,
+        focusBlockMinutes: Math.min(Number(task.timeEstimate || comfortableDuration), comfortableDuration),
+        microtarefas: (task.microtarefas || []).slice(0, detailLimit),
+      };
+    });
+  });
+  next.baixa = [...next.podeEsperar];
+
+  const allTasks = groupKeys.flatMap((key) => next[key]);
+  const todayTasks = allTasks.filter((task) => task.scheduledDate && task.scheduledDate === toIsoDate(new Date()));
+  const todayMinutes = todayTasks.reduce((sum, task) => sum + Number(task.timeEstimate || 0), 0);
+  const warnings = [];
+  if (todayTasks.length > maxDailyPriorities) warnings.push(`Há ${todayTasks.length} prioridades previstas para hoje; sua preferência é ${maxDailyPriorities}.`);
+  if (todayMinutes > availableMinutes) warnings.push(`O plano prevê ${todayMinutes} minutos hoje para ${availableMinutes} minutos normalmente disponíveis.`);
+
+  next.meta = {
+    ...(plan.meta || {}),
+    preferencesApplied: { comfortableDuration, maxDailyPriorities, microtaskDetail: preferences.microtaskDetail || 'equilibrado', availableMinutes, preferredPeriods },
+    planningWarnings: warnings,
+  };
+  return next;
 }

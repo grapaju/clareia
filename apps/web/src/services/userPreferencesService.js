@@ -9,7 +9,10 @@ export const DEFAULT_USER_PREFERENCES = Object.freeze({
   onboardingDismissed: false,
   goals: [],
   visualProfile: 'equilibrado',
-  textSize: 'normal',
+  todayViewMode: 'complete',
+  textSize: 'confortavel',
+  microtaskDetail: 'equilibrado',
+  openingPreference: 'dashboard',
   density: 'media',
   contrast: 'normal',
   reduceMotion: false,
@@ -41,9 +44,11 @@ function storageKey(userId) {
 }
 
 export function normalizeUserPreferences(value = {}) {
+  const textSize = value.textSize === 'grande' || value.textSize === 'maior' ? 'grande' : 'confortavel';
   return {
     ...DEFAULT_USER_PREFERENCES,
     ...value,
+    textSize,
     goals: Array.isArray(value.goals) ? value.goals.slice(0, 2) : [],
     activeDays: Array.isArray(value.activeDays) ? value.activeDays : DEFAULT_USER_PREFERENCES.activeDays,
     preferredPeriods: Array.isArray(value.preferredPeriods) ? value.preferredPeriods : DEFAULT_USER_PREFERENCES.preferredPeriods,
@@ -51,6 +56,16 @@ export function normalizeUserPreferences(value = {}) {
     quietHours: { ...DEFAULT_USER_PREFERENCES.quietHours, ...(value.quietHours || {}) },
     integrations: { ...DEFAULT_USER_PREFERENCES.integrations, ...(value.integrations || {}) },
   };
+}
+
+export function applyUserPreferencesToRoot(preferences) {
+  if (typeof window === 'undefined') return;
+  const next = normalizeUserPreferences(preferences);
+  const root = window.document.documentElement;
+  root.classList.toggle('reduce-motion', Boolean(next.reduceMotion));
+  root.classList.toggle('high-contrast', next.contrast === 'alto');
+  root.dataset.textSize = next.textSize;
+  root.dataset.density = next.density;
 }
 
 export function readUserPreferences(userId) {
@@ -65,11 +80,7 @@ export function readUserPreferences(userId) {
 export function saveUserPreferencesLocally(userId, updates) {
   const next = normalizeUserPreferences({ ...readUserPreferences(userId), ...updates, updatedAt: new Date().toISOString() });
   window.localStorage.setItem(storageKey(userId), JSON.stringify(next));
-  const root = window.document.documentElement;
-  root.classList.toggle('reduce-motion', Boolean(next.reduceMotion));
-  root.classList.toggle('high-contrast', next.contrast === 'alto');
-  root.dataset.textSize = next.textSize;
-  root.dataset.density = next.density;
+  applyUserPreferencesToRoot(next);
   return next;
 }
 

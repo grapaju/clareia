@@ -6,7 +6,8 @@
 	"scripts": {
 		"dev": "node --trace-deprecation --env-file=.env src/main.js",
 		"start": "node --env-file=.env src/main.js",
-		"lint": "eslint . --quiet"
+		"lint": "eslint . --quiet",
+		"test:isolation": "node --env-file=.env --test src/user-isolation.integration.test.mjs"
 	},
 	"dependencies": {
 		"bcryptjs": "^2.4.3",

@@ -27,10 +27,12 @@ import { useAuth } from '@/contexts/AuthContext.jsx';
 import { normalizeTaskTypeForTaskCollection, parseUnloadMindToPlan } from '@/lib/unloadMindLogic.js';
 import { toast } from 'sonner';
 import { getCurrentAccountId } from '@/lib/apiClient.js';
+import { readUserScopedJson } from '@/lib/userScopedStorage.js';
 import { useTaskContext } from '@/hooks/useTaskContext.js';
 import { createProjectNote } from '@/services/projectNoteService.js';
 import { appendProjectHistory } from '@/services/projectHistoryService.js';
 import { createOrReusePlanDraft } from '@/services/planDraftService.js';
+import { readUserPreferences } from '@/services/userPreferencesService.js';
 import {
   createUnsortedNote,
   formatNoteDateTime,
@@ -115,18 +117,12 @@ export default function UnloadMindPage() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    try {
-      const raw = window.localStorage.getItem('clareia_project_profiles_v1');
-      const parsed = JSON.parse(raw || '[]');
-      const projects = Array.isArray(parsed)
-        ? parsed.map((item) => String(item?.name || '').trim()).filter(Boolean)
-        : [];
-      const uniqueSorted = [...new Set(projects)].sort((a, b) => a.localeCompare(b, 'pt-BR'));
-      setProjectOptions(uniqueSorted);
-    } catch {
-      setProjectOptions([]);
-    }
-  }, []);
+    const parsed = readUserScopedJson('clareia_project_profiles_v1', [], userId);
+    const projects = Array.isArray(parsed)
+      ? parsed.map((item) => String(item?.name || '').trim()).filter(Boolean)
+      : [];
+    setProjectOptions([...new Set(projects)].sort((a, b) => a.localeCompare(b, 'pt-BR')));
+  }, [userId]);
 
   const getStatusFromScheduledDate = (scheduledDate) => {
     if (!scheduledDate) return 'Esta semana';
@@ -169,6 +165,7 @@ export default function UnloadMindPage() {
           userId,
           accountId,
           origin: 'plano-clareado',
+          preferences: readUserPreferences(userId),
         });
         
         if (!customText) {

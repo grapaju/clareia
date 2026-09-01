@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
@@ -54,6 +55,8 @@ const TASK_TYPE_OPTIONS = [
 ];
 
 const PRIORITY_OPTIONS = ['Prioridade máxima', 'Prioridade alta', 'Prioridade média', 'Pode esperar', 'Acompanhar depois'];
+const ENERGY_OPTIONS = ['Baixa', 'Média', 'Alta'];
+const RECURRENCE_OPTIONS = ['Nenhuma', 'Diária', 'Semanal', 'Quinzenal', 'Mensal', 'Anual'];
 
 const SENSITIVE_WARNING = 'Evite salvar senhas sensíveis diretamente no Clareia. Use um gerenciador seguro ou registre apenas onde o acesso está armazenado.';
 
@@ -132,6 +135,7 @@ export default function ClearPlanPage() {
   const [lowStimIndex, setLowStimIndex] = useState(0);
   const [showAllTasks, setShowAllTasks] = useState(false);
   const [projectContext, setProjectContext] = useState({ projects: [], aliases: [] });
+  const [selectedTaskIds, setSelectedTaskIds] = useState([]);
 
   const [deleteDialog, setDeleteDialog] = useState({ open: false, taskId: null });
   const [mergeDialog, setMergeDialog] = useState({ open: false, sourceId: null, targetId: '' });
@@ -247,6 +251,7 @@ export default function ClearPlanPage() {
     }));
 
     setEditableTasks(all);
+    setSelectedTaskIds(all.map((task) => task.id));
     setExpandedTaskIds([]);
     setEditingTaskId(null);
     setLowStimIndex(0);
@@ -308,6 +313,7 @@ export default function ClearPlanPage() {
     setEditableTasks((current) => current.map((task) => {
       if (task.id !== taskId) return task;
       if (value === 'undecided') return { ...task, project: '', projectStatus: 'undecided' };
+      if (value === 'none') return { ...task, project: '', projectStatus: 'none' };
       if (value === 'personal') return { ...task, project: 'Pessoal', projectStatus: 'personal' };
       if (value === 'new') return { ...task, projectStatus: 'new' };
       return {
@@ -370,9 +376,37 @@ export default function ClearPlanPage() {
   const confirmRemoveTask = () => {
     if (!deleteDialog.taskId) return;
     setEditableTasks((prev) => prev.filter((task) => task.id !== deleteDialog.taskId));
+    setSelectedTaskIds((prev) => prev.filter((id) => id !== deleteDialog.taskId));
     setExpandedTaskIds((prev) => prev.filter((id) => id !== deleteDialog.taskId));
     setDeleteDialog({ open: false, taskId: null });
     toast.success('Tarefa removida da revisão.');
+  };
+
+  const splitTask = (taskId) => {
+    setEditableTasks((current) => {
+      const source = current.find((task) => task.id === taskId);
+      if (!source) return current;
+      const microtasks = source.microtarefas || [];
+      const splitIndex = Math.max(1, Math.ceil(microtasks.length / 2));
+      const firstMinutes = Math.max(5, Math.ceil(Number(source.timeEstimate || 30) / 2));
+      const secondMinutes = Math.max(5, Number(source.timeEstimate || 30) - firstMinutes);
+      const newId = `${source.id}-split-${Date.now()}`;
+      const first = { ...source, timeEstimate: firstMinutes, microtarefas: microtasks.slice(0, splitIndex) };
+      const second = {
+        ...source,
+        id: newId,
+        title: `${source.title} - parte 2`,
+        timeEstimate: secondMinutes,
+        microtarefas: microtasks.slice(splitIndex),
+        firstStep: microtasks[splitIndex]?.descricao || '',
+      };
+      const sourceIndex = current.findIndex((task) => task.id === taskId);
+      const next = [...current];
+      next.splice(sourceIndex, 1, first, second);
+      if (selectedTaskIds.includes(taskId)) setSelectedTaskIds((ids) => [...new Set([...ids, newId])]);
+      return next;
+    });
+    toast.success('Tarefa separada. Revise os títulos e passos das duas partes.');
   };
 
   const openMergeDialog = (sourceId) => {
@@ -496,7 +530,7 @@ export default function ClearPlanPage() {
     }
 
     const revisedPlan = buildPlanFromEditableTasks();
-    const allTasks = getAllPlanTasks(revisedPlan);
+    const allTasks = getAllPlanTasks(revisedPlan).filter((task) => selectedTaskIds.includes(task.id));
 
     if (allTasks.length === 0) {
       toast.error('Não há tarefas para criar.');
@@ -573,6 +607,23 @@ export default function ClearPlanPage() {
     } catch (error) {
       console.error(error);
       toast.error('Não foi possível salvar agora. Suas alterações continuam na tela.');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleCancelPreview = async () => {
+    if (!planData?.id) return;
+    setIsProcessing(true);
+    try {
+      await updatePlanStatus(planData, 'cancelled', { cancelledAt: new Date().toISOString() });
+      const originalText = planData.conteudoOriginal || '';
+      setPlanData(null);
+      navigate('/criar-plano', { replace: true, state: { prefillText: originalText } });
+      toast.info('Revisão cancelada. Nenhuma tarefa ou projeto foi criado.');
+    } catch (error) {
+      console.error(error);
+      toast.error('Não foi possível cancelar agora. Nenhum item foi criado.');
     } finally {
       setIsProcessing(false);
     }
@@ -677,9 +728,16 @@ export default function ClearPlanPage() {
                 </details>
               )}
 
+              {(plan?.meta?.planningWarnings || []).length > 0 && (
+                <div className="mb-5 rounded-lg border border-border bg-muted/40 px-4 py-3" role="status">
+                  <p className="font-medium text-foreground">Revise a capacidade do dia</p>
+                  {(plan.meta.planningWarnings || []).map((warning) => <p key={warning} className="mt-1 text-sm text-muted-foreground">{warning}</p>)}
+                </div>
+              )}
+
               <div className="flex flex-wrap gap-3 mb-6 bg-card p-3 rounded-2xl border border-border shadow-sm justify-center sticky top-[72px] z-30">
                 <Button onClick={handleCreateTasks} disabled={isProcessing} className="bg-primary text-primary-foreground hover:bg-primary/90 px-5 rounded-xl">
-                  <ListTodo className="w-4 h-4 mr-2" /> {editableTasks.length === 1 ? 'Criar tarefa' : 'Criar meu plano'}
+                  <ListTodo className="w-4 h-4 mr-2" /> Confirmar {selectedTaskIds.length === editableTasks.length ? 'todos' : `${selectedTaskIds.length} selecionados`}
                 </Button>
                 <Button variant="outline" onClick={handleSaveForLater} disabled={isProcessing} className="rounded-xl">
                   Salvar para continuar depois
@@ -687,10 +745,18 @@ export default function ClearPlanPage() {
                 <Button variant="ghost" onClick={handleEditSource} className="rounded-xl">
                   Voltar e escrever mais
                 </Button>
+                <Button variant="ghost" onClick={handleCancelPreview} disabled={isProcessing} className="rounded-xl">Cancelar sem criar</Button>
               </div>
 
               <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
                 <div className="flex items-center gap-2">
+                  <label className="flex min-h-11 items-center gap-2 rounded-md border border-border px-3 text-sm">
+                    <Checkbox
+                      checked={selectedTaskIds.length === editableTasks.length && editableTasks.length > 0}
+                      onCheckedChange={(checked) => setSelectedTaskIds(checked ? editableTasks.map((task) => task.id) : [])}
+                    />
+                    Selecionar todos
+                  </label>
                   <Button variant="outline" size="sm" onClick={expandAll}>
                     <ChevronDown className="w-4 h-4 mr-1" /> Expandir tudo
                   </Button>
@@ -731,7 +797,12 @@ export default function ClearPlanPage() {
                     <Card key={task.id} className="bg-card border-border shadow-sm rounded-xl overflow-hidden">
                       <CardContent className="p-4 md:p-5">
                         <div className="space-y-3">
-                          <div>
+                          <div className="flex items-start gap-3">
+                            <Checkbox
+                              checked={selectedTaskIds.includes(task.id)}
+                              onCheckedChange={(checked) => setSelectedTaskIds((current) => checked ? [...new Set([...current, task.id])] : current.filter((id) => id !== task.id))}
+                              aria-label={`Selecionar ${task.title}`}
+                            />
                             <h3 className="text-lg md:text-xl font-medium text-foreground leading-snug w-full">
                               {task.title}
                             </h3>
@@ -749,9 +820,13 @@ export default function ClearPlanPage() {
                                 <span className="px-2 py-1 rounded-full bg-primary/10 border border-primary/20 text-primary">{task.priority || 'Prioridade média'}</span>
                                 <span className="px-2 py-1 rounded-full bg-muted border border-border"><Clock className="w-3 h-3 inline mr-1" />{task.timeEstimate || 0} min</span>
                                 <span className="px-2 py-1 rounded-full bg-muted border border-border"><Calendar className="w-3 h-3 inline mr-1" />{task.scheduledLabel || task.quandoFazer || 'Esta semana'}</span>
+                                <span className="px-2 py-1 rounded-full bg-muted border border-border">Energia: {task.energiaNecessaria || 'Média'}</span>
+                                <span className="px-2 py-1 rounded-full bg-muted border border-border">{task.recurrenceFrequency && task.recurrenceFrequency !== 'Nenhuma' ? `Recorrência: ${task.recurrenceFrequency}` : 'Sem recorrência'}</span>
                               </>
                             )}
                           </div>
+
+                          <p className="text-sm text-muted-foreground">Origem: {task.sourceType || plan?.meta?.origin || 'Texto colado'}</p>
 
                           <p className="text-sm text-foreground/90">
                             <span className="font-medium text-muted-foreground">Primeira ação: </span>
@@ -768,6 +843,7 @@ export default function ClearPlanPage() {
                             <Button size="sm" variant="outline" onClick={() => toggleExpanded(task.id)}>
                               <Layers className="w-3.5 h-3.5 mr-1" /> {expanded ? 'Ocultar passos' : 'Ver passos'}
                             </Button>
+                            <Button size="sm" variant="outline" onClick={() => splitTask(task.id)}>Separar</Button>
                             <Button size="sm" variant="outline" onClick={() => openMergeDialog(task.id)} disabled={editableTasks.length < 2}>
                               <Link2 className="w-3.5 h-3.5 mr-1" /> Juntar
                             </Button>
@@ -801,7 +877,8 @@ export default function ClearPlanPage() {
                                     <SelectTrigger><SelectValue /></SelectTrigger>
                                     <SelectContent>
                                       <SelectItem value="undecided">Decidir depois</SelectItem>
-                                      <SelectItem value="personal">Pessoal</SelectItem>
+                                      <SelectItem value="none">Sem projeto</SelectItem>
+                                      <SelectItem value="personal">Projeto pessoal</SelectItem>
                                       {task.projectStatus === 'new' && <SelectItem value="new">Criar {task.project}</SelectItem>}
                                       {projectContext.projects.filter((project) => project.name !== 'Pessoal').map((project) => (
                                         <SelectItem key={project.name} value={project.name}>{project.name}</SelectItem>
@@ -835,6 +912,20 @@ export default function ClearPlanPage() {
                                         <SelectItem key={priority} value={priority}>{priority}</SelectItem>
                                       ))}
                                     </SelectContent>
+                                  </Select>
+                                </div>
+                                <div className="space-y-1">
+                                  <Label>Energia</Label>
+                                  <Select value={task.energiaNecessaria || 'Média'} onValueChange={(value) => updateTaskField(task.id, 'energiaNecessaria', value)}>
+                                    <SelectTrigger><SelectValue /></SelectTrigger>
+                                    <SelectContent>{ENERGY_OPTIONS.map((energy) => <SelectItem key={energy} value={energy}>{energy}</SelectItem>)}</SelectContent>
+                                  </Select>
+                                </div>
+                                <div className="space-y-1">
+                                  <Label>Recorrência</Label>
+                                  <Select value={task.recurrenceFrequency || 'Nenhuma'} onValueChange={(value) => updateTaskField(task.id, 'recurrenceFrequency', value)}>
+                                    <SelectTrigger><SelectValue /></SelectTrigger>
+                                    <SelectContent>{RECURRENCE_OPTIONS.map((recurrence) => <SelectItem key={recurrence} value={recurrence}>{recurrence}</SelectItem>)}</SelectContent>
                                   </Select>
                                 </div>
                                 <div className="space-y-1">

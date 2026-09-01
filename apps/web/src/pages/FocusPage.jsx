@@ -27,6 +27,7 @@ import {
 import TaskPendingMicrotasksDialog from '@/components/TaskPendingMicrotasksDialog.jsx';
 import TaskPauseDialog from '@/components/TaskPauseDialog.jsx';
 import { getActiveWorkSession } from '@/services/workSessionService.js';
+import { getTaskNextActionPresentation } from '@/lib/todayViewLogic.js';
 
 export default function FocusPage() {
   const navigate = useNavigate();
@@ -60,7 +61,10 @@ export default function FocusPage() {
   const [pendingCompletionData, setPendingCompletionData] = useState(null);
   const [pendingCompletionPayload, setPendingCompletionPayload] = useState(null);
   const [isPauseDialogOpen, setIsPauseDialogOpen] = useState(false);
+  const [microtaskTransition, setMicrotaskTransition] = useState(null);
+  const [showAllMicrotasks, setShowAllMicrotasks] = useState(true);
   const sessionRecordedRef = useRef(false);
+  const focusBlockMinutes = Number(selectedTask?.focusBlockMinutes || selectedTask?.timeEstimate || 30);
 
   // Sync selectedTask when global tasks change (after edit)
   useEffect(() => {
@@ -78,21 +82,18 @@ export default function FocusPage() {
     const activeSession = getActiveWorkSession();
     if (!activeSession?.id || activeSession.taskId !== selectedTask.id) return;
 
-    const totalSeconds = Number(selectedTask.timeEstimate || 30) * 60;
+    const totalSeconds = focusBlockMinutes * 60;
     const elapsedSeconds = Math.max(0, Math.floor((Date.now() - new Date(activeSession.startedAt).getTime()) / 1000));
     setTimeTotal(totalSeconds);
     setTimeRemaining(Math.max(0, totalSeconds - elapsedSeconds));
     setPhase(elapsedSeconds >= totalSeconds ? 'completed' : 'working');
     setIsPaused(false);
-  }, [phase, selectedTask]);
+  }, [focusBlockMinutes, phase, selectedTask]);
 
   useEffect(() => {
     if (!selectedTask?.id || objective.trim()) return;
-    const progress = getTaskMicrotaskProgress(selectedTask);
-    const suggestedObjective = selectedTask.nextAction
-      || progress.nextPending?.title
-      || progress.nextPending?.descricao
-      || `Avançar de forma concreta em: ${selectedTask.title}`;
+    const presentation = getTaskNextActionPresentation(selectedTask);
+    const suggestedObjective = presentation.action || `Avançar de forma concreta em: ${selectedTask.title}`;
     setObjective(suggestedObjective);
   }, [objective, selectedTask]);
 
@@ -113,7 +114,7 @@ export default function FocusPage() {
   }, [phase, isPaused, timeRemaining]);
 
   const handleStart = async () => {
-    const totalSecs = (selectedTask?.timeEstimate || 30) * 60;
+    const totalSecs = focusBlockMinutes * 60;
     setTimeTotal(totalSecs);
     setTimeRemaining(totalSecs);
     setSessionResult('');
@@ -264,7 +265,7 @@ export default function FocusPage() {
     navigate('/');
   };
 
-  const handleToggleMicrotask = async (id, checked) => {
+  const handleToggleMicrotask = async (id, checked, options = {}) => {
     if (!selectedTask?.id) return;
 
     const updatedMicrotasks = upsertMicrotaskCompletion(activeMicrotasks, id, checked, selectedTask.id);
@@ -274,6 +275,14 @@ export default function FocusPage() {
     try {
       const updatedTask = await updateTask(selectedTask.id, { microtarefas: updatedMicrotasks });
       setSelectedTask(updatedTask);
+      if (checked && options.announce !== false) {
+        const progress = getTaskMicrotaskProgress(updatedTask);
+        setMicrotaskTransition({ completedId: id, nextStep: progress.nextPending?.title || '', allDone: progress.total > 0 && progress.pending === 0 });
+        setShowAllMicrotasks(false);
+      } else if (!checked) {
+        setMicrotaskTransition(null);
+        setShowAllMicrotasks(true);
+      }
       addTaskHistoryEvent({
         taskId: selectedTask.id,
         projectId: selectedTask.project || 'Pessoal',
@@ -285,11 +294,16 @@ export default function FocusPage() {
     }
   };
 
-  const handlePauseTask = async (note) => {
+  const handleUndoMicrotask = async () => {
+    if (!microtaskTransition?.completedId) return;
+    await handleToggleMicrotask(microtaskTransition.completedId, false, { announce: false });
+  };
+
+  const handlePauseTask = async (note, pauseOptions = {}) => {
     if (!selectedTask?.id) return;
     await persistFocusSession('Tarefa pausada');
     await persistNextAction();
-    await pauseTask(selectedTask.id, { note });
+    await pauseTask(selectedTask.id, { note, ...pauseOptions });
     setSelectedTask(null);
     navigate('/');
   };
@@ -346,7 +360,7 @@ export default function FocusPage() {
                   
                   <div className="mb-8">
                     <h1 className="text-3xl font-medium text-foreground mb-2">Preparando o foco</h1>
-                    {!lowStimulationMode && <p className="text-muted-foreground">O que você fará nos próximos {selectedTask.timeEstimate} minutos.</p>}
+                    {!lowStimulationMode && <p className="text-muted-foreground">O que você fará nos próximos {focusBlockMinutes} minutos.</p>}
                   </div>
 
                   <div className="bg-secondary/30 p-6 rounded-2xl mb-8 border border-border">
@@ -418,10 +432,36 @@ export default function FocusPage() {
                     )}
                   </div>
 
-                  {activeMicrotasks.length > 0 && (
+                  {microtaskTransition && (
+                    <section className="rounded-lg border border-border bg-card p-5" aria-live="polite" aria-atomic="true">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <p className="font-medium text-foreground">{microtaskTransition.allDone ? 'Todos os passos foram concluídos.' : 'Passo concluído.'}</p>
+                        <Button variant="ghost" onClick={handleUndoMicrotask}>Desfazer</Button>
+                      </div>
+                      {microtaskTransition.allDone ? (
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          <Button onClick={() => setIsCompletionDialogOpen(true)}>Concluir tarefa</Button>
+                          <Button variant="outline" onClick={() => setMicrotaskTransition(null)}>Continuar trabalhando</Button>
+                          <Button variant="ghost" onClick={() => setShowAllMicrotasks(true)}>Rever passos</Button>
+                        </div>
+                      ) : (
+                        <>
+                          <p className="mt-4 text-sm font-medium text-muted-foreground">Próximo passo</p>
+                          <p className="mt-1 text-lg text-foreground">{microtaskTransition.nextStep}</p>
+                          <div className="mt-4 flex flex-wrap gap-2">
+                            <Button onClick={() => setMicrotaskTransition(null)}>Continuar</Button>
+                            <Button variant="outline" onClick={() => setIsPauseDialogOpen(true)}>Fazer uma pausa</Button>
+                            <Button variant="ghost" onClick={() => setIsBlockedDialogOpen(true)}>Não consigo agora</Button>
+                          </div>
+                        </>
+                      )}
+                    </section>
+                  )}
+
+                  {activeMicrotasks.length > 0 && (!lowStimulationMode || showAllMicrotasks) && (
                     <div className="space-y-2">
                       <p className="text-sm font-medium text-foreground">
-                        {microtaskProgress.completed} de {microtaskProgress.total} passos concluídos
+                        Passo {Math.min(microtaskProgress.completed + 1, microtaskProgress.total)} de {microtaskProgress.total} desta tarefa
                       </p>
                       <p className="text-sm text-muted-foreground">
                         Próxima microtarefa: {microtaskProgress.nextPending?.title || 'Tudo concluído'}
@@ -562,6 +602,7 @@ export default function FocusPage() {
         isOpen={isPauseDialogOpen}
         onOpenChange={setIsPauseDialogOpen}
         defaultValue={selectedTask?.pauseNote || ''}
+        task={selectedTask}
         onConfirm={handlePauseTask}
       />
     </>

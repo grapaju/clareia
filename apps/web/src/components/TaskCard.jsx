@@ -39,6 +39,7 @@ import { normalizeTaskStatus, TASK_STATUS } from '@/lib/taskExecution.js';
 import TaskPendingMicrotasksDialog from '@/components/TaskPendingMicrotasksDialog.jsx';
 import TaskPauseDialog from '@/components/TaskPauseDialog.jsx';
 import { useAppMode } from '@/contexts/AppModeContext.jsx';
+import { getTaskNextActionPresentation } from '@/lib/todayViewLogic.js';
 
 export default function TaskCard({ task, minimal }) {
   const navigate = useNavigate();
@@ -67,7 +68,7 @@ export default function TaskCard({ task, minimal }) {
   };
 
   const whenToExecute = task.whenToExecute || getScheduledLabelForTask(task, new Date());
-  const firstAction = task.nextAction || task.microtarefas?.[0]?.title || task.microtarefas?.[0]?.descricao || '';
+  const firstAction = getTaskNextActionPresentation(task).action;
 
   const handleArchive = async () => {
     try {
@@ -104,9 +105,9 @@ export default function TaskCard({ task, minimal }) {
     }
   };
 
-  const handlePauseFromPending = async (note) => {
+  const handlePauseFromPending = async (note, pauseOptions = {}) => {
     try {
-      await pauseTask(task.id, { note });
+      await pauseTask(task.id, { note, ...pauseOptions });
       setPendingCompletionData(null);
       setPendingCompletionPayload(null);
       setIsPauseDialogOpen(false);
@@ -350,6 +351,7 @@ export default function TaskCard({ task, minimal }) {
         isOpen={isPauseDialogOpen}
         onOpenChange={setIsPauseDialogOpen}
         defaultValue={task?.pauseNote || ''}
+        task={task}
         onConfirm={handlePauseFromPending}
       />
     </>

@@ -67,9 +67,14 @@ function normalizeCheckInValue(value, field) {
 export function TaskProvider({ children }) {
   const { currentUser } = useAuth();
   const [tasks, setTasks] = useState([]);
+  const [tasksOwnerId, setTasksOwnerId] = useState('');
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [selectedTask, setSelectedTask] = useState(null);
   const completionPromisesRef = useRef(new Map());
+  const fetchSequenceRef = useRef(0);
+  const currentUserIdRef = useRef(currentUser?.id || '');
+  currentUserIdRef.current = currentUser?.id || '';
   
   // Daily check-in state
   const [checkIn, setCheckIn] = useState(null);
@@ -101,21 +106,36 @@ export function TaskProvider({ children }) {
   };
 
   const fetchTasks = async () => {
-    if (!currentUser) return;
+    const requestedUserId = currentUser?.id || '';
+    if (!requestedUserId) return;
+    const fetchSequence = ++fetchSequenceRef.current;
+    setTasks([]);
+    setTasksOwnerId('');
     setIsLoading(true);
+    setLoadError('');
     try {
       const records = await listTasksFromApi();
+      if (fetchSequence !== fetchSequenceRef.current || currentUserIdRef.current !== requestedUserId) return;
       setTasks(records.map((record) => normalizeTaskRecord(record)));
+      setTasksOwnerId(requestedUserId);
     } catch (error) {
       console.error("Erro ao buscar tarefas:", error);
+      if (fetchSequence === fetchSequenceRef.current && currentUserIdRef.current === requestedUserId) {
+        setLoadError('Não foi possível carregar suas tarefas.');
+      }
     } finally {
-      setIsLoading(false);
+      if (fetchSequence === fetchSequenceRef.current && currentUserIdRef.current === requestedUserId) {
+        setIsLoading(false);
+      }
     }
   };
 
   useEffect(() => {
     if (!currentUser) {
+      fetchSequenceRef.current += 1;
       setTasks([]);
+      setTasksOwnerId('');
+      setLoadError('');
       setIsLoading(false);
       return;
     }
@@ -507,6 +527,7 @@ export function TaskProvider({ children }) {
     const progress = getTaskMicrotaskProgress(task);
     const nextSubtaskId = progress.nextPending?.id || task.lastActiveSubtaskId || '';
     const note = String(options.note || '').trim();
+    const resumeSuggestedDate = String(options.resumeSuggestedDate || '').trim() || null;
 
     const finishedSession = finishActiveWorkSessionForTask(id, {
       notes: note || 'Tarefa pausada'
@@ -516,7 +537,9 @@ export function TaskProvider({ children }) {
     const updatedTask = await updateTask(id, {
       status: TASK_STATUS.PAUSADA,
       lastActiveSubtaskId: nextSubtaskId,
-      pauseNote: note
+      pauseNote: note,
+      resumeSuggestedDate,
+      pausedSessionId: finishedSession?.id || task.pausedSessionId || null
     });
 
     addTaskHistoryEvent({
@@ -598,9 +621,11 @@ export function TaskProvider({ children }) {
     });
   };
 
+  const visibleTasks = tasksOwnerId === currentUser?.id ? tasks : [];
+
   return (
     <TaskContext.Provider value={{ 
-      tasks, 
+      tasks: visibleTasks,
       addTask, 
       updateTask, 
       deleteTask, 
@@ -617,6 +642,7 @@ export function TaskProvider({ children }) {
       recordFocusSession,
       refreshTasks,
       isLoading,
+      loadError,
       selectedTask,
       setSelectedTask,
       checkIn,

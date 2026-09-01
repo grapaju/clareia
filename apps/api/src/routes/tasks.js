@@ -37,8 +37,8 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   const id = `task-${Date.now()}-${randomUUID().slice(0, 8)}`;
-  const payload = { ...(req.body || {}), id };
-  const accountId = normalizeText(payload.accountId);
+  const accountId = normalizeText(req.authUser?.accountId);
+  const payload = { ...(req.body || {}), id, userId: req.userId, accountId };
 
   const created = await runQuery(
     `INSERT INTO tasks (id, user_id, account_id, data)
@@ -181,9 +181,11 @@ router.patch('/:id', async (req, res) => {
     ...(existing.data || {}),
     ...(req.body || {}),
     id: existing.id,
+    userId: req.userId,
+    accountId: normalizeText(req.authUser?.accountId),
   };
 
-  const nextAccountId = normalizeText(mergedData.accountId || existing.account_id);
+  const nextAccountId = normalizeText(req.authUser?.accountId);
 
   const updated = await runQuery(
     `UPDATE tasks
@@ -218,10 +220,18 @@ router.delete('/:id', async (req, res) => {
 
 router.get('/:taskId/notes', async (req, res) => {
   const taskId = normalizeText(req.params?.taskId);
+  const task = await runQuery('SELECT id FROM tasks WHERE id = $1 AND user_id = $2 LIMIT 1', [taskId, req.userId]);
+  if (!task.rows[0]) {
+    return res.status(404).json({ message: 'Tarefa nao encontrada.' });
+  }
   const notes = await runQuery(
     `SELECT id, task_id, content, created_at
-     FROM task_notes
-     WHERE task_id = $1 AND user_id = $2
+     FROM task_notes AS note
+     WHERE note.task_id = $1 AND note.user_id = $2
+       AND EXISTS (
+         SELECT 1 FROM tasks
+         WHERE tasks.id = note.task_id AND tasks.user_id = note.user_id
+       )
      ORDER BY created_at DESC`,
     [taskId, req.userId]
   );
@@ -239,7 +249,7 @@ router.get('/:taskId/notes', async (req, res) => {
 router.post('/:taskId/notes', async (req, res) => {
   const taskId = normalizeText(req.params?.taskId);
   const content = normalizeText(req.body?.content);
-  const accountId = normalizeText(req.body?.accountId);
+  const accountId = normalizeText(req.authUser?.accountId);
 
   if (!taskId || !content) {
     return res.status(400).json({ message: 'taskId e content sao obrigatorios.' });
@@ -248,12 +258,17 @@ router.post('/:taskId/notes', async (req, res) => {
   const id = `note-${Date.now()}-${randomUUID().slice(0, 8)}`;
   const created = await runQuery(
     `INSERT INTO task_notes (id, task_id, user_id, account_id, content)
-     VALUES ($1, $2, $3, $4, $5)
+     SELECT $1, tasks.id, $3, $4, $5
+     FROM tasks
+     WHERE tasks.id = $2 AND tasks.user_id = $3
      RETURNING id, task_id, content, created_at`,
     [id, taskId, req.userId, accountId, content]
   );
 
   const row = created.rows[0];
+  if (!row) {
+    return res.status(404).json({ message: 'Tarefa nao encontrada.' });
+  }
   res.status(201).json({
     item: {
       id: row.id,
@@ -266,10 +281,18 @@ router.post('/:taskId/notes', async (req, res) => {
 
 router.get('/:taskId/focus-sessions', async (req, res) => {
   const taskId = normalizeText(req.params?.taskId);
+  const task = await runQuery('SELECT id FROM tasks WHERE id = $1 AND user_id = $2 LIMIT 1', [taskId, req.userId]);
+  if (!task.rows[0]) {
+    return res.status(404).json({ message: 'Tarefa nao encontrada.' });
+  }
   const sessions = await runQuery(
     `SELECT id, task_id, data, created_at
-     FROM focus_sessions
-     WHERE task_id = $1 AND user_id = $2
+     FROM focus_sessions AS session
+     WHERE session.task_id = $1 AND session.user_id = $2
+       AND EXISTS (
+         SELECT 1 FROM tasks
+         WHERE tasks.id = session.task_id AND tasks.user_id = session.user_id
+       )
      ORDER BY created_at DESC`,
     [taskId, req.userId]
   );
@@ -286,7 +309,7 @@ router.get('/:taskId/focus-sessions', async (req, res) => {
 
 router.post('/:taskId/focus-sessions', async (req, res) => {
   const taskId = normalizeText(req.params?.taskId);
-  const accountId = normalizeText(req.body?.accountId);
+  const accountId = normalizeText(req.authUser?.accountId);
   const idempotencyKey = normalizeText(req.body?.idempotencyKey);
   const id = `focus-${Date.now()}-${randomUUID().slice(0, 8)}`;
   const data = { ...(req.body || {}), taskId, id, ...(idempotencyKey ? { idempotencyKey } : {}) };
@@ -310,7 +333,9 @@ router.post('/:taskId/focus-sessions', async (req, res) => {
 
   const created = await runQuery(
     `INSERT INTO focus_sessions (id, task_id, user_id, account_id, data)
-     VALUES ($1, $2, $3, $4, $5::jsonb)
+     SELECT $1, tasks.id, $3, $4, $5::jsonb
+     FROM tasks
+     WHERE tasks.id = $2 AND tasks.user_id = $3
      ON CONFLICT DO NOTHING
      RETURNING id, task_id, data, created_at`,
     [id, taskId, req.userId, accountId, JSON.stringify(data)]
@@ -329,6 +354,13 @@ router.post('/:taskId/focus-sessions', async (req, res) => {
   }
 
   if (!row) {
+    const task = await runQuery(
+      'SELECT id FROM tasks WHERE id = $1 AND user_id = $2 LIMIT 1',
+      [taskId, req.userId]
+    );
+    if (!task.rows[0]) {
+      return res.status(404).json({ message: 'Tarefa nao encontrada.' });
+    }
     return res.status(409).json({ message: 'A sessao ja foi registrada.' });
   }
 

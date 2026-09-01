@@ -42,6 +42,7 @@ import CreateFollowUpFromTaskDialog from '@/components/CreateFollowUpFromTaskDia
 import { normalizeTaskStatus, TASK_STATUS, upsertMicrotaskCompletion } from '@/lib/taskExecution.js';
 import TaskPendingMicrotasksDialog from '@/components/TaskPendingMicrotasksDialog.jsx';
 import TaskPauseDialog from '@/components/TaskPauseDialog.jsx';
+import { getTaskNextActionPresentation } from '@/lib/todayViewLogic.js';
 
 export default function TaskDetailsModal({ task, isOpen, onClose }) {
   const navigate = useNavigate();
@@ -202,9 +203,9 @@ export default function TaskDetailsModal({ task, isOpen, onClose }) {
     }
   };
 
-  const handlePauseFromPending = async (note) => {
+  const handlePauseFromPending = async (note, pauseOptions = {}) => {
     if (!task?.id) return;
-    await pauseTask(task.id, { note });
+    await pauseTask(task.id, { note, ...pauseOptions });
     setPendingCompletionData(null);
     setPendingCompletionPayload(null);
     setIsPauseDialogOpen(false);
@@ -266,7 +267,7 @@ export default function TaskDetailsModal({ task, isOpen, onClose }) {
 
               <div className="rounded-xl border border-border bg-muted/30 p-4">
                 <p className="text-xs uppercase tracking-wider text-muted-foreground font-medium mb-1">Primeira ação</p>
-                <p className="text-sm text-foreground">{task.nextAction || task.microtarefas?.[0]?.title || task.microtarefas?.[0]?.descricao || 'Definir o primeiro passo prático'}</p>
+                <p className="text-sm text-foreground">{getTaskNextActionPresentation(task).action}</p>
               </div>
 
               <MicrotaskList
@@ -530,6 +531,7 @@ export default function TaskDetailsModal({ task, isOpen, onClose }) {
         isOpen={isPauseDialogOpen}
         onOpenChange={setIsPauseDialogOpen}
         defaultValue={task?.pauseNote || ''}
+        task={task}
         onConfirm={handlePauseFromPending}
       />
 

@@ -1,25 +1,15 @@
 import { addTaskHistoryEvent } from '@/services/taskHistoryService.js';
+import { readUserScopedJson, removeUserScopedItem, writeUserScopedJson } from '@/lib/userScopedStorage.js';
 
 const STORAGE_KEY = 'clareia_work_sessions';
 const ACTIVE_TIMER_KEY = 'clareia_active_work_session';
 
-function safeParse(value, fallback) {
-  try {
-    const parsed = JSON.parse(value);
-    return parsed ?? fallback;
-  } catch {
-    return fallback;
-  }
-}
-
 function readAll() {
-  if (typeof window === 'undefined') return [];
-  return safeParse(window.localStorage.getItem(STORAGE_KEY), []);
+  return readUserScopedJson(STORAGE_KEY, []);
 }
 
 function writeAll(items) {
-  if (typeof window === 'undefined') return;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+  writeUserScopedJson(STORAGE_KEY, items);
 }
 
 function uid(prefix = 'ws') {
@@ -39,17 +29,19 @@ function minutesBetween(startedAt, endedAt) {
 }
 
 function readActiveSession() {
-  if (typeof window === 'undefined') return null;
-  return safeParse(window.localStorage.getItem(ACTIVE_TIMER_KEY), null);
+  return readUserScopedJson(ACTIVE_TIMER_KEY, null);
 }
 
 function writeActiveSession(session) {
-  if (typeof window === 'undefined') return;
   if (!session) {
-    window.localStorage.removeItem(ACTIVE_TIMER_KEY);
+    removeUserScopedItem(ACTIVE_TIMER_KEY);
     return;
   }
-  window.localStorage.setItem(ACTIVE_TIMER_KEY, JSON.stringify(session));
+  writeUserScopedJson(ACTIVE_TIMER_KEY, session);
+}
+
+export function stopUserWorkTimer(userId) {
+  removeUserScopedItem(ACTIVE_TIMER_KEY, userId);
 }
 
 export function getActiveWorkSession() {

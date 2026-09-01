@@ -1,4 +1,6 @@
 import { integratedAiClient } from './integratedAiClient.js';
+import { readUserScopedJson, writeUserScopedJson } from './userScopedStorage.js';
+import { parseLocalDate } from './localDate.js';
 
 const UNSORTED_NOTES_STORAGE_KEY = 'clareia_unsorted_notes';
 const NOTES_UPDATED_EVENT = 'clareia-unsorted-notes-updated';
@@ -35,14 +37,12 @@ function normalizeNote(note, userId = null) {
   };
 }
 
-function readRawNotes() {
-  if (typeof window === 'undefined') return [];
-  return safeParse(window.localStorage.getItem(UNSORTED_NOTES_STORAGE_KEY));
+function readRawNotes(userId) {
+  return safeParse(JSON.stringify(readUserScopedJson(UNSORTED_NOTES_STORAGE_KEY, [], userId)));
 }
 
-function writeRawNotes(notes) {
-  if (typeof window === 'undefined') return;
-  window.localStorage.setItem(UNSORTED_NOTES_STORAGE_KEY, JSON.stringify(notes));
+function writeRawNotes(notes, userId) {
+  if (!writeUserScopedJson(UNSORTED_NOTES_STORAGE_KEY, notes, userId)) return;
   window.dispatchEvent(new CustomEvent(NOTES_UPDATED_EVENT));
 }
 
@@ -73,7 +73,7 @@ export async function syncUnsortedNotesFromApi(userId) {
   if (!userId || typeof window === 'undefined' || typeof window.fetch !== 'function') return listUnsortedNotes(userId);
 
   const response = await integratedAiClient.fetch(`/records/${REMOTE_COLLECTION}?sort=-updated`);
-  const local = readRawNotes().map((note) => normalizeNote(note, note?.userId));
+  const local = readRawNotes(userId).map((note) => normalizeNote(note, note?.userId));
   const remote = (Array.isArray(response?.items) ? response.items : []).map((note) => normalizeNote(note, userId));
   const merged = new Map(local.map((note) => [note.id, note]));
 
@@ -85,15 +85,16 @@ export async function syncUnsortedNotesFromApi(userId) {
   });
 
   const notes = Array.from(merged.values());
-  writeRawNotes(notes);
+  writeRawNotes(notes, userId);
   notes.filter((note) => note.userId === userId).forEach(queueRemoteUpsert);
   return listUnsortedNotes(userId);
 }
 
 export function listUnsortedNotes(userId, status = null) {
   const normalizedFilter = status ? normalizeStatus(status) : null;
-  const notes = readRawNotes()
-    .map((note) => normalizeNote(note, userId))
+  if (!userId) return [];
+  const notes = readRawNotes(userId)
+    .map((note) => normalizeNote(note, note?.userId))
     .filter((note) => !userId || note.userId === userId)
     .filter((note) => (normalizedFilter ? note.status === normalizedFilter : true))
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -107,9 +108,9 @@ export function countPendingUnsortedNotes(userId) {
 
 export function createUnsortedNote({ content, userId, source = 'descarregar-mente', project = '', projectCandidate = '', idempotencyKey = '' }) {
   const normalizedContent = String(content || '').trim();
-  if (!normalizedContent) return null;
+  if (!normalizedContent || !userId) return null;
 
-  const allNotes = readRawNotes();
+  const allNotes = readRawNotes(userId);
   const normalizedKey = String(idempotencyKey || '').trim();
   const duplicate = allNotes
     .map((item) => normalizeNote(item, userId))
@@ -132,13 +133,14 @@ export function createUnsortedNote({ content, userId, source = 'descarregar-ment
   }, userId);
 
   allNotes.push(note);
-  writeRawNotes(allNotes);
+  writeRawNotes(allNotes, userId);
   queueRemoteUpsert(note);
   return note;
 }
 
 export function updateUnsortedNote(noteId, updates, userId = null) {
-  const allNotes = readRawNotes();
+  if (!userId) return null;
+  const allNotes = readRawNotes(userId);
   const index = allNotes.findIndex((note) => note?.id === noteId && (!userId || note?.userId === userId));
   if (index < 0) return null;
 
@@ -151,17 +153,18 @@ export function updateUnsortedNote(noteId, updates, userId = null) {
   }, userId);
 
   allNotes[index] = updated;
-  writeRawNotes(allNotes);
+  writeRawNotes(allNotes, userId);
   queueRemoteUpsert(updated);
   return updated;
 }
 
 export function removeUnsortedNote(noteId, userId = null) {
-  const allNotes = readRawNotes();
+  if (!userId) return false;
+  const allNotes = readRawNotes(userId);
   const next = allNotes.filter((note) => !(note?.id === noteId && (!userId || note?.userId === userId)));
   if (next.length === allNotes.length) return false;
 
-  writeRawNotes(next);
+  writeRawNotes(next, userId);
   if (typeof window !== 'undefined' && typeof window.fetch === 'function') {
     integratedAiClient.fetch(`/records/${REMOTE_COLLECTION}/${encodeURIComponent(noteId)}`, { method: 'DELETE' })
       .catch((error) => {
@@ -194,6 +197,17 @@ export function formatNoteDateTime(value) {
     dateStyle: 'short',
     timeStyle: 'short'
   }).format(date);
+}
+
+export function formatSavedWaitingTime(value, referenceDate = new Date()) {
+  const savedDate = parseLocalDate(value);
+  const today = parseLocalDate(referenceDate);
+  if (!savedDate || !today) return 'Data não informada';
+  const differenceDays = Math.round((today.getTime() - savedDate.getTime()) / 86400000);
+  if (differenceDays <= 0) return 'Guardado hoje';
+  if (differenceDays === 1) return 'Guardado ontem';
+  if (differenceDays <= 6) return `Guardado há ${differenceDays} dias`;
+  return `Guardado em ${savedDate.toLocaleDateString('pt-BR')}`;
 }
 
 export { UNSORTED_NOTES_STORAGE_KEY };
