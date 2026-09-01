@@ -112,6 +112,16 @@ npm run build --prefix apps/web
 pm2 restart clareia-api
 ```
 
+SITE="/www/wwwroot/clareia"
+
+realpath "$SITE"
+ls -ld "$SITE"
+
+chown -R www:www "$SITE"
+
+find "$SITE" -path "$SITE/.git" -prune -o -type d -exec chmod 755 {} +
+find "$SITE" -path "$SITE/.git" -prune -o -type f -exec chmod 644 {} +
+
 ## Checklist de atualizacao (producao)
 
 1. Confirmar backup recente do PostgreSQL.
