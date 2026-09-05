@@ -5,8 +5,14 @@ import { fileURLToPath } from 'node:url';
 import { Readable } from 'node:stream';
 import { google } from 'googleapis';
 import { runQuery } from '../db/postgres.js';
+import {
+	getDriveMoveParameters,
+	normalizeGoogleDocumentName,
+	resolveMaterialDriveFolder,
+} from '../utils/google-drive-materials.js';
 
 const GOOGLE_DRIVE_FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
+const GOOGLE_DRIVE_DOCUMENT_MIME_TYPE = 'application/vnd.google-apps.document';
 const GOOGLE_DRIVE_TEXT_FILE_MIME_TYPE = 'text/plain';
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
@@ -223,19 +229,6 @@ function quoteQueryString(value) {
 	return String(value || '').replace(/'/g, "\\'");
 }
 
-function ensureDocumentFileName(name) {
-	const normalized = normalizeText(name);
-	if (!normalized) {
-		return `Documento-${new Date().toISOString().slice(0, 10)}.txt`;
-	}
-
-	if (/\.(txt|md|csv|json|html)$/i.test(normalized)) {
-		return normalized;
-	}
-
-	return `${normalized}.txt`;
-}
-
 function buildDocumentBody(content) {
 	const normalized = String(content || '').trim();
 	if (normalized) {
@@ -296,6 +289,47 @@ async function getProjectFolderByUserAndProjectId({ userId, projectId }) {
 		subfoldersJson: JSON.stringify(row.subfolders_json || []),
 		lastSyncedAt: row.last_synced_at,
 	};
+}
+
+async function getProjectFolderLinkByUserAndFolderId({ userId, folderId }) {
+	const result = await runQuery(
+		`SELECT user_id, project_id, folder_id, parent_folder_id, folder_name, drive_folder_id, drive_folder_url
+		 FROM google_drive_project_folder_links
+		 WHERE user_id = $1 AND folder_id = $2
+		 LIMIT 1`,
+		[userId, folderId]
+	);
+
+	const row = result.rows[0];
+	if (!row) return null;
+
+	return {
+		userId: row.user_id,
+		projectId: row.project_id,
+		folderId: row.folder_id,
+		parentFolderId: row.parent_folder_id,
+		folderName: row.folder_name,
+		driveFolderId: row.drive_folder_id,
+		driveFolderUrl: row.drive_folder_url,
+	};
+}
+
+async function upsertProjectFolderLink({ userId, projectId, folderId, parentFolderId, folderName, driveFolderId, driveFolderUrl }) {
+	await runQuery(
+		`INSERT INTO google_drive_project_folder_links (
+			user_id, project_id, folder_id, parent_folder_id, folder_name, drive_folder_id, drive_folder_url
+		)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		 ON CONFLICT (user_id, folder_id)
+		 DO UPDATE SET
+			parent_folder_id = EXCLUDED.parent_folder_id,
+			folder_name = EXCLUDED.folder_name,
+			drive_folder_id = EXCLUDED.drive_folder_id,
+			drive_folder_url = EXCLUDED.drive_folder_url,
+			updated_at = now()
+		 WHERE google_drive_project_folder_links.project_id = EXCLUDED.project_id`,
+		[userId, projectId, folderId, normalizeNullableText(parentFolderId), folderName, driveFolderId, driveFolderUrl]
+	);
 }
 
 async function upsertConnectionByUserId({ userId, payload }) {
@@ -499,6 +533,7 @@ async function createDriveClientForUser(userId) {
 	});
 
 	return {
+		auth: oauthClient,
 		drive: google.drive({ version: 'v3', auth: oauthClient }),
 		connection,
 	};
@@ -512,10 +547,15 @@ async function findFolderByName({ drive, parentId, name }) {
 	const response = await drive.files.list({
 		q: query,
 		fields: 'files(id,name,webViewLink)',
-		pageSize: 1,
+		pageSize: 2,
 	});
 
-	return response.data.files?.[0] || null;
+	const matches = response.data.files || [];
+	if (matches.length > 1) {
+		throw createError(`Existem varias pastas chamadas "${name}" neste destino do Google Drive. Vincule a pasta correta antes de continuar.`, 409);
+	}
+
+	return matches[0] || null;
 }
 
 async function createFolderIfMissing({ drive, parentId, name }) {
@@ -597,6 +637,7 @@ export async function bootstrapGoogleDriveProjectFolders({ userId, projectId, pr
 	if (!normalizedProjectId || !normalizedProjectName) {
 		throw createError('projectId e projectName sao obrigatorios.', 400);
 	}
+	await assertProjectOwnership({ userId, projectId: normalizedProjectId });
 
 	const { drive, connection } = await createDriveClientForUser(userId);
 
@@ -663,6 +704,94 @@ export async function bootstrapGoogleDriveProjectFolders({ userId, projectId, pr
 		rootFolderUrl: rootFolder.webViewLink || `https://drive.google.com/drive/folders/${rootFolder.id}`,
 		subfolders: createdSubfolders,
 		reused: false,
+	};
+}
+
+async function assertProjectOwnership({ userId, projectId }) {
+	const result = await runQuery(
+		`SELECT name, project_type
+		 FROM project_profiles
+		 WHERE user_id = $1 AND name = $2
+		 LIMIT 1`,
+		[userId, projectId]
+	);
+
+	if (!result.rows[0]) {
+		throw createError('Projeto nao encontrado para este usuario.', 404);
+	}
+
+	return result.rows[0];
+}
+
+export async function syncGoogleDriveProjectFolder({ userId, projectId, projectName, projectType, folderId, parentFolderId, folderName }) {
+	const normalizedUserId = normalizeText(userId);
+	const normalizedProjectId = normalizeText(projectId);
+	const normalizedFolderId = normalizeText(folderId);
+	const normalizedParentFolderId = normalizeText(parentFolderId);
+	const normalizedFolderName = normalizeText(folderName);
+
+	if (!normalizedUserId || !normalizedProjectId || !normalizedFolderId || !normalizedFolderName) {
+		throw createError('projectId, folderId e folderName sao obrigatorios.', 400);
+	}
+
+	const project = await assertProjectOwnership({ userId: normalizedUserId, projectId: normalizedProjectId });
+	const existingLink = await getProjectFolderLinkByUserAndFolderId({ userId: normalizedUserId, folderId: normalizedFolderId });
+	if (existingLink && existingLink.projectId !== normalizedProjectId) {
+		throw createError('A pasta informada pertence a outro projeto.', 403);
+	}
+
+	const root = await bootstrapGoogleDriveProjectFolders({
+		userId: normalizedUserId,
+		projectId: normalizedProjectId,
+		projectName: normalizeText(projectName) || project.name,
+		projectType: normalizeText(projectType) || project.project_type || 'Administrativo',
+		parentFolderId: null,
+	});
+
+	let parentDriveFolderId = root.rootFolderId;
+	if (normalizedParentFolderId) {
+		const parentLink = await getProjectFolderLinkByUserAndFolderId({
+			userId: normalizedUserId,
+			folderId: normalizedParentFolderId,
+		});
+		if (!parentLink || parentLink.projectId !== normalizedProjectId) {
+			throw createError('A pasta superior nao pertence a este projeto ou ainda nao foi sincronizada.', 409);
+		}
+		parentDriveFolderId = parentLink.driveFolderId;
+	}
+
+	const { drive } = await createDriveClientForUser(normalizedUserId);
+	let driveFolder = existingLink?.driveFolderId && await driveFolderExists({ drive, folderId: existingLink.driveFolderId })
+		? { id: existingLink.driveFolderId, name: existingLink.folderName, webViewLink: existingLink.driveFolderUrl }
+		: null;
+
+	if (!driveFolder) {
+		driveFolder = await createFolderIfMissing({
+			drive,
+			parentId: parentDriveFolderId,
+			name: normalizedFolderName,
+		});
+	}
+
+	const driveFolderUrl = normalizeText(driveFolder.webViewLink) || `https://drive.google.com/drive/folders/${driveFolder.id}`;
+	await upsertProjectFolderLink({
+		userId: normalizedUserId,
+		projectId: normalizedProjectId,
+		folderId: normalizedFolderId,
+		parentFolderId: normalizedParentFolderId,
+		folderName: normalizedFolderName,
+		driveFolderId: driveFolder.id,
+		driveFolderUrl,
+	});
+
+	return {
+		projectId: normalizedProjectId,
+		folderId: normalizedFolderId,
+		parentFolderId: normalizedParentFolderId || null,
+		folderName: normalizedFolderName,
+		driveFolderId: driveFolder.id,
+		driveFolderUrl,
+		reused: Boolean(existingLink),
 	};
 }
 
@@ -753,6 +882,7 @@ export async function saveGoogleDriveProjectFolderConfig({ userId, projectId, pr
 	if (!normalizedProjectId || !normalizedProjectName) {
 		throw createError('projectId e projectName sao obrigatorios.', 400);
 	}
+	await assertProjectOwnership({ userId, projectId: normalizedProjectId });
 
 	if (!normalizedRootFolderId && !normalizedRootFolderUrl) {
 		throw createError('rootFolderId ou rootFolderUrl e obrigatorio.', 400);
@@ -788,20 +918,30 @@ export async function removeGoogleDriveProjectFolderConfig({ userId, projectId }
 	};
 }
 
-async function resolveTargetFolderId({ userId, projectId, projectName, projectType, driveFolderId }) {
-	const explicitFolderId = normalizeText(driveFolderId);
-	if (explicitFolderId) {
-		return explicitFolderId;
-	}
-
+async function resolveTargetFolderId({ userId, projectId, projectName, projectType, folderId }) {
 	const normalizedProjectId = normalizeText(projectId);
 	if (!normalizedProjectId) {
 		return null;
 	}
+	await assertProjectOwnership({ userId, projectId: normalizedProjectId });
+
+	const normalizedFolderId = normalizeText(folderId);
+	if (normalizedFolderId) {
+		const folderLink = await getProjectFolderLinkByUserAndFolderId({ userId, folderId: normalizedFolderId });
+		return resolveMaterialDriveFolder({
+			projectId: normalizedProjectId,
+			folderId: normalizedFolderId,
+			folderLink,
+		});
+	}
 
 	const existing = await getProjectFolderByUserAndProjectId({ userId, projectId: normalizedProjectId });
 	if (existing?.rootFolderId) {
-		return existing.rootFolderId;
+		return resolveMaterialDriveFolder({
+			projectId: normalizedProjectId,
+			folderId: '',
+			rootDriveFolderId: existing.rootFolderId,
+		});
 	}
 
 	const normalizedProjectName = normalizeText(projectName);
@@ -820,52 +960,78 @@ async function resolveTargetFolderId({ userId, projectId, projectName, projectTy
 	return normalizeText(bootstrapped?.rootFolderId) || null;
 }
 
-export async function syncGoogleDriveDocument({ userId, projectId, projectName, projectType, driveFolderId, driveFileId, fileName, content }) {
+async function replaceGoogleDocumentContent({ docs, documentId, content }) {
+	const document = await docs.documents.get({ documentId });
+	const endIndex = document.data.body?.content?.at(-1)?.endIndex || 1;
+	const requests = [];
+	if (endIndex > 2) {
+		requests.push({ deleteContentRange: { range: { startIndex: 1, endIndex: endIndex - 1 } } });
+	}
+	requests.push({ insertText: { location: { index: 1 }, text: content } });
+	await docs.documents.batchUpdate({ documentId, requestBody: { requests } });
+}
+
+export async function syncGoogleDriveDocument({ userId, projectId, projectName, projectType, folderId, driveFileId, fileName, content }) {
 	const normalizedUserId = normalizeText(userId);
 	if (!normalizedUserId) {
 		throw createError('Usuario invalido para sincronizacao com Google Drive.', 400);
 	}
 
-	const finalFileName = ensureDocumentFileName(fileName);
+	const finalFileName = normalizeGoogleDocumentName(fileName);
 	const body = buildDocumentBody(content);
-	const folderId = await resolveTargetFolderId({
+	const targetDriveFolderId = await resolveTargetFolderId({
 		userId: normalizedUserId,
 		projectId,
 		projectName,
 		projectType,
-		driveFolderId,
+		folderId,
 	});
 
-	const { drive } = await createDriveClientForUser(normalizedUserId);
+	const { drive, auth } = await createDriveClientForUser(normalizedUserId);
 	const normalizedDriveFileId = normalizeText(driveFileId);
 
 	if (normalizedDriveFileId) {
+		const current = await drive.files.get({ fileId: normalizedDriveFileId, fields: 'id,mimeType,parents' });
+		const currentParents = current.data.parents || [];
+		const move = getDriveMoveParameters({ targetDriveFolderId, currentParents });
 		const updated = await drive.files.update({
 			fileId: normalizedDriveFileId,
 			requestBody: {
 				name: finalFileName,
 			},
-			media: {
-				mimeType: GOOGLE_DRIVE_TEXT_FILE_MIME_TYPE,
-				body: Readable.from([body]),
-			},
+			...(move.moved ? { addParents: move.addParents, removeParents: move.removeParents } : {}),
 			fields: 'id,name,webViewLink,mimeType,parents',
 		});
 
+		if (current.data.mimeType === GOOGLE_DRIVE_DOCUMENT_MIME_TYPE) {
+			await replaceGoogleDocumentContent({
+				docs: google.docs({ version: 'v1', auth }),
+				documentId: normalizedDriveFileId,
+				content: body,
+			});
+		} else {
+			await drive.files.update({
+				fileId: normalizedDriveFileId,
+				media: { mimeType: GOOGLE_DRIVE_TEXT_FILE_MIME_TYPE, body: Readable.from([body]) },
+			});
+		}
+
 		return {
 			driveFileId: updated.data.id,
-			driveFolderId: normalizeText(updated.data.parents?.[0]) || folderId || '',
+			driveFolderId: normalizeText(updated.data.parents?.[0]) || targetDriveFolderId || '',
 			fileName: updated.data.name,
 			webViewLink: updated.data.webViewLink || `https://drive.google.com/file/d/${updated.data.id}/view`,
 			created: false,
 			updated: true,
+			moved: move.moved,
 		};
 	}
 
 	const created = await drive.files.create({
 		requestBody: {
 			name: finalFileName,
-			...(folderId ? { parents: [folderId] } : {}),
+			mimeType: GOOGLE_DRIVE_DOCUMENT_MIME_TYPE,
+			...(targetDriveFolderId ? { parents: [targetDriveFolderId] } : {}),
 		},
 		media: {
 			mimeType: GOOGLE_DRIVE_TEXT_FILE_MIME_TYPE,
@@ -876,11 +1042,12 @@ export async function syncGoogleDriveDocument({ userId, projectId, projectName, 
 
 	return {
 		driveFileId: created.data.id,
-		driveFolderId: normalizeText(created.data.parents?.[0]) || folderId || '',
+		driveFolderId: normalizeText(created.data.parents?.[0]) || targetDriveFolderId || '',
 		fileName: created.data.name,
 		webViewLink: created.data.webViewLink || `https://drive.google.com/file/d/${created.data.id}/view`,
 		created: true,
 		updated: false,
+		moved: false,
 	};
 }
 

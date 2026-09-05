@@ -13,6 +13,7 @@ import {
 	saveGoogleDriveProjectFolderConfig,
 	saveGoogleDriveOAuthUserConfig,
 	syncGoogleDriveDocument,
+	syncGoogleDriveProjectFolder,
 	testGoogleDriveConnection,
 } from '../api/google-drive.js';
 import { requireAuth, requirePrivileged } from '../middleware/auth.js';
@@ -127,6 +128,20 @@ router.post('/projects/bootstrap', async (req, res) => {
 	res.json(result);
 });
 
+router.post('/project-folders/sync', async (req, res) => {
+	const result = await syncGoogleDriveProjectFolder({
+		userId: req.userId,
+		projectId: req.body?.projectId,
+		projectName: req.body?.projectName,
+		projectType: req.body?.projectType,
+		folderId: req.body?.folderId,
+		parentFolderId: req.body?.parentFolderId,
+		folderName: req.body?.folderName,
+	});
+
+	res.json(result);
+});
+
 router.post('/disconnect', async (req, res) => {
 	const result = await disconnectGoogleDrive({ userId: req.userId });
 	res.json(result);
@@ -138,7 +153,7 @@ router.post('/documents/sync', async (req, res) => {
 		projectId: req.body?.projectId,
 		projectName: req.body?.projectName,
 		projectType: req.body?.projectType,
-		driveFolderId: req.body?.driveFolderId,
+		folderId: req.body?.folderId,
 		driveFileId: req.body?.driveFileId,
 		fileName: req.body?.fileName,
 		content: req.body?.content,

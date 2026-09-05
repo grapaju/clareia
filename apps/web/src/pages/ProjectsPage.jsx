@@ -34,7 +34,14 @@ import { useProfessionalJourney } from '@/contexts/ProfessionalJourneyContext.js
 import { getTaskWorkedMinutes, isTaskArchivedStatus, isTaskCompletedStatus, isTaskOpenStatus, normalizeTaskStatus, TASK_STATUS } from '@/lib/taskExecution.js';
 import { getTaskNextActionPresentation } from '@/lib/todayViewLogic.js';
 import { readUserScopedJson, writeUserScopedJson } from '@/lib/userScopedStorage.js';
-import { buildProjectItems, getDrivePresentationState } from '@/lib/projectMaterialsLogic.js';
+import {
+  buildProjectItems,
+  buildDriveDocumentPayload,
+  createMaterialDraft,
+  getDrivePresentationState,
+  getFolderHierarchy,
+  getMaterialFormVisibility,
+} from '@/lib/projectMaterialsLogic.js';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -85,7 +92,8 @@ import {
   removeGoogleDriveProjectFolderConfig,
   saveGoogleDriveDefaultParentFolder,
   saveGoogleDriveProjectFolderConfig,
-  syncGoogleDriveDocument
+  syncGoogleDriveDocument,
+  syncGoogleDriveProjectFolder
 } from '@/services/googleDriveIntegrationService.js';
 import { createProjectLink, deleteProjectLink, getProjectLinkTypes, listFavoriteProjectLinks, listProjectLinks, updateProjectLink } from '@/services/projectLinkService.js';
 import { createProjectAccess, deleteProjectAccess, listProjectAccesses, updateProjectAccess } from '@/services/projectAccessService.js';
@@ -276,6 +284,7 @@ export default function ProjectsPage() {
   const [isDriveDialogOpen, setIsDriveDialogOpen] = useState(false);
   const [isAdvancedDetailsOpen, setIsAdvancedDetailsOpen] = useState(false);
   const [editingMaterialId, setEditingMaterialId] = useState(null);
+  const [editingDriveFileId, setEditingDriveFileId] = useState('');
   const [projectDriveConfig, setProjectDriveConfig] = useState(null);
   const [driveConnectionStatus, setDriveConnectionStatus] = useState({ connected: false });
   const [driveLoadError, setDriveLoadError] = useState(false);
@@ -295,23 +304,7 @@ export default function ProjectsPage() {
     status: 'conectado manualmente'
   });
 
-  const [fileForm, setFileForm] = useState({
-    materialType: 'arquivo',
-    name: '',
-    type: '',
-    folder: '',
-    description: '',
-    tags: '',
-    origin: '',
-    externalLink: '',
-    provider: 'external_link',
-    driveFileId: '',
-    driveFolderId: '',
-    autoSyncDrive: false,
-    storageProvider: 'local',
-    relatedTaskId: 'none',
-    favorite: false
-  });
+  const [fileForm, setFileForm] = useState(() => createMaterialDraft());
 
   const [linkForm, setLinkForm] = useState({
     title: '',
@@ -558,6 +551,7 @@ export default function ProjectsPage() {
     if (!currentFolderId) return rootFolders;
     return folders.filter((folder) => folder.parentId === currentFolderId);
   }, [currentFolderId, rootFolders, folders]);
+  const materialFormVisibility = getMaterialFormVisibility(fileForm.materialType, driveConnectionStatus?.connected);
   const materialsInCurrentFolder = useMemo(() => {
     if (!currentFolderId) return files;
     return files.filter((item) => normalizeText(item.folder) === currentFolderPath);
@@ -1204,17 +1198,33 @@ export default function ProjectsPage() {
           name: folderName,
           parentId: null
         });
-        if (folder) created.push(folder.name);
+        if (folder) created.push(folder);
       }
     });
 
+    if (driveConnectionStatus?.connected) {
+      const foldersToSync = listProjectFolders(selectedProject)
+        .sort((first, second) => getFolderHierarchy(listProjectFolders(selectedProject), first.id).length - getFolderHierarchy(listProjectFolders(selectedProject), second.id).length);
+      try {
+        setIsBootstrappingDriveFolders(true);
+        for (const folder of foldersToSync) {
+          await syncFolderHierarchyWithDrive(folder, foldersToSync);
+        }
+      } catch (error) {
+        toast.error(error?.message || 'As pastas locais nao puderam ser vinculadas ao Google Drive.');
+      } finally {
+        setIsBootstrappingDriveFolders(false);
+      }
+    }
+
     if (created.length === 0) {
-      toast.info('As subpastas padrao ja existem neste projeto.');
+      refreshWorkspaceData(selectedProject);
+      toast.info('As pastas existentes foram verificadas no Google Drive.');
       return;
     }
 
     refreshWorkspaceData(selectedProject);
-    appendHistory(selectedProject, 'Subpastas padrao do Drive criadas', created.join(', '));
+    appendHistory(selectedProject, 'Subpastas padrao do Drive criadas', created.map((folder) => folder.name).join(', '));
     toast.success(`${created.length} subpasta(s) criada(s).`);
   };
 
@@ -1245,6 +1255,9 @@ export default function ProjectsPage() {
   };
 
   const buildDriveDocumentContent = () => {
+    const documentContent = normalizeText(fileForm.content);
+    if (documentContent) return documentContent;
+
     const sections = [];
     const cleanDescription = normalizeText(fileForm.description);
     const cleanOrigin = normalizeText(fileForm.origin);
@@ -1269,12 +1282,44 @@ export default function ProjectsPage() {
     return sections.join('\n\n');
   };
 
-  const handleAddFolder = () => {
+  const syncFolderHierarchyWithDrive = async (targetFolder, sourceFolders = folders) => {
+    if (!targetFolder || !driveConnectionStatus?.connected) return null;
+
+    const hierarchy = getFolderHierarchy(sourceFolders, targetFolder.id);
+
+    let synced = null;
+    for (const folder of hierarchy) {
+      synced = await syncGoogleDriveProjectFolder({
+        projectId: selectedProject,
+        projectName: selectedProject,
+        projectType: selectedProfile?.projectType || 'Administrativo',
+        folderId: folder.id,
+        parentFolderId: folder.parentId || undefined,
+        folderName: folder.name,
+      });
+      updateProjectFolder(folder.id, {
+        driveFolderId: synced.driveFolderId,
+        driveFolderUrl: synced.driveFolderUrl,
+      });
+    }
+
+    return synced;
+  };
+
+  const handleAddFolder = async () => {
     if (!selectedProject) return;
     const folder = createProjectFolder({ projectName: selectedProject, name: folderName, parentId: newFolderParentId });
     if (!folder) {
       toast.error('Nao foi possivel criar pasta (nome vazio ou duplicado).');
       return;
+    }
+
+    if (driveConnectionStatus?.connected) {
+      try {
+        await syncFolderHierarchyWithDrive(folder, [...folders, folder]);
+      } catch (error) {
+        toast.error(error?.message || 'A pasta foi criada no Clareia, mas nao foi sincronizada com o Google Drive.');
+      }
     }
 
     setFolderName('');
@@ -1365,26 +1410,15 @@ export default function ProjectsPage() {
       return;
     }
 
-    if (type === 'file') {
+    if (type === 'file' || type === 'document') {
       setEditingMaterialId(null);
+      setEditingDriveFileId('');
       setIsAdvancedDetailsOpen(false);
-      setFileForm({
-        materialType: 'arquivo',
-        name: '',
-        type: 'arquivo',
-        folder: currentFolderPath,
-        description: '',
-        tags: '',
-        origin: '',
-        externalLink: '',
-        provider: 'external_link',
-        driveFileId: '',
-        driveFolderId: '',
-        autoSyncDrive: false,
-        storageProvider: 'external_link',
-        relatedTaskId: 'none',
-        favorite: false,
-      });
+      setFileForm(createMaterialDraft({
+        materialType: type === 'document' ? 'documento' : 'arquivo',
+        currentFolderPath,
+        driveConnected: driveConnectionStatus?.connected,
+      }));
       setIsMaterialDialogOpen(true);
       return;
     }
@@ -1424,18 +1458,11 @@ export default function ProjectsPage() {
     const topFolderSuggestion = folderSuggestions[0] || null;
     const autoSuggestionApplied = !fileForm.folder && Boolean(topFolderSuggestion?.folder);
     const relatedTaskId = fileForm.relatedTaskId && fileForm.relatedTaskId !== 'none' ? fileForm.relatedTaskId : '';
-    const selectedFolderEntry = folders.find((folder) => folderPathMap[folder.id] === fileForm.folder);
     const inferredFolder = fileForm.folder || topFolderSuggestion?.folder || '';
+    const selectedFolderEntry = folders.find((folder) => folderPathMap[folder.id] === inferredFolder);
     const sourceUrl = normalizeText(fileForm.externalLink);
-    const provider = fileForm.autoSyncDrive
-      ? 'google_drive_upload_future'
-      : sourceUrl.includes('drive.google.com')
-        ? 'google_drive'
-        : 'external_link';
-    const driveFolderIdFromUrl = extractDriveFolderId(fileForm.externalLink);
-    const shouldSyncInDrive =
-      (provider === 'google_drive' || provider === 'google_drive_upload_future')
-      && Boolean(fileForm.autoSyncDrive);
+    const shouldSyncInDrive = fileForm.materialType === 'documento';
+    const provider = shouldSyncInDrive ? 'google_drive' : 'external_link';
 
     let driveSyncResult = null;
 
@@ -1452,15 +1479,17 @@ export default function ProjectsPage() {
 
       try {
         setIsSyncingDriveMaterial(true);
-        driveSyncResult = await syncGoogleDriveDocument({
+        if (selectedFolderEntry) {
+          await syncFolderHierarchyWithDrive(selectedFolderEntry);
+        }
+        driveSyncResult = await syncGoogleDriveDocument(buildDriveDocumentPayload({
           projectId: selectedProject,
-          projectName: selectedProject,
           projectType: selectedProfile?.projectType || 'Administrativo',
-          driveFolderId: normalizeText(fileForm.driveFolderId) || normalizeText(projectDriveConfig?.driveFolderId) || undefined,
-          driveFileId: normalizeText(fileForm.driveFileId) || undefined,
+          folderId: selectedFolderEntry?.id || undefined,
+          driveFileId: normalizeText(editingDriveFileId) || undefined,
           fileName: normalizeText(fileForm.name),
           content: buildDriveDocumentContent(),
-        });
+        }));
       } catch (error) {
         toast.error(error?.message || 'Nao foi possivel sincronizar o documento no Google Drive.');
         return;
@@ -1481,13 +1510,8 @@ export default function ProjectsPage() {
       type: fileForm.type || fileForm.materialType,
       provider,
       storageProvider: provider,
-      driveFileId: driveSyncResult?.driveFileId || fileForm.driveFileId,
-      driveFolderId:
-        driveSyncResult?.driveFolderId ||
-        fileForm.driveFolderId ||
-        projectDriveConfig?.driveFolderId ||
-        driveFolderIdFromUrl ||
-        '',
+      driveFileId: driveSyncResult?.driveFileId || editingDriveFileId,
+      driveFolderId: driveSyncResult?.driveFolderId || '',
       url: driveSyncResult?.webViewLink || fileForm.externalLink,
       externalLink: driveSyncResult?.webViewLink || fileForm.externalLink
     };
@@ -1501,24 +1525,9 @@ export default function ProjectsPage() {
       return;
     }
 
-    setFileForm({
-      materialType: 'arquivo',
-      name: '',
-      type: '',
-      folder: '',
-      description: '',
-      tags: '',
-      origin: '',
-      externalLink: '',
-      provider: 'external_link',
-      driveFileId: '',
-      driveFolderId: '',
-      autoSyncDrive: false,
-      storageProvider: 'local',
-      relatedTaskId: 'none',
-      favorite: false
-    });
+    setFileForm(createMaterialDraft());
     setEditingMaterialId(null);
+    setEditingDriveFileId('');
     setIsAdvancedDetailsOpen(false);
     setIsMaterialDialogOpen(false);
     refreshWorkspaceData(selectedProject);
@@ -1542,29 +1551,29 @@ export default function ProjectsPage() {
   const handleEditMaterial = (material) => {
     rememberMaterialDialogTrigger();
     const materialType = String(material.materialType || material.type || 'arquivo').toLocaleLowerCase('pt-BR');
-    const normalizedMaterialType = materialType.includes('link')
+    const provider = material.provider || material.storageProvider || 'external_link';
+    const normalizedMaterialType = materialType.includes('document') || provider.includes('google_drive')
+      ? 'documento'
+      : materialType.includes('link')
       ? 'link'
       : materialType.includes('nota')
         ? 'nota'
         : materialType.includes('acesso')
           ? 'acesso'
           : 'arquivo';
-    const provider = material.provider || material.storageProvider || 'external_link';
     setEditingMaterialId(material.id);
+    setEditingDriveFileId(material.driveFileId || '');
     setFileForm({
       materialType: normalizedMaterialType,
       name: material.name || '',
       type: material.type || '',
       folder: material.folder || '',
+      content: material.content || '',
       description: material.description || '',
       tags: (material.tags || []).join(', '),
       origin: material.origin || '',
       externalLink: material.url || material.externalLink || '',
-      provider,
-      driveFileId: material.driveFileId || '',
-      driveFolderId: material.driveFolderId || '',
-      autoSyncDrive: provider === 'google_drive_upload_future',
-      storageProvider: material.storageProvider || 'local',
+      autoSyncDrive: normalizedMaterialType === 'documento',
       relatedTaskId: material.relatedTaskId || material.relatedTaskIds?.[0] || 'none',
       favorite: Boolean(material.favorite)
     });
@@ -1592,8 +1601,10 @@ export default function ProjectsPage() {
       type: 'file',
       id,
       label: target.name,
-      title: 'Excluir arquivo',
-      description: `Esta acao remove permanentemente o arquivo "${target.name}" deste projeto.`
+      title: 'Remover material',
+      description: target.driveFileId
+        ? `Esta acao remove "${target.name}" do Clareia. O documento sera mantido no Google Drive.`
+        : `Esta acao remove permanentemente o material "${target.name}" deste projeto.`
     });
   };
 
@@ -2688,14 +2699,11 @@ export default function ProjectsPage() {
                                 </Button>
                                 <Button onClick={() => {
                                   setEditingMaterialId(null);
-                                  setFileForm((current) => ({
-                                    ...current,
+                                  setEditingDriveFileId('');
+                                  setFileForm(createMaterialDraft({
                                     materialType: 'arquivo',
-                                    folder: currentFolderPath,
-                                    provider: 'external_link',
-                                    driveFileId: '',
-                                    driveFolderId: '',
-                                    relatedTaskId: 'none'
+                                    currentFolderPath,
+                                    driveConnected: driveConnectionStatus?.connected,
                                   }));
                                   setIsMaterialDialogOpen(true);
                                 }}>
@@ -2886,7 +2894,6 @@ export default function ProjectsPage() {
                                                 <span className="truncate">{material.name}</span>
                                               </p>
                                               <p className="text-xs text-muted-foreground mt-1 truncate">{material.type || material.materialType || 'material'}</p>
-                                              <p className="text-xs text-muted-foreground mt-1 truncate">provider: {material.provider || material.storageProvider || 'local'}</p>
                                               {material.description && <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{material.description}</p>}
                                             </div>
                                             <DropdownMenu>
@@ -2975,17 +2982,6 @@ export default function ProjectsPage() {
                               <Textarea value={linkForm.description} onChange={(event) => setLinkForm((current) => ({ ...current, description: event.target.value }))} className="min-h-20" />
                             </div>
                             <div className="space-y-2">
-                              <Label>Storage provider</Label>
-                              <Select value={linkForm.storageProvider} onValueChange={(value) => setLinkForm((current) => ({ ...current, storageProvider: value }))}>
-                                <SelectTrigger><SelectValue /></SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="local">local</SelectItem>
-                                  <SelectItem value="google_drive">google_drive</SelectItem>
-                                  <SelectItem value="external_link">external_link</SelectItem>
-                                </SelectContent>
-                              </Select>
-                            </div>
-                            <div className="space-y-2">
                               <Label>Relacionar a tarefa (opcional)</Label>
                               <Select value={linkForm.relatedTaskId} onValueChange={(value) => setLinkForm((current) => ({ ...current, relatedTaskId: value }))}>
                                 <SelectTrigger><SelectValue /></SelectTrigger>
@@ -3038,7 +3034,7 @@ export default function ProjectsPage() {
                                         <div className="flex justify-between gap-2">
                                           <div className="min-w-0">
                                             <p className="text-sm font-medium truncate">{item.title}</p>
-                                            <p className="text-xs text-muted-foreground">{item.type} • provider: {item.storageProvider}</p>
+                                            <p className="text-xs text-muted-foreground">{item.type}</p>
                                             <a href={item.url} target="_blank" rel="noreferrer" className="text-xs text-primary underline truncate block">{item.url}</a>
                                           </div>
                                           <Button size="sm" variant="outline" className="text-destructive" onClick={() => handleDeleteLink(item.id)}>Excluir</Button>
@@ -3185,11 +3181,10 @@ export default function ProjectsPage() {
             </DialogHeader>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               {[
-                { type: 'file', label: 'Arquivo', icon: FileText, description: 'Documento, imagem ou referência' },
+                { type: 'file', label: 'Arquivo', icon: FileText, description: 'Arquivo ou referência existente' },
+                { type: 'document', label: 'Documento', icon: FileText, description: 'Novo Google Docs no projeto' },
                 { type: 'link', label: 'Link', icon: Link2, description: 'Site, painel ou página útil' },
                 { type: 'note', label: 'Nota', icon: NotebookText, description: 'Decisão ou informação do projeto' },
-                { type: 'access', label: 'Acesso', icon: Lock, description: 'URL e usuário, sem armazenar senha' },
-                { type: 'folder', label: 'Pasta', icon: Folder, description: 'Organize os itens do projeto' },
               ].map((option) => {
                 const OptionIcon = option.icon;
                 return (
@@ -3403,13 +3398,43 @@ export default function ProjectsPage() {
           </DialogContent>
         </Dialog>
 
-        <Dialog open={isMaterialDialogOpen} onOpenChange={setIsMaterialDialogOpen}>
+        <Dialog
+          open={isMaterialDialogOpen}
+          onOpenChange={(open) => {
+            setIsMaterialDialogOpen(open);
+            if (!open) {
+              setFileForm(createMaterialDraft());
+              setEditingMaterialId(null);
+              setEditingDriveFileId('');
+              setIsAdvancedDetailsOpen(false);
+            }
+          }}
+        >
           <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto [&>button]:h-11 [&>button]:w-11 [&>button]:flex [&>button]:items-center [&>button]:justify-center" onInteractOutside={(event) => event.preventDefault()} onCloseAutoFocus={restoreMaterialDialogFocus}>
             <DialogHeader>
-              <DialogTitle>{editingMaterialId ? 'Editar arquivo' : 'Adicionar arquivo'}</DialogTitle>
-              <DialogDescription>Guarde um arquivo ou uma referência sem sair do projeto.</DialogDescription>
+              <DialogTitle>{editingMaterialId ? 'Editar material' : 'Adicionar material'}</DialogTitle>
+              <DialogDescription>Projeto: {selectedProject}</DialogDescription>
             </DialogHeader>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="space-y-2 md:col-span-2">
+                <Label>Tipo</Label>
+                <Select
+                  value={fileForm.materialType}
+                  onValueChange={(value) => setFileForm((current) => ({
+                    ...current,
+                    materialType: value,
+                    type: value,
+                    externalLink: value === 'documento' ? '' : current.externalLink,
+                    autoSyncDrive: value === 'documento' && Boolean(driveConnectionStatus?.connected),
+                  }))}
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="arquivo">Arquivo</SelectItem>
+                    <SelectItem value="documento">Documento</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
               <div className="space-y-2">
                 <Label>Nome</Label>
                 <Input value={fileForm.name} onChange={(event) => setFileForm((current) => ({ ...current, name: event.target.value }))} />
@@ -3424,10 +3449,18 @@ export default function ProjectsPage() {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-2 md:col-span-2">
-                <Label>Arquivo ou link</Label>
-                <Input value={fileForm.externalLink} onChange={(event) => setFileForm((current) => ({ ...current, externalLink: event.target.value }))} placeholder="https://..." />
-              </div>
+              {materialFormVisibility.showExternalFileUrl && (
+                <div className="space-y-2 md:col-span-2">
+                  <Label>Endereço do arquivo</Label>
+                  <Input value={fileForm.externalLink} onChange={(event) => setFileForm((current) => ({ ...current, externalLink: event.target.value }))} placeholder="https://..." />
+                </div>
+              )}
+              {materialFormVisibility.showContent && (
+                <div className="space-y-2 md:col-span-2">
+                  <Label>Conteúdo</Label>
+                  <Textarea value={fileForm.content} onChange={(event) => setFileForm((current) => ({ ...current, content: event.target.value }))} className="min-h-40" />
+                </div>
+              )}
 
               {folderSuggestions.length > 0 && (
                 <div className="md:col-span-2 rounded-lg border border-amber-400/40 bg-amber-50 p-3 space-y-2">
@@ -3466,9 +3499,24 @@ export default function ProjectsPage() {
               )}
 
               <div className="space-y-2 md:col-span-2">
-                <Label>Descricao curta</Label>
+                <Label>Descrição <span className="text-muted-foreground">(opcional)</span></Label>
                 <Textarea value={fileForm.description} onChange={(event) => setFileForm((current) => ({ ...current, description: event.target.value }))} className="min-h-20" />
               </div>
+              {materialFormVisibility.showDriveDestination && (
+                <div className="md:col-span-2 flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3 text-sm">
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                  <div>
+                    <p className="font-medium text-foreground">Será salvo no Google Drive</p>
+                    <p className="text-xs text-muted-foreground">Clareia / {selectedProject}{fileForm.folder ? ` / ${fileForm.folder}` : ''}</p>
+                  </div>
+                </div>
+              )}
+              {materialFormVisibility.showConnectDrive && (
+                <div className="md:col-span-2 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border p-3 text-sm">
+                  <span className="text-muted-foreground">Google Drive não conectado</span>
+                  <Button type="button" size="sm" variant="outline" onClick={handleConnectGoogleDriveAutomatic}>Conectar Google Drive</Button>
+                </div>
+              )}
               <div className="md:col-span-2">
                 <Button variant="outline" size="sm" onClick={() => setIsAdvancedDetailsOpen((current) => !current)}>
                   {isAdvancedDetailsOpen ? 'Ocultar opções' : 'Mais opções'}
@@ -3494,12 +3542,6 @@ export default function ProjectsPage() {
                       </SelectContent>
                     </Select>
                   </div>
-                  {driveConnectionStatus?.connected && (
-                    <label className="md:col-span-2 flex items-start gap-2 text-sm">
-                      <input type="checkbox" checked={fileForm.autoSyncDrive} onChange={(event) => setFileForm((current) => ({ ...current, autoSyncDrive: event.target.checked }))} />
-                      <span><span className="block text-foreground">Criar ou atualizar documento no Drive</span><span className="block text-xs text-muted-foreground">O conteúdo será salvo na pasta do projeto.</span></span>
-                    </label>
-                  )}
                 </>
               )}
               <div className="md:col-span-2 flex items-center gap-2 text-sm text-muted-foreground">
@@ -3509,7 +3551,7 @@ export default function ProjectsPage() {
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setIsMaterialDialogOpen(false)}>Cancelar</Button>
-              <Button onClick={handleSaveMaterial} disabled={isSyncingDriveMaterial}>
+              <Button onClick={handleSaveMaterial} disabled={isSyncingDriveMaterial || (fileForm.materialType === 'documento' && !driveConnectionStatus?.connected)}>
                 {isSyncingDriveMaterial ? 'Sincronizando...' : editingMaterialId ? 'Salvar alterações' : 'Adicionar'}
               </Button>
             </DialogFooter>

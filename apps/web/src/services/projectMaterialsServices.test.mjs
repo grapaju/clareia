@@ -46,6 +46,29 @@ test('cria pasta somente com nome e preserva a associação dos itens', () => {
   assert.deepEqual(note.relatedTaskIds, ['task-1']);
 });
 
+test('persiste ids retornados pelo Drive sem exigir campos tecnicos no cadastro', () => {
+  resetStorage();
+  const folder = folders.createProjectFolder({ projectName: 'Clareia', name: 'Historico' });
+  const syncedFolder = folders.updateProjectFolder(folder.id, {
+    driveFolderId: 'drive-history-id',
+    driveFolderUrl: 'https://drive.google.com/drive/folders/drive-history-id',
+  });
+  const document = files.createProjectFile({
+    projectName: 'Clareia',
+    folderId: folder.id,
+    folder: 'Historico',
+    name: 'Teste Historico 01',
+    type: 'documento',
+    provider: 'google_drive',
+    driveFileId: 'drive-document-id',
+    driveFolderId: syncedFolder.driveFolderId,
+  });
+
+  assert.equal(syncedFolder.driveFolderId, 'drive-history-id');
+  assert.equal(document.driveFileId, 'drive-document-id');
+  assert.equal(document.folderId, folder.id);
+});
+
 test('edita e exclui arquivo, link e nota', () => {
   resetStorage();
   const file = files.createProjectFile({ projectName: 'IDT-PR', name: 'Arquivo' });

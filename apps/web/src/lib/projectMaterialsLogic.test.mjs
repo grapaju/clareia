@@ -3,13 +3,34 @@ import assert from 'node:assert/strict';
 
 import {
   buildProjectItems,
+  buildDriveDocumentPayload,
+  createMaterialDraft,
   filterProjectItems,
+  getFolderHierarchy,
+  getMaterialFormVisibility,
   getDrivePresentationState,
   getFavoriteProjectItems,
   getMaterialFilterOptions,
   getRecentProjectItems,
   searchProjectItems,
 } from './projectMaterialsLogic.js';
+
+test('rascunho de material usa a pasta atual e nao reaproveita estado anterior', () => {
+  const first = createMaterialDraft({ materialType: 'documento', currentFolderPath: 'Historico', driveConnected: true });
+  first.folder = 'Acessos';
+  first.name = 'Estado antigo';
+
+  const reopened = createMaterialDraft({ materialType: 'documento', currentFolderPath: 'Historico', driveConnected: true });
+  assert.equal(reopened.folder, 'Historico');
+  assert.equal(reopened.name, '');
+  assert.equal(reopened.autoSyncDrive, true);
+});
+
+test('arquivo nao ativa sincronizacao Drive automaticamente', () => {
+  const draft = createMaterialDraft({ materialType: 'arquivo', currentFolderPath: '', driveConnected: true });
+  assert.equal(draft.folder, '');
+  assert.equal(draft.autoSyncDrive, false);
+});
 
 const data = {
   files: [
@@ -80,4 +101,42 @@ test('falha temporária do Drive não é apresentada como OAuth', () => {
   const result = getDrivePresentationState({ loadError: true });
   assert.equal(result.state, 'error');
   assert.doesNotMatch(result.label, /oauth|token/i);
+});
+
+test('hierarquia aninhada sincroniza do parent imediato ate o destino', () => {
+  const hierarchy = getFolderHierarchy([
+    { id: 'content', name: 'Conteudo', parentId: null },
+    { id: 'blog', name: 'Blog', parentId: 'content' },
+    { id: 'september', name: 'Setembro', parentId: 'blog' },
+  ], 'september');
+
+  assert.deepEqual(hierarchy.map((folder) => folder.id), ['content', 'blog', 'september']);
+});
+
+test('campos do formulario reagem ao tipo sem expor ids tecnicos', () => {
+  const documentFields = getMaterialFormVisibility('documento', true);
+  const fileFields = getMaterialFormVisibility('arquivo', true);
+  const linkFields = getMaterialFormVisibility('link', true);
+
+  assert.equal(documentFields.showContent, true);
+  assert.equal(documentFields.showExternalFileUrl, false);
+  assert.equal(documentFields.showDriveDestination, true);
+  assert.equal(documentFields.showConnectDrive, false);
+  assert.equal(documentFields.showTechnicalDriveFields, false);
+  assert.equal(fileFields.showDriveDestination, false);
+  assert.equal(linkFields.showDriveDestination, false);
+});
+
+test('payload do documento envia folderId interno sem driveFolderId', () => {
+  const payload = buildDriveDocumentPayload({
+    projectId: 'Clareia',
+    projectType: 'Administrativo',
+    folderId: 'folder-history',
+    driveFileId: 'drive-file-existing',
+    fileName: 'Teste Historico 01',
+    content: 'Conteudo',
+  });
+
+  assert.equal(payload.folderId, 'folder-history');
+  assert.equal(Object.hasOwn(payload, 'driveFolderId'), false);
 });

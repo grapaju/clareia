@@ -112,6 +112,49 @@ test('isola dados, materiais e Google Drive entre usuários A e B', async (conte
   const driveFolderB = await api(baseUrl, '/google-drive/project-folder?projectId=Projeto%20A', { token: userB.token });
   assert.equal(driveFolderA.payload.config.rootFolderId, 'drive-folder-a');
   assert.equal(driveFolderB.payload.config, null);
+
+  assert.equal((await api(baseUrl, '/projects', {
+    token: userA.token,
+    method: 'POST',
+    body: { name: 'Projeto A secundario' },
+  })).status, 201);
+  assert.equal((await api(baseUrl, '/projects', {
+    token: userB.token,
+    method: 'POST',
+    body: { name: 'Projeto B' },
+  })).status, 201);
+  await runQuery(
+    `INSERT INTO google_drive_project_folder_links (
+       user_id, project_id, folder_id, folder_name, drive_folder_id, drive_folder_url
+     ) VALUES ($1, $2, $3, $4, $5, $6)`,
+    [userA.user.id, 'Projeto A', 'folder-history-a', 'Historico', 'drive-history-a', 'https://drive.google.com/drive/folders/drive-history-a']
+  );
+
+  const crossProjectFolder = await api(baseUrl, '/google-drive/documents/sync', {
+    token: userA.token,
+    method: 'POST',
+    body: { projectId: 'Projeto A secundario', folderId: 'folder-history-a', fileName: 'Bloqueado' },
+  });
+  assert.equal(crossProjectFolder.status, 403);
+
+  const crossUserFolder = await api(baseUrl, '/google-drive/documents/sync', {
+    token: userB.token,
+    method: 'POST',
+    body: { projectId: 'Projeto B', folderId: 'folder-history-a', fileName: 'Bloqueado' },
+  });
+  assert.equal(crossUserFolder.status, 404);
+
+  assert.equal((await api(baseUrl, '/google-drive/projects/bootstrap', {
+    token: userB.token,
+    method: 'POST',
+    body: { projectId: 'Projeto A', projectName: 'Projeto A' },
+  })).status, 404);
+  assert.equal((await api(baseUrl, '/google-drive/project-folder', {
+    token: userB.token,
+    method: 'POST',
+    body: { projectId: 'Projeto A', projectName: 'Projeto A', rootFolderId: 'drive-folder-a' },
+  })).status, 404);
+
   assert.equal((await api(baseUrl, '/google-drive/status')).status, 401);
   assert.equal((await api(baseUrl, '/google-drive/oauth-user-config', {
     token: userA.token,

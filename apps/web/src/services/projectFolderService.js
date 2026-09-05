@@ -110,7 +110,7 @@ export function listProjectFolders(projectName) {
     .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
 }
 
-export function createProjectFolder({ projectName, name, parentId }) {
+export function createProjectFolder({ projectName, name, parentId, driveFolderId = '', driveFolderUrl = '' }) {
   const normalizedProject = normalizeText(projectName);
   const normalizedName = normalizeText(name);
   const normalizedParentId = normalizeText(parentId) || '';
@@ -131,6 +131,8 @@ export function createProjectFolder({ projectName, name, parentId }) {
     projectName: normalizedProject,
     name: normalizedName,
     parentId: normalizedParentId || null,
+    driveFolderId: normalizeText(driveFolderId),
+    driveFolderUrl: normalizeText(driveFolderUrl),
     createdAt: now,
     updatedAt: now
   };
@@ -150,6 +152,8 @@ export function updateProjectFolder(folderId, updates = {}) {
     ...updates,
     name: normalizeText(updates.name ?? items[index].name),
     parentId: updates.parentId !== undefined ? (normalizeText(updates.parentId) || null) : (items[index].parentId || null),
+    driveFolderId: updates.driveFolderId !== undefined ? normalizeText(updates.driveFolderId) : normalizeText(items[index].driveFolderId),
+    driveFolderUrl: updates.driveFolderUrl !== undefined ? normalizeText(updates.driveFolderUrl) : normalizeText(items[index].driveFolderUrl),
     updatedAt: new Date().toISOString()
   };
 

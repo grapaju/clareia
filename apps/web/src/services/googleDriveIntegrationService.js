@@ -83,6 +83,16 @@ export async function bootstrapGoogleDriveProjectFolders(payload = {}) {
   });
 }
 
+export async function syncGoogleDriveProjectFolder(payload = {}) {
+  return integratedAiClient.fetch('/google-drive/project-folders/sync', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  });
+}
+
 export async function disconnectGoogleDrive() {
   return integratedAiClient.fetch('/google-drive/disconnect', {
     method: 'POST',

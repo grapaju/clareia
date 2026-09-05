@@ -10,6 +10,64 @@ function normalizeText(value) {
   return String(value || '').trim();
 }
 
+export function createMaterialDraft({ materialType = 'arquivo', currentFolderPath = '', driveConnected = false } = {}) {
+  const normalizedType = materialType === 'documento' ? 'documento' : 'arquivo';
+  return {
+    materialType: normalizedType,
+    name: '',
+    type: normalizedType,
+    folder: normalizeText(currentFolderPath),
+    content: '',
+    description: '',
+    tags: '',
+    origin: '',
+    externalLink: '',
+    autoSyncDrive: normalizedType === 'documento' && Boolean(driveConnected),
+    relatedTaskId: 'none',
+    favorite: false,
+  };
+}
+
+export function getFolderHierarchy(folders, targetFolderId) {
+  const folderById = new Map(folders.map((folder) => [folder.id, folder]));
+  const hierarchy = [];
+  const visited = new Set();
+  let cursor = folderById.get(targetFolderId) || null;
+
+  while (cursor) {
+    if (visited.has(cursor.id)) throw new Error('Hierarquia de pastas invalida.');
+    visited.add(cursor.id);
+    hierarchy.unshift(cursor);
+    if (!cursor.parentId) break;
+    cursor = folderById.get(cursor.parentId) || null;
+  }
+
+  return hierarchy;
+}
+
+export function getMaterialFormVisibility(materialType, driveConnected) {
+  const isDocument = materialType === 'documento';
+  return {
+    showContent: isDocument,
+    showExternalFileUrl: materialType === 'arquivo',
+    showDriveDestination: isDocument && Boolean(driveConnected),
+    showConnectDrive: isDocument && !driveConnected,
+    showTechnicalDriveFields: false,
+  };
+}
+
+export function buildDriveDocumentPayload({ projectId, projectType, folderId, driveFileId, fileName, content }) {
+  return {
+    projectId: normalizeText(projectId),
+    projectName: normalizeText(projectId),
+    projectType: normalizeText(projectType) || 'Administrativo',
+    folderId: normalizeText(folderId) || undefined,
+    driveFileId: normalizeText(driveFileId) || undefined,
+    fileName: normalizeText(fileName),
+    content: String(content || ''),
+  };
+}
+
 function searchableText(values) {
   return values
     .flatMap((value) => Array.isArray(value) ? value : [value])
