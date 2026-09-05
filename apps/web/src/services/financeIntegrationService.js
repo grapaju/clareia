@@ -12,10 +12,10 @@ export async function saveFinanceAccount(externalAccountId) {
   });
 }
 
-export async function saveFinanceClientMapping(externalClientId, projectName) {
+export async function saveFinanceClientMapping(externalClientId, projectId) {
   return integratedAiClient.fetch(`/finance-integration/clients/${encodeURIComponent(externalClientId)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ projectName }),
+    body: JSON.stringify({ projectId }),
   });
 }

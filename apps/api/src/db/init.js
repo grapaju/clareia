@@ -92,6 +92,22 @@ CREATE TABLE IF NOT EXISTS finance_webhook_events (
 CREATE INDEX IF NOT EXISTS idx_finance_webhook_events_pending
   ON finance_webhook_events(status, external_account_id, received_at);
 
+ALTER TABLE finance_webhook_events
+  ADD COLUMN IF NOT EXISTS duplicate_count INTEGER NOT NULL DEFAULT 0;
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'finance_webhook_events_user_id_fkey' AND confdeltype <> 'c'
+  ) THEN
+    ALTER TABLE finance_webhook_events DROP CONSTRAINT finance_webhook_events_user_id_fkey;
+    ALTER TABLE finance_webhook_events
+      ADD CONSTRAINT finance_webhook_events_user_id_fkey
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+  END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS integrated_ai_messages (
   id BIGSERIAL PRIMARY KEY,
   user_id UUID,
@@ -197,6 +213,34 @@ CREATE TABLE IF NOT EXISTS project_profiles (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_project_profiles_user_name_ci
   ON project_profiles(user_id, lower(name));
+
+ALTER TABLE finance_client_project_mappings
+  ADD COLUMN IF NOT EXISTS project_id BIGINT;
+
+UPDATE finance_client_project_mappings AS mapping
+SET project_id = project.id
+FROM project_profiles AS project
+WHERE mapping.project_id IS NULL
+  AND project.user_id = mapping.user_id
+  AND lower(project.name) = lower(mapping.project_name);
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'finance_client_project_mappings_project_id_fkey' AND confdeltype <> 'c'
+  ) THEN
+    ALTER TABLE finance_client_project_mappings DROP CONSTRAINT finance_client_project_mappings_project_id_fkey;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'finance_client_project_mappings_project_id_fkey'
+  ) THEN
+    ALTER TABLE finance_client_project_mappings
+      ADD CONSTRAINT finance_client_project_mappings_project_id_fkey
+      FOREIGN KEY (project_id) REFERENCES project_profiles(id) ON DELETE CASCADE;
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS project_aliases (
   id BIGSERIAL PRIMARY KEY,

@@ -47,6 +47,7 @@ async function findNormalizedDuplicate(userId, name, excludedName = '') {
 
 function mapProject(row) {
 	return {
+		id: Number(row.id),
 		name: row.name,
 		summary: row.summary || '',
 		projectType: row.project_type || 'Administrativo',
@@ -63,7 +64,7 @@ router.use(requireAuth);
 
 router.get('/', async (req, res) => {
 	const result = await runQuery(
-		`SELECT name, summary, project_type, professional_tracking_enabled,
+		`SELECT id, name, summary, project_type, professional_tracking_enabled,
 		        weekly_target_minutes, work_days, timezone, created_at, updated_at
 		 FROM project_profiles
 		 WHERE user_id = $1
@@ -105,7 +106,7 @@ router.post('/', async (req, res) => {
 		   weekly_target_minutes, work_days, timezone
 		 )
 		 VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
-		 RETURNING name, summary, project_type, professional_tracking_enabled,
+		 RETURNING id, name, summary, project_type, professional_tracking_enabled,
 		           weekly_target_minutes, work_days, timezone, created_at, updated_at`,
 		[req.userId, name, summary, projectType, professionalTrackingEnabled,
 		 weeklyTargetMinutes, JSON.stringify(workDays), timezone]
@@ -292,7 +293,7 @@ router.patch('/:name', async (req, res) => {
 				timezone = COALESCE($10, timezone),
 				updated_at = now()
 			 WHERE user_id = $11 AND lower(name) = lower($12)
-			 RETURNING name, summary, project_type, professional_tracking_enabled,
+			 RETURNING id, name, summary, project_type, professional_tracking_enabled,
 			           weekly_target_minutes, work_days, timezone, created_at, updated_at`,
 			[
 				nextName,

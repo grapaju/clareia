@@ -21,7 +21,8 @@ router.post('/', async (req, res, next) => {
 
     const event = parseFinanceEvent(rawBody);
     const result = await receiveFinanceEvent(event);
-    return res.status(result.status === 'applied' ? 200 : 202).json(result);
+    const responseStatus = result.status === 'applied' ? 200 : (result.status === 'failed' ? 500 : 202);
+    return res.status(responseStatus).json(result);
   } catch (error) {
     if (error instanceof SyntaxError || error instanceof ZodError) {
       return res.status(400).json({ message: 'Evento financeiro invalido.' });

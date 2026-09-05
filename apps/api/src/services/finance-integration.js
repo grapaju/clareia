@@ -1,4 +1,5 @@
 import { withTransaction } from '../db/postgres.js';
+import logger from '../utils/logger.js';
 
 const SOURCE = 'fluxo-caixa';
 const WAITING_COLLECTION = 'aguardandoretorno';
@@ -10,7 +11,7 @@ function today() {
 function actionFor(event) {
   const { invoiceNumber, clientName, remainingAmount } = event.data;
   if (event.type === 'finance.invoice.overdue') {
-    return `Cobrar pagamento da fatura ${invoiceNumber} de ${clientName}.`;
+    return `Verificar pagamento da fatura ${invoiceNumber} de ${clientName}.`;
   }
   if (event.type === 'finance.invoice.partially_paid') {
     return `Acompanhar saldo de R$ ${remainingAmount} da fatura ${invoiceNumber}.`;
@@ -18,7 +19,7 @@ function actionFor(event) {
   if (event.type === 'finance.invoice.paid') {
     return `Pagamento da fatura ${invoiceNumber} confirmado.`;
   }
-  return `Confirmar recebimento da fatura ${invoiceNumber} com ${clientName}.`;
+  return `Aguardar pagamento da fatura ${invoiceNumber} de ${clientName}.`;
 }
 
 export function buildFinanceOperationalRecords(event, mapping, accountId = '') {
@@ -49,7 +50,7 @@ export function buildFinanceOperationalRecords(event, mapping, accountId = '') {
       id: taskId,
       userId: mapping.userId,
       accountId,
-      title: `Fatura ${event.data.invoiceNumber} - ${event.data.clientName}`,
+      title: overdue ? `Verificar pagamento — ${event.data.clientName}` : `Fatura ${event.data.invoiceNumber} - ${event.data.clientName}`,
       project: mapping.projectName,
       taskType: 'Cobrança',
       nextAction: action,
@@ -72,7 +73,7 @@ export function buildFinanceOperationalRecords(event, mapping, accountId = '') {
       id: waitingId,
       userId: mapping.userId,
       accountId,
-      title: action,
+      title: `Aguardando pagamento — ${event.data.clientName}`,
       project: mapping.projectName,
       contactName: event.data.clientName,
       waitingFor: completed
@@ -109,9 +110,11 @@ async function applyStoredEvent(client, event) {
 
   const userId = account.rows[0].user_id;
   const mapping = await client.query(
-    `SELECT project_name
-     FROM finance_client_project_mappings
-     WHERE user_id = $1 AND source = $2 AND external_client_id = $3
+    `SELECT COALESCE(project.name, mapping.project_name) AS project_name
+     FROM finance_client_project_mappings AS mapping
+     LEFT JOIN project_profiles AS project
+       ON project.id = mapping.project_id AND project.user_id = mapping.user_id
+     WHERE mapping.user_id = $1 AND mapping.source = $2 AND mapping.external_client_id = $3
      LIMIT 1`,
     [userId, SOURCE, event.data.externalClientId]
   );
@@ -130,27 +133,36 @@ async function applyStoredEvent(client, event) {
     projectName: mapping.rows[0].project_name,
   }, account.rows[0].current_account_id || '');
 
-  const task = await client.query(
-    `INSERT INTO tasks (id, user_id, account_id, data)
-     VALUES ($1, $2, $3, $4::jsonb)
-     ON CONFLICT (id) DO UPDATE SET
-       account_id = CASE WHEN
-         EXCLUDED.data->>'lastFinanceEventType' = 'finance.invoice.paid'
-         OR (tasks.data->>'lastFinanceEventType' IS DISTINCT FROM 'finance.invoice.paid'
+  let taskApplied = true;
+  if (event.type === 'finance.invoice.paid') {
+    await client.query(
+      `UPDATE tasks
+       SET account_id = $3, data = tasks.data || $4::jsonb, updated_at = now()
+       WHERE id = $1 AND user_id = $2`,
+      [records.task.id, userId, records.task.accountId, JSON.stringify(records.task)]
+    );
+  } else if (event.type !== 'finance.invoice.sent') {
+    const task = await client.query(
+      `INSERT INTO tasks (id, user_id, account_id, data)
+       VALUES ($1, $2, $3, $4::jsonb)
+       ON CONFLICT (id) DO UPDATE SET
+         account_id = CASE WHEN
+           tasks.data->>'lastFinanceEventType' IS DISTINCT FROM 'finance.invoice.paid'
            AND COALESCE((tasks.data->>'lastFinanceEventOccurredAt')::timestamptz, '-infinity'::timestamptz)
-             <= (EXCLUDED.data->>'lastFinanceEventOccurredAt')::timestamptz)
-         THEN EXCLUDED.account_id ELSE tasks.account_id END,
-       data = CASE WHEN
-         EXCLUDED.data->>'lastFinanceEventType' = 'finance.invoice.paid'
-         OR (tasks.data->>'lastFinanceEventType' IS DISTINCT FROM 'finance.invoice.paid'
+             <= (EXCLUDED.data->>'lastFinanceEventOccurredAt')::timestamptz
+           THEN EXCLUDED.account_id ELSE tasks.account_id END,
+         data = CASE WHEN
+           tasks.data->>'lastFinanceEventType' IS DISTINCT FROM 'finance.invoice.paid'
            AND COALESCE((tasks.data->>'lastFinanceEventOccurredAt')::timestamptz, '-infinity'::timestamptz)
-             <= (EXCLUDED.data->>'lastFinanceEventOccurredAt')::timestamptz)
-         THEN tasks.data || EXCLUDED.data ELSE tasks.data END,
-       updated_at = now()
-     WHERE tasks.user_id = EXCLUDED.user_id
-     RETURNING id`,
-    [records.task.id, userId, records.task.accountId, JSON.stringify(records.task)]
-  );
+             <= (EXCLUDED.data->>'lastFinanceEventOccurredAt')::timestamptz
+           THEN tasks.data || EXCLUDED.data ELSE tasks.data END,
+         updated_at = now()
+       WHERE tasks.user_id = EXCLUDED.user_id
+       RETURNING id`,
+      [records.task.id, userId, records.task.accountId, JSON.stringify(records.task)]
+    );
+    taskApplied = Boolean(task.rows[0]);
+  }
   const waiting = await client.query(
     `INSERT INTO app_records (id, collection_name, user_id, account_id, data)
      VALUES ($1, $2, $3, $4, $5::jsonb)
@@ -173,7 +185,7 @@ async function applyStoredEvent(client, event) {
      RETURNING id`,
     [records.waiting.id, WAITING_COLLECTION, userId, records.waiting.accountId, JSON.stringify(records.waiting)]
   );
-  if (!task.rows[0] || !waiting.rows[0]) {
+  if (!taskApplied || !waiting.rows[0]) {
     throw new Error('Conflito de identificador ao aplicar evento financeiro.');
   }
 
@@ -198,13 +210,36 @@ export async function receiveFinanceEvent(event) {
     );
     if (!inserted.rows[0]) {
       const existing = await client.query(
-        'SELECT status FROM finance_webhook_events WHERE event_id = $1',
+        'SELECT status FROM finance_webhook_events WHERE event_id = $1 FOR UPDATE',
         [event.id]
       );
-      return { duplicate: true, status: existing.rows[0]?.status || 'received' };
+      if (existing.rows[0]?.status !== 'failed') {
+        await client.query(
+          `UPDATE finance_webhook_events
+           SET duplicate_count = duplicate_count + 1
+           WHERE event_id = $1`,
+          [event.id]
+        );
+        return { duplicate: true, status: existing.rows[0]?.status || 'received' };
+      }
     }
 
-    return { duplicate: false, status: await applyStoredEvent(client, event) };
+    await client.query('SAVEPOINT finance_event_processing');
+    try {
+      const status = await applyStoredEvent(client, event);
+      await client.query('RELEASE SAVEPOINT finance_event_processing');
+      return { duplicate: !inserted.rows[0], status };
+    } catch (error) {
+      await client.query('ROLLBACK TO SAVEPOINT finance_event_processing');
+      await client.query(
+        `UPDATE finance_webhook_events
+         SET status = 'failed', error_message = 'Falha interna no processamento.'
+         WHERE event_id = $1`,
+        [event.id]
+      );
+      logger.error(`Falha ao processar evento financeiro ${event.id}:`, error);
+      return { duplicate: !inserted.rows[0], status: 'failed' };
+    }
   });
 }
 
