@@ -11,6 +11,7 @@ import { globalRateLimit } from './middleware/global-rate-limit.js';
 import logger from './utils/logger.js';
 import { BodyLimit } from './constants/common.js';
 import { ensurePostgresSchema } from './db/init.js';
+import financeWebhookRouter from './routes/finance-webhook.js';
 
 const app = express();
 
@@ -45,6 +46,7 @@ app.use(cors({
 }));
 app.use(morgan('combined'));
 app.use(globalRateLimit);
+app.use('/webhooks/finance', express.raw({ type: 'application/json', limit: '256kb' }), financeWebhookRouter);
 app.use(express.json({
 	limit: BodyLimit,
 }));

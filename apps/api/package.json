@@ -21,7 +21,8 @@
 		"monorepo": "file:../..",
 		"morgan": "^1.10.0",
 		"multer": "^2.2.0",
-		"pg": "^8.16.3"
+		"pg": "^8.16.3",
+		"zod": "^4.5.4"
 	},
 	"devDependencies": {
 		"@eslint/js": "^9.39.4",

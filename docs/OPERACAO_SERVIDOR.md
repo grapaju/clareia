@@ -46,6 +46,7 @@ CORS_ORIGIN=https://seu-dominio.com
 DATABASE_URL=postgresql://usuario:senha@127.0.0.1:5432/clareia
 JWT_SECRET=chave-longa-forte-e-aleatoria
 GOOGLE_DRIVE_TOKEN_ENCRYPTION_KEY=string-aleatoria-forte
+CLAREIA_FINANCE_WEBHOOK_SECRET=segredo-compartilhado-com-fluxo-de-caixa
 ```
 
 Regras:
@@ -53,6 +54,10 @@ Regras:
 - DATABASE_URL e obrigatorio.
 - JWT_SECRET e obrigatorio.
 - CORS_ORIGIN deve apontar para o dominio publico do front-end.
+- CLAREIA_FINANCE_WEBHOOK_SECRET autentica eventos enviados pelo Fluxo de Caixa.
+  Use exatamente o mesmo valor em `CLAREIA_WEBHOOK_SECRET` no servidor do
+  Fluxo de Caixa. Gere o valor com
+  `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`.
 - GOOGLE_DRIVE_TOKEN_ENCRYPTION_KEY e obrigatoria para usar a integracao com
   Google Drive (criptografa os tokens salvos em `google_drive_connections`).
   Nao e configuravel pela tela de integracao — precisa ser adicionada
@@ -68,6 +73,145 @@ Regras:
 
 - Sem .env obrigatoria para o fluxo basico.
 - Em desenvolvimento, o proxy de Vite encaminha /hcgi/api para http://127.0.0.1:3005.
+
+### Integracao com Fluxo de Caixa
+
+Esta integracao envolve dois repositorios e dois bancos PostgreSQL. O Fluxo de
+Caixa produz os eventos; o Clareia recebe, valida e transforma cada evento em
+tarefa e acompanhamento. O dispatcher da outbox roda dentro do processo da API
+do Fluxo de Caixa. Depois que a transacao financeira confirma o commit, uma
+tentativa de entrega e agendada sem bloquear a operacao. Eventos ainda
+pendentes sao reprocessados periodicamente, por padrao a cada 15 minutos. O
+intervalo e configuravel por `FINANCE_OUTBOX_DISPATCH_INTERVAL_MS`. Nao existe
+um worker separado.
+
+#### Ordem de configuracao e deploy
+
+1. No Clareia, configure `DATABASE_URL`, `JWT_SECRET` e
+  `CLAREIA_FINANCE_WEBHOOK_SECRET` em `apps/api/.env`.
+2. No Clareia, execute `npm ci` e inicie/reinicie a API. O schema e aplicado de
+  forma idempotente na inicializacao; nao ha comando de migration separado.
+3. Suba a API e a web do Clareia e confirme `GET /hcgi/api/health`.
+4. Valide a publicacao do webhook com uma chamada sem assinatura:
+
+  ```bash
+  curl -i -X POST https://seu-dominio.com/hcgi/api/webhooks/finance \
+    -H 'Content-Type: application/json' --data '{}'
+  ```
+
+  O resultado esperado e `401`. `404` indica rota/proxy incorreto e `503`
+  indica que `CLAREIA_FINANCE_WEBHOOK_SECRET` nao foi carregado.
+5. No `.env` da API do Fluxo de Caixa, configure:
+
+```env
+CLAREIA_WEBHOOK_URL=https://seu-dominio.com/hcgi/api/webhooks/finance
+CLAREIA_WEBHOOK_SECRET=mesmo-valor-de-CLAREIA_FINANCE_WEBHOOK_SECRET
+FINANCE_OUTBOX_DISPATCH_INTERVAL_MS=900000
+```
+
+`FINANCE_OUTBOX_DISPATCH_INTERVAL_MS` define a varredura periodica da outbox em
+milissegundos. O padrao e `900000` (15 minutos). Use um inteiro positivo; valor
+ausente ou invalido volta ao padrao.
+
+6. No repositorio do Fluxo de Caixa, instale dependencias e aplique as migrations:
+
+  ```bash
+  npm ci
+  npm run prisma:deploy --prefix api
+  npm run build --prefix api
+  ```
+
+7. Inicie/reinicie a API do Fluxo de Caixa e confirme `GET /health`.
+8. Confirme nos logs de inicializacao que o processo permanece ativo. O mesmo
+  processo executa o detector e o dispatcher da outbox; nao suba outro worker.
+  A tentativa imediata e o timer usam o mesmo coordenador e nao processam a
+  mesma tentativa simultaneamente dentro da instancia.
+9. No Clareia, abra **Preferencias > Integracoes**, informe o codigo da conta
+  proprietaria no Fluxo de Caixa e confirme o estado **Conectado**.
+10. Gere um evento de fatura no Fluxo. No Clareia, vincule cada **cliente do
+   Fluxo de Caixa** ao **projeto do Clareia** correspondente.
+11. Execute um teste controlado: envie uma fatura, registre um pagamento
+   parcial e depois quite a fatura. Confirme a criacao e a conclusao da tarefa
+   e do item em **Aguardando retorno**.
+12. Confira a outbox no banco do Fluxo e os eventos recebidos no Clareia pelas
+   consultas abaixo.
+
+Eventos recebidos antes do vinculo ficam pendentes e sao reaplicados
+automaticamente quando a conta ou o cliente e vinculado. O UUID do evento e a
+chave idempotente nos dois sistemas, portanto um retry nao duplica registros.
+
+#### Conferir entrega e estados
+
+No PostgreSQL do Fluxo de Caixa:
+
+```sql
+SELECT id, "eventType", status, attempts, "lastError",
+     "createdAt", "processedAt", "nextAttemptAt"
+FROM "DomainEventOutbox"
+WHERE "eventType" LIKE 'finance.%'
+ORDER BY "createdAt" DESC
+LIMIT 50;
+```
+
+Estados esperados: `pending`, `processing`, `processed` e `failed`. Falhas sao
+reenviadas com backoff, ate cinco tentativas. O campo `lastError` registra
+somente a categoria/HTTP da falha, sem segredo ou corpo da resposta.
+
+No PostgreSQL do Clareia, a tabela equivalente ao IntegrationEvent e
+`finance_webhook_events`:
+
+```sql
+SELECT event_id, event_type, external_account_id, user_id, status,
+     error_message, received_at, processed_at
+FROM finance_webhook_events
+ORDER BY received_at DESC
+LIMIT 50;
+```
+
+Interpretacao dos estados:
+
+- `applied`: tarefa e acompanhamento foram aplicados.
+- `pending_account_mapping`: falta conectar a conta na tela de Integracoes.
+- `pending_client_mapping`: falta vincular o cliente a um projeto.
+
+#### Pagamento no Fluxo, mas nada apareceu no Clareia
+
+Siga esta ordem para localizar o ponto da falha:
+
+1. Confirme que o pagamento gerou `finance.invoice.partially_paid` ou
+  `finance.invoice.paid` na `DomainEventOutbox`.
+2. Se nao houver linha, revise a transacao do pagamento e os logs da API do
+  Fluxo. A gravacao do pagamento e do evento deve ocorrer na mesma transacao.
+3. Se estiver `pending`, confira `nextAttemptAt` e confirme que a API do Fluxo
+  continua ativa. Novos eventos tentam entrega logo apos o commit. Depois de
+  uma falha, o evento respeita o backoff e volta a ser elegivel quando
+  `nextAttemptAt` vence; a varredura periodica ocorre, por padrao, a cada 15
+  minutos.
+4. Se estiver `failed`, verifique `attempts`, `lastError`, URL publica, HTTPS e
+  se os dois servidores usam exatamente o mesmo segredo.
+5. Se estiver `processed`, procure o mesmo `id` como `event_id` em
+  `finance_webhook_events` no Clareia.
+6. Se o evento estiver `pending_account_mapping` ou `pending_client_mapping`,
+  conclua o vinculo na tela. O replay ocorre ao salvar.
+7. Se estiver `applied`, procure a tarefa pelo numero da fatura e confira se o
+  usuario/projeto vinculados sao os esperados.
+8. Consulte os logs sem imprimir variaveis de ambiente:
+
+  ```bash
+  pm2 logs fluxo-caixa-api --lines 200
+  pm2 logs clareia-api --lines 200
+  ```
+
+Depois de corrigir uma configuracao e somente se as cinco tentativas tiverem
+acabado, libere os eventos financeiros falhos para novo envio:
+
+```sql
+UPDATE "DomainEventOutbox"
+SET status = 'pending', attempts = 0, "lastError" = NULL, "nextAttemptAt" = NULL
+WHERE "eventType" LIKE 'finance.%' AND status = 'failed';
+```
+
+O reenvio e seguro porque o Clareia rejeita duplicacao pelo `event_id`.
 
 ## Primeira instalacao no servidor
 

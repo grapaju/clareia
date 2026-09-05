@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Helmet } from 'react-helmet';
 import { useNavigate } from 'react-router-dom';
-import { Settings } from 'lucide-react';
+import { ArrowRight, CircleCheck, Clock3, Save, Settings } from 'lucide-react';
 import Header from '@/components/Header.jsx';
 import Sidebar from '@/components/Sidebar.jsx';
 import MobileNav from '@/components/MobileNav.jsx';
@@ -15,6 +15,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useAuth } from '@/contexts/AuthContext.jsx';
 import { useTheme } from '@/contexts/ThemeContext.jsx';
 import { getCalendarPreferences, updateCalendarPreferences } from '@/services/calendarPreferencesService.js';
+import { getFinanceIntegration, saveFinanceAccount, saveFinanceClientMapping } from '@/services/financeIntegrationService.js';
+import { listProjectProfilesApi } from '@/services/projectProfilesApiService.js';
 import { loadUserPreferences, readUserPreferences, saveUserPreferences } from '@/services/userPreferencesService.js';
 
 const WEEK_DAYS = [
@@ -34,11 +36,74 @@ export default function SettingsPage() {
   const [preferences, setPreferences] = useState(() => readUserPreferences(currentUser?.id));
   const [calendarPrefs, setCalendarPrefs] = useState(() => getCalendarPreferences());
   const [saving, setSaving] = useState(false);
+  const [finance, setFinance] = useState({ account: null, clients: [], pending: [] });
+  const [financeAccountId, setFinanceAccountId] = useState('');
+  const [financeProjects, setFinanceProjects] = useState([]);
+  const [financeSelections, setFinanceSelections] = useState({});
+  const [financeStatus, setFinanceStatus] = useState('');
+  const [financeError, setFinanceError] = useState(false);
+  const [financeSaving, setFinanceSaving] = useState(false);
+  const [editingFinanceAccount, setEditingFinanceAccount] = useState(false);
 
   useEffect(() => {
     if (!currentUser?.id) return;
     loadUserPreferences(currentUser.id).then(setPreferences);
+    Promise.all([getFinanceIntegration(), listProjectProfilesApi()])
+      .then(([integration, projects]) => {
+        setFinance(integration);
+        setFinanceAccountId('');
+        setFinanceProjects(projects);
+      })
+      .catch(() => {
+        setFinanceError(true);
+        setFinanceStatus('Não foi possível carregar a integração financeira.');
+      });
   }, [currentUser?.id]);
+
+  const refreshFinance = async () => {
+    const integration = await getFinanceIntegration();
+    setFinance(integration);
+    setFinanceAccountId('');
+  };
+
+  const handleSaveFinanceAccount = async () => {
+    setFinanceError(false);
+    setFinanceSaving(true);
+    setFinanceStatus('Salvando vínculo...');
+    try {
+      const result = await saveFinanceAccount(financeAccountId.trim());
+      await refreshFinance();
+      setEditingFinanceAccount(false);
+      setFinanceStatus(result.eventsApplied
+        ? `${result.eventsApplied} evento(s) financeiro(s) aplicado(s).`
+        : 'Conta do Fluxo de Caixa vinculada.');
+    } catch (error) {
+      setFinanceError(true);
+      setFinanceStatus(error.message || 'Não foi possível vincular a conta.');
+    } finally {
+      setFinanceSaving(false);
+    }
+  };
+
+  const handleMapFinanceClient = async (externalClientId) => {
+    const projectName = financeSelections[externalClientId];
+    if (!projectName) return;
+    setFinanceError(false);
+    setFinanceSaving(true);
+    setFinanceStatus('Salvando projeto...');
+    try {
+      const result = await saveFinanceClientMapping(externalClientId, projectName);
+      await refreshFinance();
+      setFinanceStatus(result.eventsApplied
+        ? `${result.eventsApplied} evento(s) financeiro(s) aplicado(s).`
+        : 'Cliente vinculado ao projeto.');
+    } catch (error) {
+      setFinanceError(true);
+      setFinanceStatus(error.message || 'Não foi possível vincular o cliente.');
+    } finally {
+      setFinanceSaving(false);
+    }
+  };
 
   const update = async (updates) => {
     const next = { ...preferences, ...updates };
@@ -125,6 +190,58 @@ export default function SettingsPage() {
                   <TabsContent value="integracoes" className="mt-0 space-y-5">
                     <SectionTitle title="Integrações" description="Conexões são opcionais e não impedem o uso do Clareia." />
                     <div className="flex items-center justify-between gap-4 border-b border-border py-4"><div><p className="font-medium">Google Drive</p><p className="text-sm text-muted-foreground">Arquivos e materiais dos projetos.</p></div><Button variant="outline" onClick={() => navigate('/integracoes/google-drive-oauth')}>Configurar</Button></div>
+                    <section className="space-y-4 border-b border-border py-4">
+                      <div>
+                        <p className="font-medium">Fluxo de Caixa</p>
+                        <p className="text-sm text-muted-foreground">Leva faturas enviadas, vencidas e pagas para o projeto correto.</p>
+                      </div>
+                      {finance.account && !editingFinanceAccount ? (
+                        <div className="flex flex-col gap-3 border-l-2 border-emerald-500 pl-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="flex items-start gap-2">
+                            <CircleCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+                            <div><p className="text-sm font-medium">Conectado</p><p className="text-xs text-muted-foreground">Eventos financeiros estão habilitados.</p></div>
+                          </div>
+                          <Button type="button" variant="outline" onClick={() => setEditingFinanceAccount(true)}>Trocar conta</Button>
+                        </div>
+                      ) : (
+                        <Field label="Código da conta no Fluxo de Caixa">
+                          <div className="flex flex-col gap-2 sm:flex-row">
+                            <Input value={financeAccountId} onChange={(event) => setFinanceAccountId(event.target.value)} placeholder="Cole o código fornecido pelo Fluxo de Caixa" />
+                            <Button type="button" variant="outline" onClick={handleSaveFinanceAccount} disabled={!financeAccountId.trim() || financeSaving}>
+                              <Save className="mr-2 h-4 w-4" />Conectar
+                            </Button>
+                          </div>
+                        </Field>
+                      )}
+                      {finance.pending.length > 0 && (
+                        <div className="space-y-3 border-l-2 border-amber-500 pl-3">
+                          <p className="flex items-center gap-2 text-sm font-medium"><Clock3 className="h-4 w-4 text-amber-600" />Aguardando vínculo com projeto</p>
+                          {Array.from(new Map(finance.pending.map((item) => [item.externalClientId, item])).values()).map((item) => (
+                            <div key={item.externalClientId} className="grid gap-2 border-t border-border pt-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end">
+                              <div className="min-w-0"><p className="truncate text-sm font-medium">{item.clientName}</p><p className="text-xs text-muted-foreground">Cliente no Fluxo de Caixa</p></div>
+                              <Select value={financeSelections[item.externalClientId] || ''} onValueChange={(value) => setFinanceSelections((current) => ({ ...current, [item.externalClientId]: value }))}>
+                                <SelectTrigger><SelectValue placeholder="Escolher projeto" /></SelectTrigger>
+                                <SelectContent>{financeProjects.map((project) => <SelectItem key={project.name} value={project.name}>{project.name}</SelectItem>)}</SelectContent>
+                              </Select>
+                              <Button type="button" onClick={() => handleMapFinanceClient(item.externalClientId)} disabled={!financeSelections[item.externalClientId] || financeSaving}>Vincular</Button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {finance.clients.length > 0 && (
+                        <div className="space-y-2">
+                          <p className="text-sm font-medium">Vínculos ativos</p>
+                          {finance.clients.map((client) => (
+                            <div key={client.externalClientId} className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 text-sm">
+                              <span className="truncate">{client.clientName}</span>
+                              <ArrowRight className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                              <span className="truncate font-medium">{client.projectName}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {financeStatus && <p className={`text-sm ${financeError ? 'text-destructive' : 'text-muted-foreground'}`} role={financeError ? 'alert' : 'status'}>{financeStatus}</p>}
+                    </section>
                     <ToggleRow label="Google Calendar" description="Integração preparada para configuração futura." checked={preferences.integrations.googleCalendar} onChange={(value) => update({ integrations: { ...preferences.integrations, googleCalendar: value } })} />
                   </TabsContent>
 

@@ -57,6 +57,41 @@ CREATE TABLE IF NOT EXISTS app_records (
 CREATE INDEX IF NOT EXISTS idx_app_records_collection_user_created
   ON app_records(collection_name, user_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS finance_integration_accounts (
+  user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  source TEXT NOT NULL DEFAULT 'fluxo-caixa',
+  external_account_id UUID NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(source, external_account_id)
+);
+
+CREATE TABLE IF NOT EXISTS finance_client_project_mappings (
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  source TEXT NOT NULL DEFAULT 'fluxo-caixa',
+  external_client_id UUID NOT NULL,
+  project_name TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, source, external_client_id)
+);
+
+CREATE TABLE IF NOT EXISTS finance_webhook_events (
+  event_id UUID PRIMARY KEY,
+  source TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  external_account_id UUID NOT NULL,
+  user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  status TEXT NOT NULL DEFAULT 'received',
+  payload JSONB NOT NULL,
+  error_message TEXT DEFAULT '',
+  received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  processed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_finance_webhook_events_pending
+  ON finance_webhook_events(status, external_account_id, received_at);
+
 CREATE TABLE IF NOT EXISTS integrated_ai_messages (
   id BIGSERIAL PRIMARY KEY,
   user_id UUID,
