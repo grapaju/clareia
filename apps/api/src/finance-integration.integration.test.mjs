@@ -209,7 +209,12 @@ test('webhook financeiro cria registros uma unica vez e conclui no pagamento', a
   const waiting = await api(baseUrl, '/records/aguardandoRetorno', { token });
   assert.equal(tasks.payload.items.filter((item) => item.financeInvoiceId === invoiceId).length, 0);
   assert.equal(waiting.payload.items.filter((item) => item.financeInvoiceId === invoiceId).length, 1);
-  assert.equal(waiting.payload.items.find((item) => item.financeInvoiceId === invoiceId).title, 'Aguardando pagamento — Cliente Financeiro');
+  const openWaiting = waiting.payload.items.find((item) => item.financeInvoiceId === invoiceId);
+  assert.equal(openWaiting.title, 'Aguardando pagamento — Cliente Financeiro');
+  assert.equal(openWaiting.financeSource, 'fluxo-caixa');
+  assert.equal(openWaiting.lastFinanceEventId, sentEvent.id);
+  assert.equal(openWaiting.dueDate, sentEvent.data.dueDate);
+  assert.equal(waiting.payload.items.filter((item) => item.status !== 'Concluido').length, 2);
 
   const overdueEvent = {
     ...sentEvent,
@@ -234,7 +239,11 @@ test('webhook financeiro cria registros uma unica vez e conclui no pagamento', a
   const completedTasks = await api(baseUrl, '/tasks', { token });
   const completedWaiting = await api(baseUrl, '/records/aguardandoRetorno', { token });
   assert.equal(completedTasks.payload.items.find((item) => item.financeInvoiceId === invoiceId).status, 'concluida');
-  assert.equal(completedWaiting.payload.items.find((item) => item.financeInvoiceId === invoiceId).status, 'Concluido');
+  const resolvedWaiting = completedWaiting.payload.items.find((item) => item.financeInvoiceId === invoiceId);
+  assert.equal(resolvedWaiting.status, 'Concluido');
+  assert.equal(resolvedWaiting.resolutionNote, 'Resolvido automaticamente pelo FluxoCash');
+  assert.ok(resolvedWaiting.resolvedAt);
+  assert.equal(completedWaiting.payload.items.filter((item) => item.status !== 'Concluido').length, 1);
 
   const stale = await sendEvent({
     ...sentEvent,
@@ -247,4 +256,15 @@ test('webhook financeiro cria registros uma unica vez e conclui no pagamento', a
   const waitingAfterStaleEvent = await api(baseUrl, '/records/aguardandoRetorno', { token });
   assert.equal(tasksAfterStaleEvent.payload.items.find((item) => item.financeInvoiceId === invoiceId).status, 'concluida');
   assert.equal(waitingAfterStaleEvent.payload.items.find((item) => item.financeInvoiceId === invoiceId).status, 'Concluido');
+
+  const staleOverdue = await sendEvent({
+    ...overdueEvent,
+    id: randomUUID(),
+    occurredAt: '2025-12-30T12:00:00.000Z',
+  });
+  assert.equal(staleOverdue.status, 200);
+  const tasksAfterStaleOverdue = await api(baseUrl, '/tasks', { token });
+  const waitingAfterStaleOverdue = await api(baseUrl, '/records/aguardandoRetorno', { token });
+  assert.equal(tasksAfterStaleOverdue.payload.items.find((item) => item.financeInvoiceId === invoiceId).status, 'concluida');
+  assert.equal(waitingAfterStaleOverdue.payload.items.find((item) => item.financeInvoiceId === invoiceId).status, 'Concluido');
 });

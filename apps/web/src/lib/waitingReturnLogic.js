@@ -15,3 +15,39 @@ export function normalizeWaitingReturnInput(payload = {}) {
     status: String(payload.status || 'Aguardando retorno').trim(),
   };
 }
+
+export function isFinanceWaitingReturn(item = {}) {
+  return item.financeSource === 'fluxo-caixa' && Boolean(String(item.financeInvoiceId || '').trim());
+}
+
+export function getWaitingReturnActions(item = {}) {
+  if (isFinanceWaitingReturn(item)) {
+    return { showComplete: false, showReopen: false, showDelete: false };
+  }
+
+  return {
+    showComplete: item.status !== 'Concluido',
+    showReopen: item.status === 'Concluido',
+    showDelete: true,
+  };
+}
+
+export function countOpenWaitingReturns(items = []) {
+  return items.filter(isOpenWaitingReturn).length;
+}
+
+export function isOpenWaitingReturn(item = {}) {
+  return item.status !== 'Concluido';
+}
+
+export function formatFinanceAmount(value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return '';
+  return amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+
+export function formatFinanceDueDate(value) {
+  const matched = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!matched) return '';
+  return `${matched[3]}/${matched[2]}/${matched[1]}`;
+}

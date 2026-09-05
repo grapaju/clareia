@@ -23,14 +23,30 @@ import {
 } from '@/components/ui/alert-dialog';
 import { toast } from 'sonner';
 import {
+  countOpenWaitingReturns,
+  formatFinanceAmount,
+  formatFinanceDueDate,
+  getWaitingReturnActions,
+  isFinanceWaitingReturn,
+} from '@/lib/waitingReturnLogic.js';
+import {
   createWaitingReturn,
   deleteWaitingReturnEverywhere,
   listWaitingReturns,
   syncWaitingReturnsWithCloud,
-  updateWaitingReturn
+  updateWaitingReturnEverywhere
 } from '@/services/waitingReturnService.js';
 
 const STATUS_OPTIONS = ['Aguardando retorno', 'Concluido'];
+
+function safeExternalUrl(value) {
+  try {
+    const url = new URL(String(value || ''));
+    return url.protocol === 'https:' ? url.href : '';
+  } catch {
+    return '';
+  }
+}
 
 export default function WaitingReturnPage() {
   const [items, setItems] = useState(() => listWaitingReturns());
@@ -48,7 +64,7 @@ export default function WaitingReturnPage() {
     status: 'Aguardando retorno'
   });
 
-  const openCount = useMemo(() => items.filter((item) => item.status !== 'Concluido').length, [items]);
+  const openCount = useMemo(() => countOpenWaitingReturns(items), [items]);
 
   const refresh = () => setItems(listWaitingReturns());
 
@@ -83,12 +99,16 @@ export default function WaitingReturnPage() {
     toast.success('Item em aguardando retorno criado.');
   };
 
-  const handleToggleDone = (item) => {
-    updateWaitingReturn(item.id, {
-      status: item.status === 'Concluido' ? 'Aguardando retorno' : 'Concluido'
-    });
-    refresh();
-    syncWaitingReturnsWithCloud();
+  const handleToggleDone = async (item) => {
+    try {
+      await updateWaitingReturnEverywhere(item.id, {
+        status: item.status === 'Concluido' ? 'Aguardando retorno' : 'Concluido'
+      });
+      refresh();
+    } catch (error) {
+      console.error(error);
+      toast.error('Não foi possível atualizar o acompanhamento.');
+    }
   };
 
   const handleDelete = (id) => {
@@ -160,28 +180,50 @@ export default function WaitingReturnPage() {
                     <p className="text-sm text-muted-foreground">Nenhum item em aguardando retorno.</p>
                   ) : (
                     <ul className="space-y-3">
-                      {items.map((item) => (
-                        <li key={item.id} className="rounded-lg border border-border p-3">
+                      {items.map((item) => {
+                        const financeItem = isFinanceWaitingReturn(item);
+                        const actions = getWaitingReturnActions(item);
+                        const externalUrl = safeExternalUrl(item.contextUrl);
+                        return <li key={item.id} className="rounded-lg border border-border p-3">
                           <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                            <div>
+                            <div className="min-w-0">
                               <p className="text-sm font-medium text-foreground">{item.title}</p>
                               <p className="text-xs text-muted-foreground">Projeto: {item.project} • Contato: {item.contactName}</p>
-                              <p className="text-xs text-foreground mt-2">{item.waitingFor}</p>
-                              {item.observations && <p className="text-xs text-muted-foreground mt-1">Obs.: {item.observations}</p>}
-                              <p className="text-xs text-muted-foreground mt-2">Follow-up: {item.nextFollowUp || '-'} {item.nextFollowUpDate ? `(${item.nextFollowUpDate})` : ''}</p>
+                              {financeItem ? (
+                                <div className="mt-3 space-y-2 text-sm">
+                                  <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
+                                    <dt className="text-muted-foreground">Fatura</dt><dd className="truncate font-medium">{item.invoiceNumber || 'Não informada'}</dd>
+                                    <dt className="text-muted-foreground">Total</dt><dd>{formatFinanceAmount(item.totalAmount) || '-'}</dd>
+                                    <dt className="text-muted-foreground">Pago</dt><dd>{formatFinanceAmount(item.paidAmount) || '-'}</dd>
+                                    <dt className="text-muted-foreground">Saldo</dt><dd>{formatFinanceAmount(item.remainingAmount) || '-'}</dd>
+                                    <dt className="text-muted-foreground">Vencimento</dt><dd>{formatFinanceDueDate(item.dueDate) || 'Não informado'}</dd>
+                                  </dl>
+                                  <p className="text-xs text-muted-foreground">{item.status === 'Concluido'
+                                    ? (item.resolutionNote || 'Resolvido automaticamente pelo FluxoCash.')
+                                    : 'Será encerrado automaticamente quando o pagamento for registrado no FluxoCash.'}</p>
+                                  {externalUrl && <a href={externalUrl} target="_blank" rel="noreferrer" className="inline-flex text-xs font-medium text-primary hover:underline">Abrir no FluxoCash</a>}
+                                </div>
+                              ) : (
+                                <>
+                                  <p className="mt-2 text-xs text-foreground">{item.waitingFor}</p>
+                                  {item.observations && <p className="mt-1 text-xs text-muted-foreground">Obs.: {item.observations}</p>}
+                                  <p className="mt-2 text-xs text-muted-foreground">Próximo contato: {item.nextFollowUp || '-'} {item.nextFollowUpDate ? `(${item.nextFollowUpDate})` : ''}</p>
+                                </>
+                              )}
                             </div>
-                            <div className="flex gap-2">
-                              <Button size="sm" variant="outline" onClick={() => handleToggleDone(item)}>
+                            <div className="flex shrink-0 flex-wrap gap-2">
+                              {financeItem && item.status !== 'Concluido' && <span className="inline-flex min-h-9 items-center text-sm font-medium text-emerald-700">Aguardando pagamento</span>}
+                              {(actions.showComplete || actions.showReopen) && <Button size="sm" variant="outline" onClick={() => handleToggleDone(item)}>
                                 <CheckCircle2 className="w-4 h-4 mr-2" />
-                                {item.status === 'Concluido' ? 'Reabrir' : 'Concluir'}
-                              </Button>
-                              <Button size="sm" variant="outline" className="text-destructive" onClick={() => handleDelete(item.id)}>
+                                {actions.showReopen ? 'Reabrir' : 'Concluir'}
+                              </Button>}
+                              {actions.showDelete && <Button size="sm" variant="outline" className="text-destructive" onClick={() => handleDelete(item.id)}>
                                 <Trash2 className="w-4 h-4 mr-2" /> Excluir
-                              </Button>
+                              </Button>}
                             </div>
                           </div>
-                        </li>
-                      ))}
+                        </li>;
+                      })}
                     </ul>
                   )}
                 </CardContent>

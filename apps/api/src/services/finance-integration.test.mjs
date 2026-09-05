@@ -47,4 +47,6 @@ test('conclui tarefa e acompanhamento quando a fatura e paga', () => {
   assert.equal(records.task.completedAt, baseEvent.occurredAt);
   assert.equal(records.waiting.status, 'Concluido');
   assert.equal(records.waiting.nextFollowUpDate, '');
+  assert.equal(records.waiting.resolvedAt, baseEvent.occurredAt);
+  assert.equal(records.waiting.resolutionNote, 'Resolvido automaticamente pelo FluxoCash');
 });

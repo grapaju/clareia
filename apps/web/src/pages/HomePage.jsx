@@ -29,6 +29,7 @@ import { useTheme } from '@/contexts/ThemeContext.jsx';
 import { getTodayCapacity, reorganizeTasksByEnergy } from '@/lib/energyLogic.js';
 import { buildTodayGroups, getOpenPlannedMinutes, getTaskNextActionPresentation, getTaskRowMetadata, getTodayCapacityState, getTodayHighlight, getTodayPresentation, getVisibleTodayTasks } from '@/lib/todayViewLogic.js';
 import { getTaskMicrotaskProgress, isTaskActionableStatus, normalizeTaskStatus, TASK_STATUS } from '@/lib/taskExecution.js';
+import { isOpenWaitingReturn } from '@/lib/waitingReturnLogic.js';
 import { listWaitingReturns, syncWaitingReturnsWithCloud } from '@/services/waitingReturnService.js';
 import { listUnsortedNotes, subscribeToUnsortedNotes, syncUnsortedNotesFromApi } from '@/lib/unsortedNotesStorage.js';
 import { getActiveWorkSession } from '@/services/workSessionService.js';
@@ -111,7 +112,7 @@ export default function HomePage() {
     const unsubscribe = subscribeToUnsortedNotes(refreshGuarded);
     syncUnsortedNotesFromApi(userId).then(refreshGuarded);
     syncWaitingReturnsWithCloud().then(() => {
-      if (active) setWaitingItems(listWaitingReturns().filter((item) => item.status !== 'Concluido'));
+      if (active) setWaitingItems(listWaitingReturns().filter(isOpenWaitingReturn));
     });
 
     return () => {

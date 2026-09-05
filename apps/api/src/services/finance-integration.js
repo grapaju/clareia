@@ -39,6 +39,7 @@ export function buildFinanceOperationalRecords(event, mapping, accountId = '') {
     totalAmount: event.data.totalAmount,
     paidAmount: event.data.paidAmount,
     remainingAmount: event.data.remainingAmount,
+    dueDate: event.data.dueDate || '',
     lastFinanceEventId: event.id,
     lastFinanceEventType: event.type,
     lastFinanceEventOccurredAt: event.occurredAt,
@@ -85,6 +86,8 @@ export function buildFinanceOperationalRecords(event, mapping, accountId = '') {
       nextFollowUpDate: completed ? '' : followUpDate,
       observations: `Total: R$ ${event.data.totalAmount}. Pago: R$ ${event.data.paidAmount}. Saldo: R$ ${event.data.remainingAmount}.`,
       status: completed ? 'Concluido' : 'Aguardando retorno',
+      resolvedAt: completed ? event.occurredAt : '',
+      resolutionNote: completed ? 'Resolvido automaticamente pelo FluxoCash' : '',
     },
   };
 }
