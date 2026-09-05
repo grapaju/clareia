@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Helmet } from 'react-helmet';
+import { useLocation } from 'react-router-dom';
 import { Clock3, Plus, Trash2, CheckCircle2 } from 'lucide-react';
 import Header from '@/components/Header.jsx';
 import Sidebar from '@/components/Sidebar.jsx';
@@ -29,6 +30,7 @@ import {
   getWaitingReturnActions,
   isFinanceWaitingReturn,
 } from '@/lib/waitingReturnLogic.js';
+import { getFinanceDuePresentation } from '@/lib/notificationLogic.js';
 import {
   createWaitingReturn,
   deleteWaitingReturnEverywhere,
@@ -49,6 +51,7 @@ function safeExternalUrl(value) {
 }
 
 export default function WaitingReturnPage() {
+  const location = useLocation();
   const [items, setItems] = useState(() => listWaitingReturns());
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [itemToDelete, setItemToDelete] = useState(null);
@@ -67,6 +70,13 @@ export default function WaitingReturnPage() {
   const openCount = useMemo(() => countOpenWaitingReturns(items), [items]);
 
   const refresh = () => setItems(listWaitingReturns());
+
+  useEffect(() => {
+    if (!location.hash) return;
+    const itemId = decodeURIComponent(location.hash.slice(1));
+    const timeout = window.setTimeout(() => document.getElementById(itemId)?.focus(), 100);
+    return () => window.clearTimeout(timeout);
+  }, [items, location.hash]);
 
   useEffect(() => {
     syncWaitingReturnsWithCloud().then(() => refresh());
@@ -184,7 +194,10 @@ export default function WaitingReturnPage() {
                         const financeItem = isFinanceWaitingReturn(item);
                         const actions = getWaitingReturnActions(item);
                         const externalUrl = safeExternalUrl(item.contextUrl);
-                        return <li key={item.id} className="rounded-lg border border-border p-3">
+                        const due = financeItem ? getFinanceDuePresentation(item.dueDate, new Date(), {
+                          overdue: item.lastFinanceEventType === 'finance.invoice.overdue',
+                        }) : null;
+                        return <li key={item.id} id={item.id} tabIndex={-1} className="rounded-lg border border-border p-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                           <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                             <div className="min-w-0">
                               <p className="text-sm font-medium text-foreground">{item.title}</p>
@@ -196,7 +209,7 @@ export default function WaitingReturnPage() {
                                     <dt className="text-muted-foreground">Total</dt><dd>{formatFinanceAmount(item.totalAmount) || '-'}</dd>
                                     <dt className="text-muted-foreground">Pago</dt><dd>{formatFinanceAmount(item.paidAmount) || '-'}</dd>
                                     <dt className="text-muted-foreground">Saldo</dt><dd>{formatFinanceAmount(item.remainingAmount) || '-'}</dd>
-                                    <dt className="text-muted-foreground">Vencimento</dt><dd>{formatFinanceDueDate(item.dueDate) || 'Não informado'}</dd>
+                                    <dt className={due?.state === 'overdue' ? 'text-destructive' : 'text-muted-foreground'}>{due?.label || 'Vencimento'}</dt><dd>{due?.formattedDate || formatFinanceDueDate(item.dueDate) || 'Não informado'}</dd>
                                   </dl>
                                   <p className="text-xs text-muted-foreground">{item.status === 'Concluido'
                                     ? (item.resolutionNote || 'Resolvido automaticamente pelo FluxoCash.')

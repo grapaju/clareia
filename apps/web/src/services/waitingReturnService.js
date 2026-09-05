@@ -5,6 +5,7 @@ import { isFinanceWaitingReturn, normalizeWaitingReturnInput } from '@/lib/waiti
 
 const STORAGE_KEY = 'clareia_waiting_return_v1';
 const REMOTE_COLLECTION = 'aguardandoRetorno';
+const UPDATED_EVENT = 'clareia-waiting-returns-updated';
 
 function readAll() {
   const items = readUserScopedJson(STORAGE_KEY, []);
@@ -13,6 +14,13 @@ function readAll() {
 
 function writeAll(items) {
   writeUserScopedJson(STORAGE_KEY, items);
+  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(UPDATED_EVENT));
+}
+
+export function subscribeToWaitingReturns(callback) {
+  if (typeof window === 'undefined') return () => {};
+  window.addEventListener(UPDATED_EVENT, callback);
+  return () => window.removeEventListener(UPDATED_EVENT, callback);
 }
 
 function uid(prefix = 'waiting') {

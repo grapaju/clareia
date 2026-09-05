@@ -23,7 +23,7 @@ export const financeEventSchema = z.object({
     externalClientId: z.string().uuid(),
     clientName: z.string().trim().min(1).max(200),
     invoiceNumber: z.string().trim().min(1).max(100),
-    dueDate: dateOnlySchema.nullable(),
+    dueDate: dateOnlySchema.nullable().optional(),
     totalAmount: decimalAmountSchema,
     paidAmount: decimalAmountSchema,
     remainingAmount: decimalAmountSchema,

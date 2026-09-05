@@ -5,6 +5,8 @@ import { Home, FolderKanban, Sparkles, Settings, Clock3, BarChart3, CalendarDays
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext.jsx';
 import { countPendingUnsortedNotes, subscribeToUnsortedNotes } from '@/lib/unsortedNotesStorage.js';
+import { countOpenWaitingReturns } from '@/lib/waitingReturnLogic.js';
+import { listWaitingReturns, subscribeToWaitingReturns } from '@/services/waitingReturnService.js';
 
 const primaryItems = [
   { icon: Home, label: 'Hoje', path: '/' },
@@ -29,11 +31,20 @@ const supportItems = [
 export default function Sidebar({ compact = false }) {
   const { currentUser } = useAuth();
   const [savedCount, setSavedCount] = useState(0);
+  const [waitingCount, setWaitingCount] = useState(0);
 
   useEffect(() => {
-    const sync = () => setSavedCount(countPendingUnsortedNotes(currentUser?.id));
+    const sync = () => {
+      setSavedCount(countPendingUnsortedNotes(currentUser?.id));
+      setWaitingCount(countOpenWaitingReturns(listWaitingReturns()));
+    };
     sync();
-    return subscribeToUnsortedNotes(sync);
+    const unsubscribeSaved = subscribeToUnsortedNotes(sync);
+    const unsubscribeWaiting = subscribeToWaitingReturns(sync);
+    return () => {
+      unsubscribeSaved();
+      unsubscribeWaiting();
+    };
   }, [currentUser?.id]);
 
   const renderItem = (item) => (
@@ -50,7 +61,8 @@ export default function Sidebar({ compact = false }) {
     >
       <item.icon className={cn('h-5 w-5 shrink-0', compact && 'h-4.5 w-4.5')} aria-hidden="true" />
       <span className={cn(compact && 'text-[13px]')}>{item.label}</span>
-      {item.path === '/guardados' && savedCount > 0 && <span className="ml-auto text-xs tabular-nums text-muted-foreground">{savedCount}</span>}
+      {item.path === '/guardados' && savedCount > 0 && <span className="ml-auto rounded bg-muted px-1.5 py-0.5 text-xs tabular-nums text-muted-foreground" aria-label={`${savedCount} ${savedCount === 1 ? 'guardado' : 'guardados'}`}>{savedCount}</span>}
+      {item.path === '/aguardando-retorno' && waitingCount > 0 && <span className="ml-auto rounded bg-muted px-1.5 py-0.5 text-xs tabular-nums text-muted-foreground" aria-label={`${waitingCount} ${waitingCount === 1 ? 'acompanhamento' : 'acompanhamentos'}`}>{waitingCount}</span>}
     </NavLink>
   );
 

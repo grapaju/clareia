@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Helmet } from 'react-helmet';
 import { Eye, ListTodo, MoreHorizontal, Play } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import Header from '@/components/Header.jsx';
 import Sidebar from '@/components/Sidebar.jsx';
@@ -29,9 +29,6 @@ import { useTheme } from '@/contexts/ThemeContext.jsx';
 import { getTodayCapacity, reorganizeTasksByEnergy } from '@/lib/energyLogic.js';
 import { buildTodayGroups, getOpenPlannedMinutes, getTaskNextActionPresentation, getTaskRowMetadata, getTodayCapacityState, getTodayHighlight, getTodayPresentation, getVisibleTodayTasks } from '@/lib/todayViewLogic.js';
 import { getTaskMicrotaskProgress, isTaskActionableStatus, normalizeTaskStatus, TASK_STATUS } from '@/lib/taskExecution.js';
-import { isOpenWaitingReturn } from '@/lib/waitingReturnLogic.js';
-import { listWaitingReturns, syncWaitingReturnsWithCloud } from '@/services/waitingReturnService.js';
-import { listUnsortedNotes, subscribeToUnsortedNotes, syncUnsortedNotesFromApi } from '@/lib/unsortedNotesStorage.js';
 import { getActiveWorkSession } from '@/services/workSessionService.js';
 import { readUserPreferences } from '@/services/userPreferencesService.js';
 import { useProfessionalJourney } from '@/contexts/ProfessionalJourneyContext.jsx';
@@ -57,6 +54,7 @@ export default function HomePage() {
   const { currentUser } = useAuth();
   const { lowStimulationMode, setLowStimulationMode } = useTheme();
   const navigate = useNavigate();
+  const location = useLocation();
   const { currentJourney, professionalProjects, startWork, resumeWork, startActivity } = useProfessionalJourney();
   const userId = currentUser?.id || '';
   const [detailsTask, setDetailsTask] = useState(null);
@@ -76,8 +74,6 @@ export default function HomePage() {
   const [dismissedHighlightIds, setDismissedHighlightIds] = useState([]);
   const [isHardDayOpen, setIsHardDayOpen] = useState(false);
   const [isNoAlternativeOpen, setIsNoAlternativeOpen] = useState(false);
-  const [waitingItems, setWaitingItems] = useState([]);
-  const [guardedItems, setGuardedItems] = useState([]);
   const [pendingProfessionalTask, setPendingProfessionalTask] = useState(null);
   const calmTitleRef = useRef(null);
   const openingPreferenceUserRef = useRef('');
@@ -96,30 +92,16 @@ export default function HomePage() {
   }, [userId]);
 
   useEffect(() => {
+    const taskId = new URLSearchParams(location.search).get('task');
+    if (!taskId || isLoading) return;
+    const task = tasks.find((item) => item.id === taskId);
+    if (task) setDetailsTask(task);
+  }, [isLoading, location.search, tasks]);
+
+  useEffect(() => {
     if (!lowStimulationMode) return;
     window.requestAnimationFrame(() => calmTitleRef.current?.focus());
   }, [lowStimulationMode]);
-
-  useEffect(() => {
-    let active = true;
-    setWaitingItems([]);
-    setGuardedItems([]);
-    if (!userId) return undefined;
-
-    const refreshGuarded = () => {
-      if (active) setGuardedItems(listUnsortedNotes(userId, 'aguardando_organizacao'));
-    };
-    const unsubscribe = subscribeToUnsortedNotes(refreshGuarded);
-    syncUnsortedNotesFromApi(userId).then(refreshGuarded);
-    syncWaitingReturnsWithCloud().then(() => {
-      if (active) setWaitingItems(listWaitingReturns().filter(isOpenWaitingReturn));
-    });
-
-    return () => {
-      active = false;
-      unsubscribe();
-    };
-  }, [userId]);
 
   const canonical = useMemo(() => buildTodayGroups(tasks), [tasks]);
   const visibleTodayTasks = useMemo(() => getVisibleTodayTasks(canonical.groups), [canonical.groups]);
@@ -148,7 +130,6 @@ export default function HomePage() {
   const capacity = getTodayCapacity(tasks, checkIn);
   const plannedMinutes = getOpenPlannedMinutes(canonical.groups);
   const capacityState = getTodayCapacityState(plannedMinutes, capacity.availableMinutes);
-  const waitingCount = canonical.groups.waiting.length + waitingItems.length;
   const overdueCount = canonical.groups.overdue.length;
   const otherOpenCount = Math.max(0, visibleTodayTasks.length - overdueCount);
   const summaryItems = [
@@ -158,7 +139,6 @@ export default function HomePage() {
       : overdueCount === 0 && visibleTodayTasks.length > 0
         ? { label: pluralize(visibleTodayTasks.length, 'tarefa aberta', 'tarefas abertas'), destination: 'tasks' }
         : null,
-    guardedItems.length > 0 ? { label: pluralize(guardedItems.length, 'guardado para organizar', 'guardados para organizar'), destination: 'guarded' } : null,
   ].filter(Boolean);
   const completedPlannedToday = canonical.completedToday.filter((task) => getTaskRowMetadata(task).situation.startsWith('Hoje')).length;
   const plannedTaskCount = canonical.groups.today.length + completedPlannedToday;
@@ -301,7 +281,6 @@ export default function HomePage() {
                           <p className="text-foreground">Nenhuma tarefa para mostrar agora.</p>
                           <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
                             <QuickCaptureDialog />
-                            <Button variant="outline" onClick={() => navigate('/guardados')}>Ver Guardados</Button>
                             <Button variant="ghost" onClick={() => setLowStimulationMode(false)}>Sair do Modo tranquilo</Button>
                           </div>
                         </div>
@@ -315,7 +294,7 @@ export default function HomePage() {
                           {summaryItems.map((item, index) => (
                             <React.Fragment key={`${item.destination}-${item.label}`}>
                               {index > 0 && <span aria-hidden="true"> · </span>}
-                              <button type="button" className="rounded-sm underline decoration-border underline-offset-4 hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => item.destination === 'guarded' ? navigate('/guardados') : document.getElementById('open-tasks')?.scrollIntoView({ behavior: 'smooth' })}>{item.label}</button>
+                              <button type="button" className="rounded-sm underline decoration-border underline-offset-4 hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => document.getElementById('open-tasks')?.scrollIntoView({ behavior: 'smooth' })}>{item.label}</button>
                             </React.Fragment>
                           ))}
                         </p>
@@ -383,13 +362,6 @@ export default function HomePage() {
                     </section>
                   )}
 
-                  {(guardedItems.length > 0 || waitingCount > 0) && (
-                    <nav className="mb-6 flex flex-col gap-2 sm:flex-row" aria-label="Pendências para consultar">
-                      {guardedItems.length > 0 && <Button variant="outline" className="justify-between" onClick={() => navigate('/guardados')}><span>{pluralize(guardedItems.length, 'guardado para organizar', 'guardados para organizar')}</span><span>Ver guardados</span></Button>}
-                      {waitingCount > 0 && <Button variant="outline" className="justify-between" onClick={() => navigate('/aguardando-retorno')}><span>{pluralize(waitingCount, 'item aguardando retorno', 'itens aguardando retorno')}</span><span>Ver itens</span></Button>}
-                    </nav>
-                  )}
-
                   {canonical.completedToday.length > 0 && (
                     <details className="rounded-lg border border-border bg-card">
                       <summary className="cursor-pointer px-4 py-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Concluídas hoje ({canonical.completedToday.length})</summary>
@@ -397,7 +369,7 @@ export default function HomePage() {
                     </details>
                   )}
 
-                  {!highlightTask && otherTasks.length === 0 && waitingCount === 0 && guardedItems.length === 0 && (
+                  {!highlightTask && otherTasks.length === 0 && (
                     <p className="my-8 text-sm text-muted-foreground">Você não tem tarefas abertas. Se lembrar de algo, use Tirar da cabeça.</p>
                   )}
                   </>}
@@ -428,7 +400,10 @@ export default function HomePage() {
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
-        {detailsTask && <TaskDetailsModal task={detailsTask} isOpen onClose={() => setDetailsTask(null)} />}
+        {detailsTask && <TaskDetailsModal task={detailsTask} isOpen onClose={() => {
+          setDetailsTask(null);
+          if (new URLSearchParams(location.search).has('task')) navigate('/', { replace: true });
+        }} />}
         {editTask && <EditTaskModal task={editTask} isOpen onClose={() => setEditTask(null)} />}
         <TaskCompletionDialog isOpen={Boolean(completionTask)} onOpenChange={(open) => !open && setCompletionTask(null)} task={completionTask} onConfirm={handleCompleteTask} />
         <TaskPendingMicrotasksDialog isOpen={Boolean(pendingCompletionData)} onOpenChange={(open) => !open && setPendingCompletionData(null)} pendingData={pendingCompletionData} onPause={() => setIsPauseDialogOpen(true)} onBack={() => setPendingCompletionData(null)} onMarkRemaining={handleMarkRemainingAsDone} onForceComplete={handleForceComplete} />

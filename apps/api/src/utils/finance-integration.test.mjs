@@ -57,3 +57,13 @@ test('rejeita corpo adulterado, timestamp expirado e campos extras', () => {
   }), false);
   assert.throws(() => parseFinanceEvent(JSON.stringify({ ...event, unexpected: true })));
 });
+
+test('aceita vencimento ausente sem inventar data', () => {
+  const withoutDueDate = {
+    ...event,
+    data: { ...event.data },
+  };
+  delete withoutDueDate.data.dueDate;
+
+  assert.equal(parseFinanceEvent(JSON.stringify(withoutDueDate)).data.dueDate, undefined);
+});

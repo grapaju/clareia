@@ -6,6 +6,8 @@ import { cn } from '@/lib/utils';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { useAuth } from '@/contexts/AuthContext.jsx';
 import { countPendingUnsortedNotes, subscribeToUnsortedNotes } from '@/lib/unsortedNotesStorage.js';
+import { countOpenWaitingReturns } from '@/lib/waitingReturnLogic.js';
+import { listWaitingReturns, subscribeToWaitingReturns } from '@/services/waitingReturnService.js';
 
 const navItems = [
   { icon: Home, label: 'Hoje', path: '/' },
@@ -28,11 +30,20 @@ export default function MobileNav() {
   const location = useLocation();
   const { currentUser } = useAuth();
   const [savedCount, setSavedCount] = useState(0);
+  const [waitingCount, setWaitingCount] = useState(0);
 
   useEffect(() => {
-    const sync = () => setSavedCount(countPendingUnsortedNotes(currentUser?.id));
+    const sync = () => {
+      setSavedCount(countPendingUnsortedNotes(currentUser?.id));
+      setWaitingCount(countOpenWaitingReturns(listWaitingReturns()));
+    };
     sync();
-    return subscribeToUnsortedNotes(sync);
+    const unsubscribeSaved = subscribeToUnsortedNotes(sync);
+    const unsubscribeWaiting = subscribeToWaitingReturns(sync);
+    return () => {
+      unsubscribeSaved();
+      unsubscribeWaiting();
+    };
   }, [currentUser?.id]);
 
   const isActive = (path) => {
@@ -74,7 +85,9 @@ export default function MobileNav() {
               <DropdownMenuItem key={item.path} asChild>
                 <Link to={item.path} className="flex min-h-11 items-center gap-3">
                   <item.icon className="h-5 w-5" aria-hidden="true" />
-                  {item.label}{item.path === '/guardados' && savedCount > 0 ? ` (${savedCount})` : ''}
+                  <span>{item.label}</span>
+                  {item.path === '/guardados' && savedCount > 0 && <span className="ml-auto rounded bg-muted px-1.5 py-0.5 text-xs tabular-nums text-muted-foreground" aria-label={`${savedCount} ${savedCount === 1 ? 'guardado' : 'guardados'}`}>{savedCount}</span>}
+                  {item.path === '/aguardando-retorno' && waitingCount > 0 && <span className="ml-auto rounded bg-muted px-1.5 py-0.5 text-xs tabular-nums text-muted-foreground" aria-label={`${waitingCount} ${waitingCount === 1 ? 'acompanhamento' : 'acompanhamentos'}`}>{waitingCount}</span>}
                 </Link>
               </DropdownMenuItem>
             ))}
