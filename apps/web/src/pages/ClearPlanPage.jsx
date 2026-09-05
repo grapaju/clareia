@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Helmet } from 'react-helmet';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Sparkles, Edit2, ListTodo, Calendar, Clock, ChevronDown, ChevronUp, Link2, Trash2, Layers } from 'lucide-react';
@@ -136,6 +136,7 @@ export default function ClearPlanPage() {
   const [showAllTasks, setShowAllTasks] = useState(false);
   const [projectContext, setProjectContext] = useState({ projects: [], aliases: [] });
   const [selectedTaskIds, setSelectedTaskIds] = useState([]);
+  const confirmationInFlightRef = useRef(false);
 
   const [deleteDialog, setDeleteDialog] = useState({ open: false, taskId: null });
   const [mergeDialog, setMergeDialog] = useState({ open: false, sourceId: null, targetId: '' });
@@ -522,7 +523,7 @@ export default function ClearPlanPage() {
   };
 
   const handleCreateTasks = async () => {
-    if (!plan) return;
+    if (!plan || confirmationInFlightRef.current) return;
     if (getPlanStatus(plan) !== 'pending') {
       toast.info('Este plano já foi processado.');
       setPlanData(null);
@@ -537,6 +538,7 @@ export default function ClearPlanPage() {
       return;
     }
 
+    confirmationInFlightRef.current = true;
     setIsProcessing(true);
 
     try {
@@ -574,18 +576,21 @@ export default function ClearPlanPage() {
 
       await refreshTasks();
 
-      preparedTasks.forEach((task) => {
-        if (task.project) appendProjectHistory(task.project, 'Tarefa criada', task.title || 'Nova tarefa do plano');
-      });
+      if (!result?.reused) {
+        preparedTasks.forEach((task) => {
+          if (task.project) appendProjectHistory(task.project, 'Tarefa criada', task.title || 'Nova tarefa do plano');
+        });
+      }
 
       setPlanData(null);
-      const count = result?.items?.length || preparedTasks.length;
+      const count = result?.createdCount ?? result?.items?.length ?? preparedTasks.length;
       toast.success(result?.reused ? 'Este plano já havia sido criado.' : `${count} tarefas criadas com sucesso.`);
       navigate('/');
     } catch (err) {
       console.error(err);
       toast.error('Erro ao criar tarefas.');
     } finally {
+      confirmationInFlightRef.current = false;
       setIsProcessing(false);
     }
   };
@@ -639,7 +644,7 @@ export default function ClearPlanPage() {
         <Header />
         <div className="flex">
           <Sidebar />
-          <main className="flex-1 p-10 text-center">
+          <main className="min-w-0 flex-1 p-10 text-center">
             <p className="text-muted-foreground">Buscando plano pendente...</p>
           </main>
         </div>
@@ -654,7 +659,7 @@ export default function ClearPlanPage() {
         <Header />
         <div className="flex">
           <Sidebar />
-          <main className="flex-1 p-10 text-center">
+          <main className="min-w-0 flex-1 p-10 text-center">
             <p className="text-muted-foreground mb-4">Nenhum plano pendente para criar tarefas.</p>
             <Button onClick={() => navigate('/criar-plano')}>Criar novo plano</Button>
           </main>
@@ -673,7 +678,7 @@ export default function ClearPlanPage() {
           <Header />
           <div className="flex">
             <Sidebar />
-            <main className="flex-1 pb-20 md:pb-8">
+            <main className="min-w-0 flex-1 pb-20 md:pb-8">
               <div className="page-container section-spacing max-w-3xl">
                 <Card className="bg-card border-border shadow-sm">
                   <CardContent className="p-8 space-y-4">
@@ -707,7 +712,7 @@ export default function ClearPlanPage() {
         <Header />
         <div className="flex">
           <Sidebar />
-          <main className="flex-1 pb-20 md:pb-8">
+          <main className="min-w-0 flex-1 pb-20 md:pb-8">
             <div className="page-container section-spacing max-w-5xl">
               <div className="mb-8 text-center max-w-3xl mx-auto">
                 <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-primary/10 text-primary mb-4 shadow-sm">
@@ -749,7 +754,7 @@ export default function ClearPlanPage() {
               </div>
 
               <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <label className="flex min-h-11 items-center gap-2 rounded-md border border-border px-3 text-sm">
                     <Checkbox
                       checked={selectedTaskIds.length === editableTasks.length && editableTasks.length > 0}

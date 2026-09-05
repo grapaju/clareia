@@ -6,6 +6,7 @@ import { ThemeProvider } from '@/contexts/ThemeContext.jsx';
 import { AuthProvider } from '@/contexts/AuthContext.jsx';
 import { TaskProvider } from '@/contexts/TaskContext.jsx';
 import { AppModeProvider } from '@/contexts/AppModeContext.jsx';
+import { ProfessionalJourneyProvider } from '@/contexts/ProfessionalJourneyContext.jsx';
 import ProtectedRoute from '@/components/ProtectedRoute.jsx';
 import AdminRoute from '@/components/AdminRoute.jsx';
 
@@ -35,7 +36,8 @@ function App() {
     <AuthProvider>
       <ThemeProvider>
         <AppModeProvider>
-          <TaskProvider>
+          <ProfessionalJourneyProvider>
+            <TaskProvider>
             <Router>
               <Routes>
                 <Route path="/login" element={<LoginPage />} />
@@ -59,13 +61,14 @@ function App() {
                 <Route path="/configuracoes" element={withProtectedMode(<SettingsPage />)} />
                 <Route path="/conta" element={withProtectedMode(<AccountPage />)} />
                 <Route path="/laboratorio" element={withProtectedMode(<AdminRoute><LaboratoryPage /></AdminRoute>)} />
-                <Route path="/integracoes/google-drive-oauth" element={withProtectedMode(<GoogleDriveOAuthPage />)} />
+                <Route path="/integracoes/google-drive-oauth" element={withProtectedMode(<AdminRoute><GoogleDriveOAuthPage /></AdminRoute>)} />
                 
                 <Route path="*" element={withProtectedMode(<HomePage />)} />
               </Routes>
               <Toaster />
             </Router>
-          </TaskProvider>
+            </TaskProvider>
+          </ProfessionalJourneyProvider>
         </AppModeProvider>
       </ThemeProvider>
     </AuthProvider>

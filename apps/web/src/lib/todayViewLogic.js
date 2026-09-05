@@ -63,11 +63,13 @@ export function getTaskNextActionPresentation(task, focusBlockMinutes = 0) {
     || 0
   );
   const blockMinutes = Number(focusBlockMinutes || task?.focusBlockMinutes || 0);
+  const pauseNote = normalized(task?.pauseNote) === normalized(action) ? '' : String(task?.pauseNote || '').trim();
 
   return {
     action,
     actionMinutes,
     blockMinutes: blockMinutes && blockMinutes !== actionMinutes ? blockMinutes : 0,
+    pauseNote,
     progress,
   };
 }
@@ -97,6 +99,18 @@ export function buildTodayGroups(tasks, referenceDate = new Date()) {
 
 function normalized(value) {
   return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR');
+}
+
+function energyLevel(value) {
+  const energy = normalized(value);
+  if (energy.includes('baixa')) return 1;
+  if (energy.includes('alta')) return 3;
+  return 2;
+}
+
+function hasSignificantEnergyGap(task, checkIn) {
+  return energyLevel(checkIn?.energia) === 1
+    && energyLevel(task?.energiaNecessaria || task?.energyLevel || task?.energyNeeded) === 3;
 }
 
 export function taskMatchesTodayFilters(task, filters = {}) {
@@ -141,11 +155,14 @@ export function getOpenPlannedMinutes(groups) {
 
 export function getTodayCapacityState(plannedMinutes, availableMinutes) {
   const differenceMinutes = Number(plannedMinutes || 0) - Number(availableMinutes || 0);
-  const overloadThreshold = Math.max(15, Math.round(Number(availableMinutes || 0) * 0.1));
+  const remainingMinutes = Math.max(0, -differenceMinutes);
+  const nearThreshold = Math.max(15, Math.round(Number(availableMinutes || 0) * 0.1));
   return {
     differenceMinutes,
-    isNearCapacity: differenceMinutes > 0 && differenceMinutes <= overloadThreshold,
-    isOverCapacity: differenceMinutes > overloadThreshold,
+    remainingMinutes,
+    isExactCapacity: differenceMinutes === 0,
+    isNearCapacity: differenceMinutes < 0 && remainingMinutes <= nearThreshold,
+    isOverCapacity: differenceMinutes > 0,
   };
 }
 
@@ -194,23 +211,33 @@ export function getVisibleTodayTasks(groups, recommendedId = '') {
   ].filter((task) => task.id !== recommendedId);
 }
 
-export function getTodayHighlight(tasks, recommendedTask = null, activeSession = null) {
+export function getTodayHighlight(tasks, recommendedTask = null, activeSession = null, checkIn = null) {
   const openTasks = Array.isArray(tasks) ? tasks.filter((task) => isTaskOpenStatus(task?.status)) : [];
+  const recommendation = recommendedTask && openTasks.find((task) => task.id === recommendedTask.id);
+  const compatibleRecommendation = recommendation && !hasSignificantEnergyGap(recommendation, checkIn)
+    ? recommendation
+    : null;
+  const resolveContinuation = (task, reason) => {
+    if (!task) return null;
+    if (hasSignificantEnergyGap(task, checkIn) && compatibleRecommendation && compatibleRecommendation.id !== task.id) {
+      return { task: compatibleRecommendation, reason: 'recommended' };
+    }
+    return { task, reason };
+  };
   const activeTask = activeSession?.taskId
     ? openTasks.find((task) => task.id === activeSession.taskId)
     : null;
-  if (activeTask) return { task: activeTask, reason: 'active_session' };
+  if (activeTask) return resolveContinuation(activeTask, 'active_session');
 
   const pausedTask = openTasks.find((task) => normalizeTaskStatus(task.status) === TASK_STATUS.PAUSADA);
-  if (pausedTask) return { task: pausedTask, reason: 'paused' };
+  if (pausedTask) return resolveContinuation(pausedTask, 'paused');
 
   const startedTask = openTasks.find((task) => {
     if (normalizeTaskStatus(task.status) !== TASK_STATUS.EM_ANDAMENTO) return false;
     return getTaskMicrotaskProgress(task).pending > 0;
   });
-  if (startedTask) return { task: startedTask, reason: 'started' };
+  if (startedTask) return resolveContinuation(startedTask, 'started');
 
-  const recommendation = recommendedTask && openTasks.find((task) => task.id === recommendedTask.id);
   return recommendation ? { task: recommendation, reason: 'recommended' } : { task: null, reason: 'empty' };
 }
 

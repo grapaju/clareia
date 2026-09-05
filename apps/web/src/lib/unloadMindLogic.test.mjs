@@ -14,6 +14,12 @@ test('separa duas ações relacionadas', () => {
   assert.equal(tasks.length, 2);
 });
 
+test('mantem complementos sem novo verbo na mesma tarefa', () => {
+  const tasks = parseBrainDumpToTasks('Atualizar as fotos e o texto do site da InPACTA.');
+  assert.equal(tasks.length, 1);
+  assert.match(tasks[0].title, /fotos e o texto/i);
+});
+
 test('preserva origem de WhatsApp e associa InPACTA sem criar projeto genérico', () => {
   const plan = parseUnloadMindToPlan('O Marcio pediu no WhatsApp para atualizar as fotos e o texto do empreendimento no site da InPACTA até sexta.');
   const task = [...plan.maxima, ...plan.alta, ...plan.media, ...plan.podeEsperar, ...plan.acompanharDepois][0];

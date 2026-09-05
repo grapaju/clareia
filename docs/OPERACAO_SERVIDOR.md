@@ -112,6 +112,16 @@ npm run build --prefix apps/web
 pm2 restart clareia-api
 ```
 
+cd /www/wwwroot/clareia
+
+git diff -- apps/api/src/main.js
+git stash push -m "backup main.js antes do deploy" -- apps/api/src/main.js
+
+git pull --ff-only
+git log -2 --oneline
+
+
+
 SITE="/www/wwwroot/clareia"
 
 realpath "$SITE"

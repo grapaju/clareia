@@ -1,5 +1,5 @@
 const STORAGE_KEY = 'clareia_project_notes_v1';
-import { appendProjectHistory } from '@/services/projectHistoryService.js';
+import { appendProjectHistory } from './projectHistoryService.js';
 import { readUserScopedJson, writeUserScopedJson } from '../lib/userScopedStorage.js';
 
 function readAll() {
@@ -42,6 +42,8 @@ export function createProjectNote(payload) {
     title: String(payload.title || '').trim(),
     content: String(payload.content || '').trim(),
     tags: toArray(payload.tags),
+    folder: String(payload.folder || '').trim(),
+    favorite: Boolean(payload.favorite),
     relatedTaskIds: toArray(payload.relatedTaskIds),
     createdAt: now,
     updatedAt: now

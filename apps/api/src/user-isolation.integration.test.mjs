@@ -26,7 +26,7 @@ test('propaga o erro original quando a porta da API está ocupada', async () => 
   }
 });
 
-test('isola projetos, tarefas, sessões, notas e Guardados entre usuários A e B', async (context) => {
+test('isola dados, materiais e Google Drive entre usuários A e B', async (context) => {
   const server = await startServer(0);
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
   const unique = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -86,4 +86,36 @@ test('isola projetos, tarefas, sessões, notas e Guardados entre usuários A e B
   assert.deepEqual(tasksForAAgain.payload.items.map((item) => item.id), [taskA.id]);
   assert.equal((await api(baseUrl, `/tasks/${taskA.id}/notes`, { token: userA.token })).payload.items.length, 1);
   assert.equal((await api(baseUrl, `/tasks/${taskA.id}/focus-sessions`, { token: userA.token })).payload.items.length, 1);
+
+  const syntheticEncryptedToken = 'iv.auth-tag.encrypted-refresh-token';
+  await runQuery(
+    `INSERT INTO google_drive_connections (user_id, email, encrypted_refresh_token, connected_at)
+     VALUES ($1, $2, $3, now())`,
+    [userA.user.id, `drive-a-${unique}@example.test`, syntheticEncryptedToken]
+  );
+  await runQuery(
+    `INSERT INTO google_drive_project_folders (user_id, project_id, project_name, root_folder_id, root_folder_url)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [userA.user.id, 'Projeto A', 'Projeto A', 'drive-folder-a', 'https://drive.google.com/drive/folders/drive-folder-a']
+  );
+
+  const driveStatusA = await api(baseUrl, '/google-drive/status', { token: userA.token });
+  const driveStatusB = await api(baseUrl, '/google-drive/status', { token: userB.token });
+  assert.equal(driveStatusA.status, 200);
+  assert.equal(driveStatusA.payload.connected, true);
+  assert.equal(driveStatusB.payload.connected, false);
+  assert.equal(JSON.stringify(driveStatusA.payload).includes(syntheticEncryptedToken), false);
+  assert.equal(Object.hasOwn(driveStatusA.payload, 'encryptedRefreshToken'), false);
+  assert.equal(Object.hasOwn(driveStatusA.payload, 'refreshToken'), false);
+
+  const driveFolderA = await api(baseUrl, '/google-drive/project-folder?projectId=Projeto%20A', { token: userA.token });
+  const driveFolderB = await api(baseUrl, '/google-drive/project-folder?projectId=Projeto%20A', { token: userB.token });
+  assert.equal(driveFolderA.payload.config.rootFolderId, 'drive-folder-a');
+  assert.equal(driveFolderB.payload.config, null);
+  assert.equal((await api(baseUrl, '/google-drive/status')).status, 401);
+  assert.equal((await api(baseUrl, '/google-drive/oauth-user-config', {
+    token: userA.token,
+    method: 'POST',
+    body: { clientId: 'blocked', clientSecret: 'blocked', redirectUri: 'https://example.test/callback' },
+  })).status, 403);
 });

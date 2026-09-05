@@ -28,6 +28,7 @@ import TaskPendingMicrotasksDialog from '@/components/TaskPendingMicrotasksDialo
 import TaskPauseDialog from '@/components/TaskPauseDialog.jsx';
 import { getActiveWorkSession } from '@/services/workSessionService.js';
 import { getTaskNextActionPresentation } from '@/lib/todayViewLogic.js';
+import { useProfessionalJourney } from '@/contexts/ProfessionalJourneyContext.jsx';
 
 export default function FocusPage() {
   const navigate = useNavigate();
@@ -46,6 +47,7 @@ export default function FocusPage() {
     resumeTask
   } = useTaskContext();
   const { lowStimulationMode } = useTheme();
+  const { currentJourney, startActivity } = useProfessionalJourney();
   
   const [phase, setPhase] = useState(selectedTask ? 'setup' : 'none');
   const [objective, setObjective] = useState('');
@@ -62,7 +64,8 @@ export default function FocusPage() {
   const [pendingCompletionPayload, setPendingCompletionPayload] = useState(null);
   const [isPauseDialogOpen, setIsPauseDialogOpen] = useState(false);
   const [microtaskTransition, setMicrotaskTransition] = useState(null);
-  const [showAllMicrotasks, setShowAllMicrotasks] = useState(true);
+  const [showAllMicrotasks, setShowAllMicrotasks] = useState(false);
+  const [showTimer, setShowTimer] = useState(!lowStimulationMode);
   const sessionRecordedRef = useRef(false);
   const focusBlockMinutes = Number(selectedTask?.focusBlockMinutes || selectedTask?.timeEstimate || 30);
 
@@ -96,6 +99,10 @@ export default function FocusPage() {
     const suggestedObjective = presentation.action || `Avançar de forma concreta em: ${selectedTask.title}`;
     setObjective(suggestedObjective);
   }, [objective, selectedTask]);
+
+  useEffect(() => {
+    setShowTimer(!lowStimulationMode);
+  }, [lowStimulationMode]);
 
   useEffect(() => {
     let interval;
@@ -133,6 +140,9 @@ export default function FocusPage() {
         if (updatedTask) {
           setSelectedTask(updatedTask);
           setActiveMicrotasks(updatedTask.microtarefas || []);
+        }
+        if (currentJourney?.status === 'active' && currentJourney.projectName === (selectedTask.project || 'Pessoal')) {
+          await startActivity({ title: selectedTask.title, taskId: selectedTask.id, source: 'task' });
         }
       } catch (error) {
         console.error('Erro ao iniciar sessão de trabalho:', error);
@@ -281,7 +291,6 @@ export default function FocusPage() {
         setShowAllMicrotasks(false);
       } else if (!checked) {
         setMicrotaskTransition(null);
-        setShowAllMicrotasks(true);
       }
       addTaskHistoryEvent({
         taskId: selectedTask.id,
@@ -315,7 +324,9 @@ export default function FocusPage() {
   };
 
   const microtaskProgress = getTaskMicrotaskProgress({ ...selectedTask, microtarefas: activeMicrotasks });
-  const nextPendingMicrotaskId = selectedTask?.lastActiveSubtaskId || microtaskProgress.nextPending?.id || '';
+  const nextPendingMicrotaskId = microtaskProgress.nextPending?.id || selectedTask?.lastActiveSubtaskId || '';
+  const currentFocusStep = microtaskProgress.nextPending?.title || objective || getTaskNextActionPresentation(selectedTask).action;
+  const hasCompletedAllSteps = microtaskProgress.total > 0 && microtaskProgress.pending === 0;
 
   if (phase === 'none' || !selectedTask) {
     return (
@@ -361,6 +372,9 @@ export default function FocusPage() {
                   <div className="mb-8">
                     <h1 className="text-3xl font-medium text-foreground mb-2">Preparando o foco</h1>
                     {!lowStimulationMode && <p className="text-muted-foreground">O que você fará nos próximos {focusBlockMinutes} minutos.</p>}
+                    {currentJourney?.projectName === (selectedTask.project || 'Pessoal') && (
+                      <p className="mt-2 text-sm text-muted-foreground">{currentJourney.projectName} · jornada {currentJourney.status === 'paused' ? 'pausada' : 'em andamento'}</p>
+                    )}
                   </div>
 
                   <div className="bg-secondary/30 p-6 rounded-2xl mb-8 border border-border">
@@ -417,73 +431,82 @@ export default function FocusPage() {
                       </Button>
                     </div>
                     <p className="text-primary uppercase tracking-widest text-xs font-bold mb-4 flex items-center"><span className="w-2 h-2 rounded-full bg-primary animate-pulse mr-2" /> Foco Ativo</p>
+                    {currentJourney?.projectName === (selectedTask.project || 'Pessoal') && (
+                      <p className="mb-2 text-sm text-muted-foreground">{currentJourney.projectName} · jornada {currentJourney.status === 'paused' ? 'pausada' : 'em andamento'}</p>
+                    )}
                     <h1 className="text-2xl md:text-3xl font-medium text-foreground leading-tight mb-6 pr-12">{selectedTask.title}</h1>
                     
-                    <div className="bg-secondary/40 rounded-2xl p-5 border border-border mb-6">
-                      <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2">Objetivo do bloco</p>
-                      <p className="text-foreground text-lg font-medium">{objective}</p>
-                    </div>
-
-                    {selectedTask.nextAction && !lowStimulationMode && (
-                      <div>
-                        <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2">Sua próxima ação</p>
-                        <p className="text-foreground">{selectedTask.nextAction}</p>
+                    {!hasCompletedAllSteps && (
+                      <div className="rounded-2xl border border-border bg-secondary/40 p-5">
+                        <p className="mb-2 text-xs font-bold uppercase tracking-wider text-muted-foreground">Agora faça isto</p>
+                        <p className="text-lg font-medium text-foreground">{currentFocusStep}</p>
+                        {microtaskProgress.nextPending && (
+                          <Button
+                            className="mt-4"
+                            variant="outline"
+                            onClick={() => handleToggleMicrotask(microtaskProgress.nextPending.id, true)}
+                          >
+                            <CheckCircle2 className="h-4 w-4" /> Marcar como feito
+                          </Button>
+                        )}
                       </div>
                     )}
                   </div>
 
-                  {microtaskTransition && (
+                  {microtaskTransition?.allDone && (
                     <section className="rounded-lg border border-border bg-card p-5" aria-live="polite" aria-atomic="true">
                       <div className="flex flex-wrap items-center justify-between gap-3">
-                        <p className="font-medium text-foreground">{microtaskTransition.allDone ? 'Todos os passos foram concluídos.' : 'Passo concluído.'}</p>
+                        <p className="font-medium text-foreground">Todos os passos foram concluídos.</p>
                         <Button variant="ghost" onClick={handleUndoMicrotask}>Desfazer</Button>
                       </div>
-                      {microtaskTransition.allDone ? (
-                        <div className="mt-4 flex flex-wrap gap-2">
-                          <Button onClick={() => setIsCompletionDialogOpen(true)}>Concluir tarefa</Button>
-                          <Button variant="outline" onClick={() => setMicrotaskTransition(null)}>Continuar trabalhando</Button>
-                          <Button variant="ghost" onClick={() => setShowAllMicrotasks(true)}>Rever passos</Button>
-                        </div>
-                      ) : (
-                        <>
-                          <p className="mt-4 text-sm font-medium text-muted-foreground">Próximo passo</p>
-                          <p className="mt-1 text-lg text-foreground">{microtaskTransition.nextStep}</p>
-                          <div className="mt-4 flex flex-wrap gap-2">
-                            <Button onClick={() => setMicrotaskTransition(null)}>Continuar</Button>
-                            <Button variant="outline" onClick={() => setIsPauseDialogOpen(true)}>Fazer uma pausa</Button>
-                            <Button variant="ghost" onClick={() => setIsBlockedDialogOpen(true)}>Não consigo agora</Button>
-                          </div>
-                        </>
-                      )}
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        <Button onClick={() => setIsCompletionDialogOpen(true)}>Concluir tarefa</Button>
+                        <Button variant="outline" onClick={() => setMicrotaskTransition(null)}>Continuar trabalhando</Button>
+                        <Button variant="ghost" onClick={() => setShowAllMicrotasks(true)}>Rever passos</Button>
+                      </div>
                     </section>
                   )}
 
-                  {activeMicrotasks.length > 0 && (!lowStimulationMode || showAllMicrotasks) && (
+                  {activeMicrotasks.length > 0 && !hasCompletedAllSteps && (
                     <div className="space-y-2">
-                      <p className="text-sm font-medium text-foreground">
-                        Passo {Math.min(microtaskProgress.completed + 1, microtaskProgress.total)} de {microtaskProgress.total} desta tarefa
-                      </p>
-                      <p className="text-sm text-muted-foreground">
-                        Próxima microtarefa: {microtaskProgress.nextPending?.title || 'Tudo concluído'}
-                      </p>
-                      <MicrotaskList
-                        microtasks={activeMicrotasks}
-                        taskType={selectedTask.taskType}
-                        onToggle={handleToggleMicrotask}
-                        highlightMicrotaskId={nextPendingMicrotaskId}
-                      />
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-sm text-muted-foreground">
+                          Passo {Math.min(microtaskProgress.completed + 1, microtaskProgress.total)} de {microtaskProgress.total}
+                        </p>
+                        <Button variant="ghost" onClick={() => setShowAllMicrotasks((current) => !current)}>
+                          {showAllMicrotasks ? 'Ocultar passos' : 'Ver todos os passos'}
+                        </Button>
+                      </div>
+                      {showAllMicrotasks && (
+                        <MicrotaskList
+                          microtasks={activeMicrotasks}
+                          taskType={selectedTask.taskType}
+                          onToggle={handleToggleMicrotask}
+                          highlightMicrotaskId={nextPendingMicrotaskId}
+                        />
+                      )}
                     </div>
                   )}
                 </div>
 
                 <div className={`w-full ${lowStimulationMode ? '' : 'lg:w-80 shrink-0 sticky top-24'} bg-card border border-border rounded-3xl p-8 shadow-sm flex flex-col items-center text-center`}>
-                  <div className="text-6xl md:text-7xl font-medium text-foreground tabular-nums tracking-tighter leading-none mb-4 font-variant-numeric:tabular-nums">
-                    {formatTime(timeRemaining)}
-                  </div>
-                  
-                  <div className={`text-sm font-medium text-muted-foreground ${lowStimulationMode ? 'mb-4' : 'mb-8'}`}>
-                    Decorridos: {Math.floor((timeTotal - timeRemaining) / 60)} min / {Math.floor(timeTotal / 60)} min
-                  </div>
+                  {showTimer ? (
+                    <>
+                      <div className="mb-4 text-6xl font-medium leading-none tracking-tighter text-foreground tabular-nums md:text-7xl font-variant-numeric:tabular-nums">
+                        {formatTime(timeRemaining)}
+                      </div>
+                      <div className={`text-sm font-medium text-muted-foreground ${lowStimulationMode ? 'mb-4' : 'mb-8'}`}>
+                        Decorridos: {Math.floor((timeTotal - timeRemaining) / 60)} min / {Math.floor(timeTotal / 60)} min
+                      </div>
+                      {lowStimulationMode && <Button className="mb-4" variant="ghost" onClick={() => setShowTimer(false)}>Ocultar tempo</Button>}
+                    </>
+                  ) : (
+                    <div className="mb-6">
+                      <p className="font-medium text-foreground">Em andamento</p>
+                      <p className="mt-1 text-sm text-muted-foreground">Você começou esta tarefa.</p>
+                      <Button className="mt-3" variant="ghost" onClick={() => setShowTimer(true)}>Ver tempo</Button>
+                    </div>
+                  )}
 
                   <div className="w-full space-y-3">
                     <Button size="lg" variant="outline" onClick={() => setIsPauseDialogOpen(true)} className="w-full h-14 text-base rounded-2xl border-border bg-background text-foreground hover:bg-muted">

@@ -1,9 +1,7 @@
 const STORAGE_KEY = 'clareia_project_accesses_v1';
-import { appendProjectHistory } from '@/services/projectHistoryService.js';
+import { appendProjectHistory } from './projectHistoryService.js';
 import { readUserScopedJson, writeUserScopedJson } from '../lib/userScopedStorage.js';
-
-// WARNING: Passwords are intentionally stored in plain text in localStorage only for temporary UX.
-// Future backend integration must encrypt secrets server-side and never expose raw passwords in the client.
+import { withoutPlaintextPassword } from '../lib/projectAccessSecurity.js';
 
 function readAll() {
   const items = readUserScopedJson(STORAGE_KEY, []);
@@ -34,17 +32,18 @@ export function listProjectAccesses(projectName) {
 }
 
 export function createProjectAccess(payload) {
+  const safePayload = withoutPlaintextPassword(payload);
   const now = new Date().toISOString();
   const item = {
     id: uid(),
-    projectName: String(payload.projectName || '').trim(),
-    title: String(payload.title || '').trim(),
-    platform: String(payload.platform || '').trim(),
-    url: String(payload.url || '').trim(),
-    username: String(payload.username || '').trim(),
-    password: String(payload.password || ''),
-    notes: String(payload.notes || '').trim(),
-    relatedTaskIds: toArray(payload.relatedTaskIds),
+    projectName: String(safePayload.projectName || '').trim(),
+    title: String(safePayload.title || '').trim(),
+    platform: String(safePayload.platform || '').trim(),
+    url: String(safePayload.url || '').trim(),
+    username: String(safePayload.username || '').trim(),
+    notes: String(safePayload.notes || '').trim(),
+    folder: String(safePayload.folder || '').trim(),
+    relatedTaskIds: toArray(safePayload.relatedTaskIds),
     createdAt: now,
     updatedAt: now
   };
@@ -63,10 +62,12 @@ export function updateProjectAccess(id, updates = {}) {
   const index = items.findIndex((item) => item.id === id);
   if (index < 0) return null;
 
+  const safeUpdates = withoutPlaintextPassword(updates);
+
   const updated = {
     ...items[index],
-    ...updates,
-    relatedTaskIds: updates.relatedTaskIds !== undefined ? toArray(updates.relatedTaskIds) : items[index].relatedTaskIds,
+    ...safeUpdates,
+    relatedTaskIds: safeUpdates.relatedTaskIds !== undefined ? toArray(safeUpdates.relatedTaskIds) : items[index].relatedTaskIds,
     updatedAt: new Date().toISOString()
   };
 

@@ -1,5 +1,5 @@
 const STORAGE_KEY = 'clareia_project_files_v1';
-import { appendProjectHistory } from '@/services/projectHistoryService.js';
+import { appendProjectHistory } from './projectHistoryService.js';
 import { readUserScopedJson, writeUserScopedJson } from '../lib/userScopedStorage.js';
 
 function readAll() {
@@ -50,6 +50,7 @@ export function createProjectFile(payload) {
     url: String(payload.url || payload.externalLink || '').trim(),
     description: String(payload.description || '').trim(),
     tags: toArray(payload.tags),
+    favorite: Boolean(payload.favorite),
     origin: String(payload.origin || '').trim(),
     externalLink: String(payload.externalLink || '').trim(),
     storageProvider: payload.storageProvider || 'local',

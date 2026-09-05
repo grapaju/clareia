@@ -16,10 +16,12 @@ test('reutiliza projetos existentes apesar de caixa, hifen e espacos', () => {
   const tasks = resolvePlanProjectAssociations([
     { title: 'Acompanhar Google Ads da CORCRIL' },
     { title: 'Cobrar fatura do IDT PR' },
+    { title: 'Revisar contrato do IDTPR' },
+    { title: 'Enviar relatório do IDT-PR' },
     { title: 'Cobrar a inpacta' },
   ], context);
 
-  assert.deepEqual(tasks.map((task) => task.project), ['Corcril', 'IDT-PR', 'InPACTA']);
+  assert.deepEqual(tasks.map((task) => task.project), ['Corcril', 'IDT-PR', 'IDT-PR', 'IDT-PR', 'InPACTA']);
   assert.ok(tasks.every((task) => task.projectStatus === 'existing'));
   assert.deepEqual(tasks.slice(0, 2).map((task) => task.projectAlias), ['CORCRIL', 'IDT PR']);
 });

@@ -1,11 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Archive, Bookmark, CheckCircle2, Pencil, Search, Sparkles, Trash2 } from 'lucide-react';
+import { Archive, Bookmark, CheckCircle2, MoreHorizontal, Pencil, Search, Sparkles, Trash2 } from 'lucide-react';
 import { Helmet } from 'react-helmet';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import Header from '@/components/Header.jsx';
 import MobileNav from '@/components/MobileNav.jsx';
-import ProjectSelect from '@/components/ProjectSelect.jsx';
 import Sidebar from '@/components/Sidebar.jsx';
 import {
   AlertDialog,
@@ -18,6 +17,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -218,40 +218,40 @@ export default function SavedItemsPage() {
                           {item.project && <span>Projeto: {item.project}</span>}
                         </div>
 
-                        <div className="mt-4 max-w-sm">
-                          <ProjectSelect
-                            value={item.project}
-                            onChange={(project) => updateUnsortedNote(item.id, { project }, userId)}
-                          />
-                        </div>
-
                         <div className="mt-4 flex flex-wrap gap-2">
-                          {item.status === 'aguardando_organizacao' && (
-                            <Button size="sm" onClick={() => organizeNow(item)}>
-                              <Sparkles className="mr-2 h-4 w-4" aria-hidden="true" />Organizar agora
-                            </Button>
-                          )}
-                          <Button size="sm" variant="outline" onClick={() => transformIntoNote(item)} disabled={item.status === 'processado'}>
-                            <CheckCircle2 className="mr-2 h-4 w-4" aria-hidden="true" />Transformar em nota
-                          </Button>
                           {isEditing ? (
                             <>
                               <Button size="sm" variant="outline" onClick={() => saveEdit(item)}>Salvar edição</Button>
                               <Button size="sm" variant="ghost" onClick={() => setEditingId('')}>Cancelar</Button>
                             </>
                           ) : (
-                            <Button size="sm" variant="outline" onClick={() => { setEditingId(item.id); setEditingContent(item.content); }}>
-                              <Pencil className="mr-2 h-4 w-4" aria-hidden="true" />Editar
-                            </Button>
+                            <>
+                              {item.status === 'aguardando_organizacao' && (
+                                <Button size="sm" onClick={() => organizeNow(item)}>
+                                  <Sparkles className="mr-2 h-4 w-4" aria-hidden="true" />Organizar agora
+                                </Button>
+                              )}
+                              <Button size="sm" variant="outline" onClick={() => transformIntoNote(item)} disabled={item.status === 'processado'}>
+                                <CheckCircle2 className="mr-2 h-4 w-4" aria-hidden="true" />Transformar em nota
+                              </Button>
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button size="icon" variant="ghost" aria-label="Mais ações do guardado"><MoreHorizontal className="h-4 w-4" /></Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end">
+                                  <DropdownMenuItem onSelect={() => { setEditingId(item.id); setEditingContent(item.content); }}>
+                                    <Pencil className="h-4 w-4" /> Editar
+                                  </DropdownMenuItem>
+                                  {item.status !== 'arquivado' && (
+                                    <DropdownMenuItem onSelect={() => archive(item)}><Archive className="h-4 w-4" /> Arquivar</DropdownMenuItem>
+                                  )}
+                                  <DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={() => setDeleteId(item.id)}>
+                                    <Trash2 className="h-4 w-4" /> Excluir
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            </>
                           )}
-                          {item.status !== 'arquivado' && (
-                            <Button size="sm" variant="ghost" onClick={() => archive(item)}>
-                              <Archive className="mr-2 h-4 w-4" aria-hidden="true" />Não preciso mais
-                            </Button>
-                          )}
-                          <Button size="icon" variant="ghost" className="text-destructive" onClick={() => setDeleteId(item.id)} aria-label="Excluir guardado">
-                            <Trash2 className="h-4 w-4" aria-hidden="true" />
-                          </Button>
                         </div>
                       </li>
                     );

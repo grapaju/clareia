@@ -57,7 +57,9 @@ export default function Header({ notificationCount = 0, onOpenNotifications }) {
               aria-pressed={lowStimulationMode}
               aria-label={lowStimulationMode ? 'Sair do modo tranquilo' : 'Ativar modo tranquilo'}
             >
-              {lowStimulationMode ? 'Sair do modo tranquilo' : <><span className="hidden sm:inline">Modo </span>tranquilo</>}
+              {lowStimulationMode
+                ? <><span className="hidden sm:inline">Sair do modo </span>tranquilo</>
+                : <><span className="hidden sm:inline">Modo </span>tranquilo</>}
             </Button>
           )}
           <p className="sr-only" aria-live="polite">{modeAnnouncement}</p>

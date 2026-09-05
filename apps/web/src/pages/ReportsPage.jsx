@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Helmet } from 'react-helmet';
 import { BarChart3, Download, FileText, Trash2, Pencil } from 'lucide-react';
 import Header from '@/components/Header.jsx';
@@ -35,6 +35,8 @@ import { listDailyWrapUps } from '@/services/dailyWrapUpService.js';
 import { toast } from 'sonner';
 import { formatDurationFriendly, pluralizeCount } from '@/lib/reportFormatting.js';
 import { normalizeTaskStatus, TASK_STATUS } from '@/lib/taskExecution.js';
+import { createProfessionalActivity, listProfessionalJourneys, updateProfessionalActivity } from '@/services/professionalJourneyApiService.js';
+import { PROFESSIONAL_CATEGORIES, professionalActivitiesToCsv } from '@/lib/professionalJourneyLogic.js';
 
 function formatDateTime(value) {
   if (!value) return '-';
@@ -48,6 +50,13 @@ function formatDateInputValue(value) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate()).toISOString().split('T')[0];
 }
 
+function formatDateTimeInputValue(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  date.setMinutes(date.getMinutes() - date.getTimezoneOffset());
+  return date.toISOString().slice(0, 16);
+}
+
 export default function ReportsPage() {
   const { currentUser } = useAuth();
   const { tasks } = useTaskContext();
@@ -56,9 +65,17 @@ export default function ReportsPage() {
   const [endDate, setEndDate] = useState('');
   const [taskTypeFilter, setTaskTypeFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [categoryFilter, setCategoryFilter] = useState('all');
+  const [sourceFilter, setSourceFilter] = useState('all');
+  const [journeyStatusFilter, setJourneyStatusFilter] = useState('all');
+  const [professionalData, setProfessionalData] = useState({ journeys: [], activities: [], edits: [] });
   const [isManualTimeOpen, setIsManualTimeOpen] = useState(false);
   const [sessionToDelete, setSessionToDelete] = useState(null);
   const [editingSession, setEditingSession] = useState(null);
+  const [editingProfessionalActivity, setEditingProfessionalActivity] = useState(null);
+  const [professionalEditForm, setProfessionalEditForm] = useState({
+    title: '', category: 'Outro', startedAt: '', endedAt: '', notes: '', reason: '',
+  });
   const [editSessionForm, setEditSessionForm] = useState({
     projectId: '',
     startedAtDate: '',
@@ -68,6 +85,13 @@ export default function ReportsPage() {
 
   const [sessionVersion, setSessionVersion] = useState(0);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
+
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    listProfessionalJourneys()
+      .then((data) => setProfessionalData(data || { journeys: [], activities: [], edits: [] }))
+      .catch(() => setProfessionalData({ journeys: [], activities: [], edits: [] }));
+  }, [currentUser?.id, sessionVersion]);
 
   const escapeCsv = (value) => {
     const text = String(value ?? '');
@@ -91,8 +115,38 @@ export default function ReportsPage() {
     const set = new Set(['Pessoal']);
     tasks.forEach((task) => set.add(task.project || 'Pessoal'));
     allSessions.forEach((session) => set.add(session.projectId || 'Pessoal'));
+    professionalData.journeys.forEach((journey) => set.add(journey.projectName));
     return Array.from(set).sort((a, b) => a.localeCompare(b, 'pt-BR'));
-  }, [tasks, allSessions]);
+  }, [tasks, allSessions, professionalData.journeys]);
+
+  const professionalJourneyRows = useMemo(() => professionalData.journeys.filter((journey) => {
+    if (projectFilter !== 'all' && journey.projectName !== projectFilter) return false;
+    if (startDate && new Date(journey.endedAt || Date.now()) < new Date(`${startDate}T00:00:00`)) return false;
+    if (endDate && new Date(journey.startedAt) > new Date(`${endDate}T23:59:59`)) return false;
+    if (journeyStatusFilter !== 'all' && journey.status !== journeyStatusFilter) return false;
+    return true;
+  }), [professionalData.journeys, projectFilter, startDate, endDate, journeyStatusFilter]);
+
+  const professionalJourneyIds = useMemo(() => new Set(professionalJourneyRows.map((journey) => journey.id)), [professionalJourneyRows]);
+  const professionalRows = useMemo(() => professionalData.activities.filter((activity) => {
+    if (!professionalJourneyIds.has(activity.journeyId)) return false;
+    if (categoryFilter !== 'all' && activity.category !== categoryFilter) return false;
+    if (sourceFilter !== 'all' && activity.source !== sourceFilter) return false;
+    return true;
+  }), [professionalData.activities, professionalJourneyIds, categoryFilter, sourceFilter]);
+
+  const professionalTotals = useMemo(() => {
+    const categoryMinutes = professionalRows.reduce((totalsByCategory, activity) => {
+      totalsByCategory[activity.category] = (totalsByCategory[activity.category] || 0) + Number(activity.durationMinutes || 0);
+      return totalsByCategory;
+    }, {});
+    return {
+      netMinutes: professionalJourneyRows.reduce((total, journey) => total + Number(journey.netMinutes || 0), 0),
+      classifiedMinutes: professionalRows.reduce((total, activity) => total + Number(activity.durationMinutes || 0), 0),
+      unclassifiedMinutes: professionalJourneyRows.reduce((total, journey) => total + Number(journey.unclassifiedMinutes || 0), 0),
+      categoryMinutes,
+    };
+  }, [professionalJourneyRows, professionalRows]);
 
   const taskTypeOptions = useMemo(() => {
     const set = new Set();
@@ -260,7 +314,55 @@ export default function ReportsPage() {
     toast.success('Sessão atualizada.');
   };
 
+  const openProfessionalEdit = (activity) => {
+    setEditingProfessionalActivity(activity);
+    setProfessionalEditForm({
+      title: activity.title,
+      category: activity.category || 'Outro',
+      startedAt: formatDateTimeInputValue(activity.startedAt),
+      endedAt: formatDateTimeInputValue(activity.endedAt),
+      notes: activity.notes || '',
+      reason: '',
+    });
+  };
+
+  const handleSaveProfessionalEdit = async () => {
+    if (!editingProfessionalActivity?.id || !professionalEditForm.reason.trim()) {
+      toast.error('Informe o motivo da correção.');
+      return;
+    }
+    try {
+      await updateProfessionalActivity(editingProfessionalActivity.id, {
+        title: professionalEditForm.title,
+        category: professionalEditForm.category,
+        startedAt: new Date(professionalEditForm.startedAt).toISOString(),
+        endedAt: new Date(professionalEditForm.endedAt).toISOString(),
+        notes: professionalEditForm.notes,
+        reason: professionalEditForm.reason,
+      });
+      setEditingProfessionalActivity(null);
+      setSessionVersion((value) => value + 1);
+      toast.success('Atividade corrigida com histórico preservado.');
+    } catch (error) {
+      toast.error(error?.message || 'Não foi possível corrigir a atividade.');
+    }
+  };
+
   const handleExportCsv = () => {
+    if (professionalRows.length > 0) {
+      const csvContent = professionalActivitiesToCsv(professionalRows, Intl.DateTimeFormat().resolvedOptions().timeZone);
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `clareia-jornada-profissional-${new Date().toISOString().split('T')[0]}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      toast.success('CSV profissional exportado com sucesso.');
+      return;
+    }
     const header = [
       'Data',
       'Projeto',
@@ -379,6 +481,19 @@ export default function ReportsPage() {
       writeLine(`Tipo de tarefa: ${taskTypeFilter === 'all' ? 'Todos' : taskTypeFilter}`);
       writeLine(`Status: ${statusFilter === 'all' ? 'Todos' : statusFilter}`);
 
+      if (professionalJourneyRows.length > 0) {
+        divider();
+        writeLine('Jornada profissional', { fontSize: 12, bold: true });
+        writeLine(`Período líquido trabalhado: ${formatDurationFriendly(professionalTotals.netMinutes)}`);
+        writeLine(`Tempo associado a atividades: ${formatDurationFriendly(professionalTotals.classifiedMinutes)}`);
+        writeLine(`Tempo sem atividade associada: ${formatDurationFriendly(professionalTotals.unclassifiedMinutes)}`);
+        Object.entries(professionalTotals.categoryMinutes).forEach(([category, minutes]) => {
+          writeLine(`${category}: ${formatDurationFriendly(minutes)}`);
+        });
+        writeLine('Principais atividades', { bold: true });
+        [...new Set(professionalRows.map((activity) => activity.title))].forEach((title) => writeLine(`- ${title}`));
+      }
+
       divider();
       writeLine('Resumo executivo', { fontSize: 12, bold: true });
       writeLine(`Total de horas: ${formatDurationFriendly(totals.totalMinutes)}`);
@@ -425,7 +540,7 @@ export default function ReportsPage() {
         <Header />
         <div className="flex">
           <Sidebar />
-          <main className="flex-1 pb-20 md:pb-8">
+          <main className="min-w-0 flex-1 pb-20 md:pb-8">
             <div className="page-container section-spacing max-w-6xl space-y-6">
               <div className="flex items-center gap-3">
                 <BarChart3 className="w-8 h-8 text-primary" />
@@ -437,7 +552,7 @@ export default function ReportsPage() {
 
               <Card className="bg-card border-border shadow-sm">
                 <CardContent className="p-6 space-y-4">
-                  <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                     <div className="space-y-1">
                       <Label>Projeto</Label>
                       <select className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm" value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)}>
@@ -472,6 +587,32 @@ export default function ReportsPage() {
                         <option value="arquivada">Arquivada</option>
                       </select>
                     </div>
+                    <div className="space-y-1">
+                      <Label>Categoria profissional</Label>
+                      <select className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm" value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}>
+                        <option value="all">Todas</option>
+                        {PROFESSIONAL_CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <Label>Origem</Label>
+                      <select className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm" value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}>
+                        <option value="all">Todas</option>
+                        <option value="task">Tarefa</option>
+                        <option value="quick">Atividade rápida</option>
+                        <option value="manual">Manual</option>
+                        <option value="timer">Timer</option>
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <Label>Estado da jornada</Label>
+                      <select className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm" value={journeyStatusFilter} onChange={(event) => setJourneyStatusFilter(event.target.value)}>
+                        <option value="all">Todos</option>
+                        <option value="active">Em andamento</option>
+                        <option value="paused">Pausada</option>
+                        <option value="closed">Encerrada</option>
+                      </select>
+                    </div>
                   </div>
 
                   <div className="flex flex-wrap gap-2">
@@ -488,6 +629,41 @@ export default function ReportsPage() {
                   </div>
                 </CardContent>
               </Card>
+
+              {professionalJourneyRows.length > 0 && (
+                <section className="space-y-4" aria-labelledby="professional-report-title">
+                  <div>
+                    <h2 id="professional-report-title" className="text-lg font-medium text-foreground">Jornada profissional</h2>
+                    <p className="text-sm text-muted-foreground">Período líquido e atividades registradas no servidor.</p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                    <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Tempo trabalhado</p><p className="text-2xl font-medium">{formatDurationFriendly(professionalTotals.netMinutes)}</p></CardContent></Card>
+                    <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Em atividades</p><p className="text-2xl font-medium">{formatDurationFriendly(professionalTotals.classifiedMinutes)}</p></CardContent></Card>
+                    <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Sem atividade</p><p className="text-2xl font-medium">{formatDurationFriendly(professionalTotals.unclassifiedMinutes)}</p></CardContent></Card>
+                    <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Jornadas</p><p className="text-2xl font-medium">{professionalJourneyRows.length}</p></CardContent></Card>
+                  </div>
+                  <Card>
+                    <CardContent className="p-6">
+                      <h3 className="font-medium text-foreground">Por categoria</h3>
+                      <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                        {Object.entries(professionalTotals.categoryMinutes).map(([category, minutes]) => (
+                          <div key={category} className="flex items-center justify-between border-b border-border py-2 text-sm"><span>{category}</span><span className="text-muted-foreground">{formatDurationFriendly(minutes)}</span></div>
+                        ))}
+                      </div>
+                      <h3 className="mt-6 font-medium text-foreground">Atividades reais</h3>
+                      <div className="mt-2 divide-y divide-border">
+                        {professionalRows.map((activity) => (
+                          <div key={activity.id} className="grid gap-1 py-3 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center">
+                            <div className="min-w-0"><p className="truncate text-sm font-medium">{activity.title}</p><p className="text-xs text-muted-foreground">{activity.projectName} · {activity.category} · {activity.source === 'manual' ? 'manual' : activity.source === 'task' ? 'tarefa' : 'atividade rápida'}</p></div>
+                            <p className="text-sm text-muted-foreground">{formatDurationFriendly(activity.durationMinutes)}</p>
+                            {activity.endedAt && <Button size="icon" variant="ghost" aria-label={`Corrigir ${activity.title}`} onClick={() => openProfessionalEdit(activity)}><Pencil className="h-4 w-4" /></Button>}
+                          </div>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                </section>
+              )}
 
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <Card className="bg-card border-border"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Total de horas</p><p className="text-2xl font-medium">{formatDurationFriendly(totals.totalMinutes)}</p></CardContent></Card>
@@ -610,6 +786,11 @@ export default function ReportsPage() {
         defaultProject={projectFilter === 'all' ? 'Pessoal' : projectFilter}
         defaultTaskId="none"
         tasks={tasks}
+        professionalJourneys={professionalData.journeys}
+        onSaveProfessional={async ({ journeyId, ...payload }) => {
+          await createProfessionalActivity(journeyId, payload);
+          setSessionVersion((value) => value + 1);
+        }}
         onSaved={() => setSessionVersion((value) => value + 1)}
       />
 
@@ -660,6 +841,23 @@ export default function ReportsPage() {
             <Button variant="outline" onClick={() => setEditingSession(null)}>Cancelar</Button>
             <Button onClick={handleSaveSessionEdit}>Salvar alterações</Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(editingProfessionalActivity)} onOpenChange={(open) => !open && setEditingProfessionalActivity(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader><DialogTitle>Corrigir atividade</DialogTitle><DialogDescription>A versão anterior será preservada no histórico de auditoria.</DialogDescription></DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1"><Label>Atividade</Label><Input value={professionalEditForm.title} onChange={(event) => setProfessionalEditForm((current) => ({ ...current, title: event.target.value }))} /></div>
+            <div className="space-y-1"><Label>Categoria</Label><select className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm" value={professionalEditForm.category} onChange={(event) => setProfessionalEditForm((current) => ({ ...current, category: event.target.value }))}>{PROFESSIONAL_CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}</select></div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="space-y-1"><Label>Início</Label><Input type="datetime-local" value={professionalEditForm.startedAt} onChange={(event) => setProfessionalEditForm((current) => ({ ...current, startedAt: event.target.value }))} /></div>
+              <div className="space-y-1"><Label>Fim</Label><Input type="datetime-local" value={professionalEditForm.endedAt} onChange={(event) => setProfessionalEditForm((current) => ({ ...current, endedAt: event.target.value }))} /></div>
+            </div>
+            <div className="space-y-1"><Label>Observação</Label><Input value={professionalEditForm.notes} onChange={(event) => setProfessionalEditForm((current) => ({ ...current, notes: event.target.value }))} /></div>
+            <div className="space-y-1"><Label>Motivo da correção</Label><Input value={professionalEditForm.reason} onChange={(event) => setProfessionalEditForm((current) => ({ ...current, reason: event.target.value }))} placeholder="Ex.: esqueci de encerrar no horário" /></div>
+          </div>
+          <DialogFooter><Button variant="outline" onClick={() => setEditingProfessionalActivity(null)}>Cancelar</Button><Button onClick={handleSaveProfessionalEdit}>Salvar correção</Button></DialogFooter>
         </DialogContent>
       </Dialog>
     </>

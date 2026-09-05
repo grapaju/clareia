@@ -1,8 +1,10 @@
-import { addTaskHistoryEvent } from '@/services/taskHistoryService.js';
-import { readUserScopedJson, removeUserScopedItem, writeUserScopedJson } from '@/lib/userScopedStorage.js';
+import { addTaskHistoryEvent } from './taskHistoryService.js';
+import { readUserScopedJson, removeUserScopedItem, writeUserScopedJson } from '../lib/userScopedStorage.js';
 
 const STORAGE_KEY = 'clareia_work_sessions';
 const ACTIVE_TIMER_KEY = 'clareia_active_work_session';
+const TIMER_START_LOCK = 'clareia-work-session-start';
+let startInFlight = null;
 
 function readAll() {
   return readUserScopedJson(STORAGE_KEY, []);
@@ -78,7 +80,7 @@ export function reassignProjectWorkSessions(sourceProjectId, targetProjectId) {
   return moved;
 }
 
-export function startTimerWorkSession(payload = {}) {
+function createOrReuseTimerWorkSession(payload = {}) {
   const existing = readActiveSession();
   if (existing?.id) {
     return existing;
@@ -113,6 +115,22 @@ export function startTimerWorkSession(payload = {}) {
   }
 
   return session;
+}
+
+export async function startTimerWorkSession(payload = {}) {
+  if (startInFlight) return startInFlight;
+
+  const start = () => createOrReuseTimerWorkSession(payload);
+  const operation = globalThis.navigator?.locks?.request
+    ? globalThis.navigator.locks.request(TIMER_START_LOCK, start)
+    : Promise.resolve().then(start);
+
+  startInFlight = operation;
+  try {
+    return await operation;
+  } finally {
+    if (startInFlight === operation) startInFlight = null;
+  }
 }
 
 export function finishWorkSession(sessionId, updates = {}) {

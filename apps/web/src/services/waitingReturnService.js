@@ -1,6 +1,7 @@
 import apiClient from '@/lib/apiClient.js';
 import { appendProjectHistory } from '@/services/projectHistoryService.js';
 import { readUserScopedJson, writeUserScopedJson } from '@/lib/userScopedStorage.js';
+import { normalizeWaitingReturnInput } from '@/lib/waitingReturnLogic.js';
 
 const STORAGE_KEY = 'clareia_waiting_return_v1';
 const REMOTE_COLLECTION = 'aguardandoRetorno';
@@ -46,29 +47,21 @@ export function listFollowUpsForDate(targetDate) {
 }
 
 export function createWaitingReturn(payload) {
+  const normalized = normalizeWaitingReturnInput(payload);
+  if (!normalized) return null;
   const now = new Date().toISOString();
   const item = {
     id: uid(),
-    title: String(payload.title || '').trim(),
-    project: String(payload.project || '').trim(),
-    contactName: String(payload.contactName || '').trim(),
-    waitingFor: String(payload.waitingFor || '').trim(),
-    lastContactDate: String(payload.lastContactDate || '').trim(),
-    reminderDate: String(payload.reminderDate || '').trim(),
-    nextFollowUp: String(payload.nextFollowUp || '').trim(),
-    nextFollowUpDate: String(payload.nextFollowUpDate || '').trim(),
-    observations: String(payload.observations || '').trim(),
-    status: normalizeStatus(payload.status),
+    ...normalized,
+    status: normalizeStatus(normalized.status),
     createdAt: now,
     updatedAt: now
   };
 
-  if (!item.title || !item.project || !item.contactName || !item.waitingFor) return null;
-
   const items = readAll();
   items.push(item);
   writeAll(items);
-  appendProjectHistory(item.project, 'Acompanhamento criado', item.waitingFor || item.title || 'Aguardando retorno');
+  if (item.project) appendProjectHistory(item.project, 'Acompanhamento criado', item.waitingFor);
   return item;
 }
 

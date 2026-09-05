@@ -8,6 +8,7 @@ import Sidebar from '@/components/Sidebar.jsx';
 import MobileNav from '@/components/MobileNav.jsx';
 import PreferencesOnboarding from '@/components/PreferencesOnboarding.jsx';
 import CheckInCard from '@/components/CheckInCard.jsx';
+import ProfessionalJourneyCard from '@/components/ProfessionalJourneyCard.jsx';
 import TodayTaskRow from '@/components/TodayTaskRow.jsx';
 import TaskDetailsModal from '@/components/TaskDetailsModal.jsx';
 import EditTaskModal from '@/components/EditTaskModal.jsx';
@@ -32,6 +33,7 @@ import { listWaitingReturns, syncWaitingReturnsWithCloud } from '@/services/wait
 import { listUnsortedNotes, subscribeToUnsortedNotes, syncUnsortedNotesFromApi } from '@/lib/unsortedNotesStorage.js';
 import { getActiveWorkSession } from '@/services/workSessionService.js';
 import { readUserPreferences } from '@/services/userPreferencesService.js';
+import { useProfessionalJourney } from '@/contexts/ProfessionalJourneyContext.jsx';
 
 function formatMinutes(minutes) {
   const safe = Math.max(0, Number(minutes || 0));
@@ -54,6 +56,7 @@ export default function HomePage() {
   const { currentUser } = useAuth();
   const { lowStimulationMode, setLowStimulationMode } = useTheme();
   const navigate = useNavigate();
+  const { currentJourney, professionalProjects, startWork, resumeWork, startActivity } = useProfessionalJourney();
   const userId = currentUser?.id || '';
   const [detailsTask, setDetailsTask] = useState(null);
   const [editTask, setEditTask] = useState(null);
@@ -74,6 +77,7 @@ export default function HomePage() {
   const [isNoAlternativeOpen, setIsNoAlternativeOpen] = useState(false);
   const [waitingItems, setWaitingItems] = useState([]);
   const [guardedItems, setGuardedItems] = useState([]);
+  const [pendingProfessionalTask, setPendingProfessionalTask] = useState(null);
   const calmTitleRef = useRef(null);
   const openingPreferenceUserRef = useRef('');
 
@@ -129,7 +133,7 @@ export default function HomePage() {
   const recommended = useMemo(() => recommendationCandidates.find((task) => task.id === selectedRecommendationId) || recommendationCandidates.find((task) => !skippedSuggestionIds.includes(task.id)) || null, [recommendationCandidates, selectedRecommendationId, skippedSuggestionIds]);
   const activeSession = getActiveWorkSession();
   const highlightCandidates = useMemo(() => tasks.filter((task) => !dismissedHighlightIds.includes(task.id)), [dismissedHighlightIds, tasks]);
-  const highlight = useMemo(() => getTodayHighlight(highlightCandidates, recommended, activeSession), [activeSession?.id, activeSession?.taskId, highlightCandidates, recommended]);
+  const highlight = useMemo(() => getTodayHighlight(highlightCandidates, recommended, activeSession, checkIn), [activeSession?.id, activeSession?.taskId, checkIn, highlightCandidates, recommended]);
   const presentation = useMemo(() => getTodayPresentation(visibleTodayTasks, highlight, lowStimulationMode), [highlight, lowStimulationMode, visibleTodayTasks]);
   const highlightTask = presentation.highlight;
   const otherTasks = presentation.visibleTasks;
@@ -158,10 +162,44 @@ export default function HomePage() {
   const completedPlannedToday = canonical.completedToday.filter((task) => getTaskRowMetadata(task).situation.startsWith('Hoje')).length;
   const plannedTaskCount = canonical.groups.today.length + completedPlannedToday;
 
-  const handleStartTask = async (task, options = {}) => {
+  const executeTaskStart = async (task, options = {}, journeyId = '') => {
     const updated = normalizeTaskStatus(task.status) === TASK_STATUS.PAUSADA ? await resumeTask(task.id) : await startTask(task.id);
+    const taskProject = task.project || 'Pessoal';
+    if (journeyId || (currentJourney?.status === 'active' && currentJourney.projectName === taskProject)) {
+      await startActivity({ title: task.title, taskId: task.id, source: 'task', journeyId });
+    }
     setSelectedTask({ ...(updated || task), ...(options.blockMinutes ? { focusBlockMinutes: options.blockMinutes } : {}) });
     navigate('/foco');
+  };
+  const handleStartTask = async (task, options = {}) => {
+    const taskProject = task.project || 'Pessoal';
+    const professionalProject = professionalProjects.find((profile) => profile.name === taskProject);
+    if (professionalProject && currentJourney?.projectName === taskProject && currentJourney.status === 'paused') {
+      setPendingProfessionalTask({ task, options, action: 'resume' });
+      return;
+    }
+    if (professionalProject && currentJourney?.projectName !== taskProject) {
+      setPendingProfessionalTask({ task, options, action: 'start' });
+      return;
+    }
+    await executeTaskStart(task, options);
+  };
+
+  const handleStartTaskWithJourney = async () => {
+    if (!pendingProfessionalTask) return;
+    try {
+      let journeyId = currentJourney?.id || '';
+      if (pendingProfessionalTask.action === 'resume') {
+        await resumeWork();
+      } else {
+        const started = await startWork(pendingProfessionalTask.task.project || 'Pessoal');
+        journeyId = started?.id || '';
+      }
+      await executeTaskStart(pendingProfessionalTask.task, pendingProfessionalTask.options, journeyId);
+      setPendingProfessionalTask(null);
+    } catch (error) {
+      toast.error(error?.message || 'Não foi possível iniciar a jornada.');
+    }
   };
   const handleAnotherSuggestion = () => {
     if (!recommended || recommendationCandidates.length < 2) { setIsNoAlternativeOpen(true); return; }
@@ -238,6 +276,7 @@ export default function HomePage() {
               ) : (
                 <>
                   <CheckInCard compact={lowStimulationMode} />
+                  <ProfessionalJourneyCard compact={lowStimulationMode} />
 
                   {lowStimulationMode ? (
                     <section className="mx-auto max-w-2xl py-4" aria-labelledby="calm-mode-title">
@@ -245,7 +284,7 @@ export default function HomePage() {
                       {highlightTask ? (
                         <div className="mt-6 border-y border-border py-6">
                           <p className="text-sm text-muted-foreground">{isResumeHighlight ? 'Continue de onde parou' : 'Para começar agora'}</p>
-                          <h2 className="mt-2 text-xl font-medium text-foreground">{highlightTask.title}</h2>
+                          <h2 className="mt-2 text-2xl font-medium text-foreground">{highlightTask.title}</h2>
                           <p className="mt-5 text-sm font-medium text-muted-foreground">Agora</p>
                           <p className="mt-1 text-base text-foreground">{nextStep}</p>
                           {nextActionPresentation.actionMinutes > 0 && <p className="mt-2 text-sm text-muted-foreground">Cerca de {nextActionPresentation.actionMinutes} minutos</p>}
@@ -282,10 +321,10 @@ export default function HomePage() {
                       )}
                       {completedPlannedToday > 0 && plannedTaskCount > 1 && <p className="mt-1 text-sm text-muted-foreground">{completedPlannedToday} de {plannedTaskCount} tarefas planejadas concluídas</p>}
                       {plannedMinutes > 0 && (
-                        <p className={`mt-1 text-sm ${capacityState.isOverCapacity ? 'text-destructive' : 'text-muted-foreground'}`}>
+                        <p className="mt-1 text-sm text-muted-foreground">
                           {formatMinutes(plannedMinutes)} planejadas · {formatMinutes(capacity.availableMinutes)} disponíveis
-                          {capacityState.isNearCapacity && ' · Sua agenda está quase completa.'}
-                          {capacityState.isOverCapacity && ` · ${formatMinutes(capacityState.differenceMinutes)} acima do disponível.`}
+                          {capacityState.isNearCapacity && ' · Seu dia está quase completo.'}
+                          {capacityState.isOverCapacity && ` · Seu dia passou ${formatMinutes(capacityState.differenceMinutes)} do tempo disponível.`}
                         </p>
                       )}
                     </section>
@@ -295,8 +334,8 @@ export default function HomePage() {
                     <section className="mb-7 rounded-lg border border-primary/25 bg-card p-5 shadow-sm" aria-labelledby="recommendation-title">
                       <p className="mb-2 text-sm font-semibold text-primary">{isResumeHighlight ? (highlight.reason === 'active_session' ? 'Sessão em andamento' : 'Você parou aqui') : 'Sugestão para começar'}</p>
                       <button type="button" className="block w-full rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => setDetailsTask(highlightTask)}>
-                        <h2 id="recommendation-title" className="text-xl font-medium text-foreground">{highlightTask.title}</h2>
-                        <p className="mt-2 flex flex-wrap gap-x-2 text-sm text-muted-foreground">
+                        <h2 id="recommendation-title" className="text-2xl font-medium text-foreground">{highlightTask.title}</h2>
+                        <p className="mt-2 flex flex-wrap gap-x-2 text-[13px] text-muted-foreground">
                           <span>{highlightTask.project || 'Pessoal'}</span>
                           {highlightMetadata.minutes > 0 && <span>{highlightMetadata.minutes} min no total</span>}
                           <span>{highlightMetadata.situation}</span>
@@ -309,9 +348,9 @@ export default function HomePage() {
                         {lastCompletedStep && isResumeHighlight && <p className="mb-1 text-xs text-muted-foreground">Último passo concluído: {lastCompletedStep}</p>}
                         <p className="text-xs font-medium text-muted-foreground">Próximo passo</p>
                         <p className="mt-1 text-sm text-foreground">{nextStep}</p>
-                        {nextActionPresentation.actionMinutes > 0 && <p className="mt-1 text-xs text-muted-foreground">Próximo passo: cerca de {nextActionPresentation.actionMinutes} minutos</p>}
+                        {nextActionPresentation.actionMinutes > 0 && <p className="mt-1 text-xs text-muted-foreground">cerca de {nextActionPresentation.actionMinutes} minutos</p>}
                         {!isResumeHighlight && nextActionPresentation.blockMinutes > 0 && <p className="mt-1 text-xs text-muted-foreground">Bloco de foco sugerido: {nextActionPresentation.blockMinutes} minutos</p>}
-                        {highlightTask.pauseNote && <p className="mt-2 text-sm text-muted-foreground">Onde você parou: {highlightTask.pauseNote}</p>}
+                        {nextActionPresentation.pauseNote && <p className="mt-2 text-sm text-muted-foreground">Onde você parou: {nextActionPresentation.pauseNote}</p>}
                       </div>
                       <div className="mt-4 flex flex-wrap items-center gap-2">
                         <Button onClick={() => handleStartTask(highlightTask)}><Play className="mr-1.5 h-4 w-4" aria-hidden="true" /> {isResumeHighlight ? 'Continuar de onde parei' : 'Começar agora'}</Button>
@@ -367,6 +406,27 @@ export default function HomePage() {
           </main>
         </div>
         <MobileNav />
+
+        <AlertDialog open={Boolean(pendingProfessionalTask)} onOpenChange={(open) => !open && setPendingProfessionalTask(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{pendingProfessionalTask?.action === 'resume' ? 'Retomar seu trabalho?' : 'Iniciar seu trabalho?'}</AlertDialogTitle>
+              <AlertDialogDescription>
+                {pendingProfessionalTask?.task?.project} usa jornada profissional. A jornada mede seu período trabalhado; o foco continua medindo apenas esta tarefa.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel onClick={() => {
+                const pending = pendingProfessionalTask;
+                setPendingProfessionalTask(null);
+                if (pending) executeTaskStart(pending.task, pending.options);
+              }}>Agora não</AlertDialogCancel>
+              <AlertDialogAction onClick={handleStartTaskWithJourney}>
+                {pendingProfessionalTask?.action === 'resume' ? 'Retomar e continuar' : 'Iniciar e continuar'}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
         {detailsTask && <TaskDetailsModal task={detailsTask} isOpen onClose={() => setDetailsTask(null)} />}
         {editTask && <EditTaskModal task={editTask} isOpen onClose={() => setEditTask(null)} />}
         <TaskCompletionDialog isOpen={Boolean(completionTask)} onOpenChange={(open) => !open && setCompletionTask(null)} task={completionTask} onConfirm={handleCompleteTask} />

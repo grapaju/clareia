@@ -7,6 +7,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { addManualWorkSession } from '@/services/workSessionService.js';
 import { toast } from 'sonner';
+import { PROFESSIONAL_CATEGORIES } from '@/lib/professionalJourneyLogic.js';
 
 export default function ManualTimeDialog({
   isOpen,
@@ -14,7 +15,9 @@ export default function ManualTimeDialog({
   defaultProject = 'Pessoal',
   defaultTaskId = 'none',
   tasks = [],
-  onSaved
+  onSaved,
+  professionalJourneys = [],
+  onSaveProfessional,
 }) {
   const [form, setForm] = useState({
     projectId: defaultProject || 'Pessoal',
@@ -22,12 +25,39 @@ export default function ManualTimeDialog({
     date: new Date().toISOString().split('T')[0],
     durationMinutes: 30,
     title: '',
-    notes: ''
+    notes: '',
+    category: 'Outro'
   });
 
   const taskOptions = useMemo(() => tasks.filter(Boolean), [tasks]);
 
-  const handleSave = () => {
+  const handleSave = async () => {
+    const professionalJourney = professionalJourneys.find((journey) => (
+      journey.projectName === form.projectId
+      && String(journey.startedAt || '').slice(0, 10) === form.date
+    )) || professionalJourneys.find((journey) => journey.projectName === form.projectId);
+    const durationMinutes = Number(form.durationMinutes || 0);
+    if (professionalJourney && onSaveProfessional) {
+      if (!form.title.trim() || durationMinutes <= 0) {
+        toast.error('Informe descrição e duração válidas para salvar o tempo.');
+        return;
+      }
+      const startedAt = new Date(`${form.date}T09:00:00`).toISOString();
+      const endedAt = new Date(new Date(startedAt).getTime() + durationMinutes * 60000).toISOString();
+      await onSaveProfessional({
+        journeyId: professionalJourney.id,
+        title: form.title,
+        taskId: form.taskId !== 'none' ? form.taskId : null,
+        category: form.category,
+        source: 'manual',
+        startedAt,
+        endedAt,
+        notes: form.notes,
+      });
+      toast.success('Tempo profissional registrado.');
+      onOpenChange(false);
+      return;
+    }
     const created = addManualWorkSession({
       projectId: form.projectId,
       taskId: form.taskId !== 'none' ? form.taskId : null,
@@ -87,6 +117,14 @@ export default function ManualTimeDialog({
           <div className="space-y-2">
             <Label>Descrição</Label>
             <Input value={form.title} onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))} placeholder="Ex.: revisão de briefing" />
+          </div>
+
+          <div className="space-y-2">
+            <Label>Categoria</Label>
+            <Select value={form.category} onValueChange={(value) => setForm((current) => ({ ...current, category: value }))}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>{PROFESSIONAL_CATEGORIES.map((category) => <SelectItem key={category} value={category}>{category}</SelectItem>)}</SelectContent>
+            </Select>
           </div>
 
           <div className="space-y-2">

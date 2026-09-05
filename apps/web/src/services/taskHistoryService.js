@@ -1,4 +1,4 @@
-import { readUserScopedJson, writeUserScopedJson } from '@/lib/userScopedStorage.js';
+import { readUserScopedJson, writeUserScopedJson } from '../lib/userScopedStorage.js';
 
 const STORAGE_KEY = 'clareia_task_history';
 

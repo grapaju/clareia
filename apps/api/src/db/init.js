@@ -135,6 +135,117 @@ CREATE TABLE IF NOT EXISTS project_aliases (
 CREATE INDEX IF NOT EXISTS idx_project_aliases_user_project
   ON project_aliases(user_id, account_id, project_name);
 
+ALTER TABLE project_profiles
+  ADD COLUMN IF NOT EXISTS professional_tracking_enabled BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE project_profiles
+  ADD COLUMN IF NOT EXISTS weekly_target_minutes INTEGER NOT NULL DEFAULT 2400;
+
+ALTER TABLE project_profiles
+  ADD COLUMN IF NOT EXISTS work_days JSONB NOT NULL DEFAULT '[1, 2, 3, 4, 5]'::jsonb;
+
+ALTER TABLE project_profiles
+  ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT '';
+
+CREATE TABLE IF NOT EXISTS professional_journeys (
+  id TEXT PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  account_id TEXT DEFAULT '',
+  project_name TEXT NOT NULL,
+  timezone TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'active',
+  started_at TIMESTAMPTZ NOT NULL,
+  ended_at TIMESTAMPTZ,
+  closing_note TEXT DEFAULT '',
+  idempotency_key TEXT DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+DROP INDEX IF EXISTS idx_professional_journeys_one_open;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_professional_journeys_one_open_user
+  ON professional_journeys(user_id)
+  WHERE status IN ('active', 'paused');
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_professional_journeys_idempotency
+  ON professional_journeys(user_id, idempotency_key)
+  WHERE idempotency_key <> '';
+
+CREATE INDEX IF NOT EXISTS idx_professional_journeys_user_period
+  ON professional_journeys(user_id, started_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_professional_journeys_user_project_period
+  ON professional_journeys(user_id, lower(project_name), started_at DESC);
+
+CREATE TABLE IF NOT EXISTS professional_journey_pauses (
+  id TEXT PRIMARY KEY,
+  journey_id TEXT NOT NULL REFERENCES professional_journeys(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  category TEXT DEFAULT '',
+  started_at TIMESTAMPTZ NOT NULL,
+  ended_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_professional_pauses_one_open
+  ON professional_journey_pauses(journey_id)
+  WHERE ended_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_professional_pauses_user_period
+  ON professional_journey_pauses(user_id, started_at DESC);
+
+CREATE TABLE IF NOT EXISTS professional_activities (
+  id TEXT PRIMARY KEY,
+  journey_id TEXT NOT NULL REFERENCES professional_journeys(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  account_id TEXT DEFAULT '',
+  project_name TEXT NOT NULL,
+  task_id TEXT,
+  work_session_id TEXT,
+  title TEXT NOT NULL,
+  category TEXT NOT NULL DEFAULT 'Outro',
+  source TEXT NOT NULL DEFAULT 'quick',
+  started_at TIMESTAMPTZ NOT NULL,
+  ended_at TIMESTAMPTZ,
+  duration_minutes INTEGER NOT NULL DEFAULT 0,
+  notes TEXT DEFAULT '',
+  manually_edited BOOLEAN NOT NULL DEFAULT false,
+  original_data JSONB,
+  idempotency_key TEXT DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_professional_activities_one_open
+  ON professional_activities(user_id)
+  WHERE ended_at IS NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_professional_activities_idempotency
+  ON professional_activities(user_id, idempotency_key)
+  WHERE idempotency_key <> '';
+
+CREATE INDEX IF NOT EXISTS idx_professional_activities_user_period
+  ON professional_activities(user_id, started_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_professional_activities_user_project_period
+  ON professional_activities(user_id, lower(project_name), started_at DESC);
+
+CREATE TABLE IF NOT EXISTS professional_activity_edits (
+  id BIGSERIAL PRIMARY KEY,
+  activity_id TEXT NOT NULL REFERENCES professional_activities(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  edited_by UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  previous_data JSONB NOT NULL,
+  corrected_data JSONB NOT NULL,
+  reason TEXT DEFAULT '',
+  edited_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_professional_activity_edits_user_activity
+  ON professional_activity_edits(user_id, activity_id, edited_at DESC);
+
 ALTER TABLE users
   ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user';
 

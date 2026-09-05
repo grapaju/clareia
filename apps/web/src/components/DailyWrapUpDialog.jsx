@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -18,6 +18,8 @@ import { normalizeTaskStatus, TASK_STATUS } from '@/lib/taskExecution.js';
 import { saveDailyWrapUp } from '@/services/dailyWrapUpService.js';
 import { addManualWorkSession } from '@/services/workSessionService.js';
 import { saveImprovementForLater } from '@/lib/improvementCapture.js';
+import { useProfessionalJourney } from '@/contexts/ProfessionalJourneyContext.jsx';
+import { isForgottenJourney } from '@/lib/professionalJourneyLogic.js';
 
 function todayIso() {
   return new Date().toISOString().split('T')[0];
@@ -30,6 +32,7 @@ export default function DailyWrapUpDialog({ open, onOpenChange }) {
     addTask,
     pauseTask
   } = useTaskContext();
+  const { currentJourney, closeWork } = useProfessionalJourney();
 
   const [isSaving, setIsSaving] = useState(false);
   const [concluded, setConcluded] = useState('');
@@ -38,6 +41,14 @@ export default function DailyWrapUpDialog({ open, onOpenChange }) {
   const [loggedHours, setLoggedHours] = useState('');
   const [waitingReturn, setWaitingReturn] = useState('');
   const [improvementIdea, setImprovementIdea] = useState('');
+  const [correctedEndAt, setCorrectedEndAt] = useState('');
+
+  useEffect(() => {
+    if (!open) return;
+    const now = new Date();
+    now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+    setCorrectedEndAt(now.toISOString().slice(0, 16));
+  }, [open]);
 
   const inProgressTasks = useMemo(() => {
     return tasks.filter((task) => normalizeTaskStatus(task.status) === TASK_STATUS.EM_ANDAMENTO);
@@ -104,6 +115,13 @@ export default function DailyWrapUpDialog({ open, onOpenChange }) {
         });
       }
 
+      if (currentJourney?.id) {
+        await closeWork(
+          paused || concluded,
+          isForgottenJourney(currentJourney) && correctedEndAt ? new Date(correctedEndAt).toISOString() : undefined
+        );
+      }
+
       saveDailyWrapUp(currentUser?.id, {
         date: todayIso(),
         concluded,
@@ -136,15 +154,23 @@ export default function DailyWrapUpDialog({ open, onOpenChange }) {
         </DialogHeader>
 
         <div className="space-y-4">
-          <div className="space-y-2">
+          {!currentJourney && <div className="space-y-2">
             <Label htmlFor="wrapup-concluded">O que foi concluído hoje?</Label>
             <Textarea id="wrapup-concluded" value={concluded} onChange={(event) => setConcluded(event.target.value)} placeholder="Principais entregas e avanços do dia." rows={3} />
-          </div>
+          </div>}
 
           <div className="space-y-2">
             <Label htmlFor="wrapup-paused">O que ficou pausado?</Label>
             <Textarea id="wrapup-paused" value={paused} onChange={(event) => setPaused(event.target.value)} placeholder="Registre onde você parou para retomar com clareza." rows={3} />
           </div>
+
+          {currentJourney && isForgottenJourney(currentJourney) && (
+            <div className="space-y-2 rounded-md border border-amber-300/60 bg-amber-50 p-3">
+              <Label htmlFor="journey-real-end">Horário real de encerramento</Label>
+              <Input id="journey-real-end" type="datetime-local" value={correctedEndAt} onChange={(event) => setCorrectedEndAt(event.target.value)} />
+              <p className="text-sm text-amber-800">A jornada está aberta há mais tempo que o habitual. Confirme quando o trabalho realmente terminou.</p>
+            </div>
+          )}
 
           <div className="space-y-2">
             <Label htmlFor="wrapup-hours">Precisa registrar horas?</Label>

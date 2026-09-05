@@ -15,7 +15,7 @@ import {
 	syncGoogleDriveDocument,
 	testGoogleDriveConnection,
 } from '../api/google-drive.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, requirePrivileged } from '../middleware/auth.js';
 
 const router = Router();
 
@@ -51,7 +51,7 @@ router.get('/oauth-user-setup-status', async (req, res) => {
 	res.json(result);
 });
 
-router.post('/oauth-user-config', async (req, res) => {
+router.post('/oauth-user-config', requirePrivileged, async (req, res) => {
 	const result = await saveGoogleDriveOAuthUserConfig({
 		clientId: req.body?.clientId,
 		clientSecret: req.body?.clientSecret,

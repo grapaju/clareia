@@ -1,5 +1,5 @@
 const STORAGE_KEY = 'clareia_project_links_v1';
-import { appendProjectHistory } from '@/services/projectHistoryService.js';
+import { appendProjectHistory } from './projectHistoryService.js';
 import { readUserScopedJson, writeUserScopedJson } from '../lib/userScopedStorage.js';
 
 const LINK_TYPES = [
@@ -59,6 +59,7 @@ export function createProjectLink(payload) {
     url: String(payload.url || '').trim(),
     type: String(payload.type || 'outro').trim(),
     description: String(payload.description || '').trim(),
+    folder: String(payload.folder || '').trim(),
     favorite: Boolean(payload.favorite),
     storageProvider: payload.storageProvider || 'external_link',
     relatedTaskIds: toArray(payload.relatedTaskIds),

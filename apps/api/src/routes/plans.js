@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { withTransaction } from '../db/postgres.js';
 import { requireAuth } from '../middleware/auth.js';
+import { getInvalidPlanTaskIndexes } from '../utils/plan-confirmation.js';
 
 const router = Router();
 
@@ -80,6 +81,9 @@ router.post('/confirm', async (req, res) => {
   if (!planId || tasks.length === 0) {
     return res.status(400).json({ message: 'Plano e tarefas sao obrigatorios.' });
   }
+  if (getInvalidPlanTaskIndexes(tasks).length > 0) {
+    return res.status(400).json({ message: 'Todas as tarefas selecionadas precisam de titulo.' });
+  }
 
   const result = await withTransaction(async (client) => {
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`plan:${req.userId}:${planId}`]);
@@ -107,7 +111,13 @@ router.post('/confirm', async (req, res) => {
     );
 
     if (existingTasks.rows.length > 0) {
-      return { items: existingTasks.rows.map(mapTask), reused: true, projectsCreated: [] };
+      return {
+        items: existingTasks.rows.map(mapTask),
+        reused: true,
+        projectsCreated: [],
+        requestedCount: tasks.length,
+        createdCount: existingTasks.rows.length,
+      };
     }
 
     const projectRows = await client.query(
@@ -150,7 +160,6 @@ router.post('/confirm', async (req, res) => {
     for (let index = 0; index < tasks.length; index += 1) {
       const incoming = { ...(tasks[index] || {}) };
       const title = text(incoming.title);
-      if (!title) continue;
 
       const projectStatus = text(incoming.projectStatus) || 'undecided';
       const project = await ensureProject(incoming.project, projectStatus);
@@ -176,7 +185,12 @@ router.post('/confirm', async (req, res) => {
         [id, req.userId, accountId, JSON.stringify(payload)]
       );
 
-      if (inserted.rows[0]) createdTasks.push(mapTask(inserted.rows[0]));
+      if (!inserted.rows[0]) {
+        const error = new Error('Conflito ao criar as tarefas do plano. Nenhuma tarefa foi criada.');
+        error.status = 409;
+        throw error;
+      }
+      createdTasks.push(mapTask(inserted.rows[0]));
 
       const alias = text(incoming.projectAlias || incoming.projectMention);
       if (alias && project) {
@@ -210,7 +224,13 @@ router.post('/confirm', async (req, res) => {
       [JSON.stringify(nextPlanData), planId, req.userId]
     );
 
-    return { items: createdTasks, reused: false, projectsCreated };
+    return {
+      items: createdTasks,
+      reused: false,
+      projectsCreated,
+      requestedCount: tasks.length,
+      createdCount: createdTasks.length,
+    };
   });
 
   res.status(result.reused ? 200 : 201).json(result);

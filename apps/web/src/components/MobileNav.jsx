@@ -58,12 +58,12 @@ export default function MobileNav() {
             <div className="relative">
               <item.icon className={cn("w-5 h-5", isActive(item.path) && "fill-primary/20")} />
             </div>
-            <span className="max-w-full truncate px-0.5 text-[11px] font-medium">{item.label}</span>
+            <span className="max-w-full truncate px-0.5 text-xs font-medium">{item.label}</span>
           </Link>
         ))}
         <DropdownMenu>
           <DropdownMenuTrigger className={cn(
-            'flex min-h-11 min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-md py-1 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+            'flex min-h-11 min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-md py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
             isMoreActive ? 'text-primary' : 'text-muted-foreground hover:text-foreground'
           )}>
             <MoreHorizontal className="h-5 w-5" aria-hidden="true" />

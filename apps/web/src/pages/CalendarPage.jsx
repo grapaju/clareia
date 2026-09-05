@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Clock3,
   Link as LinkIcon,
+  MoreHorizontal,
   Plus
 } from 'lucide-react';
 import Header from '@/components/Header.jsx';
@@ -14,6 +15,7 @@ import Sidebar from '@/components/Sidebar.jsx';
 import MobileNav from '@/components/MobileNav.jsx';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -44,6 +46,7 @@ import {
 } from '@/services/calendarPlanningService.js';
 import { getCalendarPreferences, isAllowedDayForTask } from '@/services/calendarPreferencesService.js';
 import { toIsoDate } from '@/lib/localDate.js';
+import { formatWeekRangeLong, formatWeekRangeShort, getCalendarTaskActions } from '@/lib/calendarViewLogic.js';
 import CreateFollowUpFromTaskDialog from '@/components/CreateFollowUpFromTaskDialog.jsx';
 import TaskDetailsModal from '@/components/TaskDetailsModal.jsx';
 import { isTaskOpenStatus, normalizeTaskStatus, TASK_STATUS } from '@/lib/taskExecution.js';
@@ -132,26 +135,6 @@ function formatMinutesLabel(totalMinutes = 0) {
   return `${hours}h${String(minutes).padStart(2, '0')}`;
 }
 
-function formatWeekRangeLong(baseDate) {
-  const week = weekDays(baseDate);
-  const start = week[0];
-  const end = week[6];
-  const startDay = start.toLocaleDateString('pt-BR', { day: '2-digit' });
-  const endDay = end.toLocaleDateString('pt-BR', { day: '2-digit' });
-  const month = end.toLocaleDateString('pt-BR', { month: 'long' });
-  const year = end.toLocaleDateString('pt-BR', { year: 'numeric' });
-  return `Semana de ${startDay} a ${endDay} de ${month} de ${year}`;
-}
-
-function formatWeekRangeShort(baseDate) {
-  const week = weekDays(baseDate);
-  const start = week[0].toLocaleDateString('pt-BR', { day: '2-digit' });
-  const end = week[6].toLocaleDateString('pt-BR', { day: '2-digit' });
-  const month = week[6].toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '');
-  const year = week[6].toLocaleDateString('pt-BR', { year: 'numeric' });
-  return `${start}-${end} ${month}. ${year}`;
-}
-
 function getItemVisual(type) {
   const map = {
     task: { dot: 'bg-slate-500', badge: 'bg-slate-100 text-slate-700 border-slate-300' },
@@ -185,6 +168,7 @@ export default function CalendarPage() {
   const [selectedItem, setSelectedItem] = useState(null);
   const [showCommitmentDialog, setShowCommitmentDialog] = useState(false);
   const [showFollowUpDialog, setShowFollowUpDialog] = useState(false);
+  const [followUpTask, setFollowUpTask] = useState(null);
   const [pendingCompletionData, setPendingCompletionData] = useState(null);
   const [pendingCompletionPayload, setPendingCompletionPayload] = useState(null);
   const [isPauseDialogOpen, setIsPauseDialogOpen] = useState(false);
@@ -433,43 +417,6 @@ export default function CalendarPage() {
     }
   };
 
-  const handleMoveToAnotherDay = async (daysAhead = 1) => {
-    if (!selectedItem?.sourceId) return;
-    const current = new Date(`${selectedItem.date}T12:00:00`);
-    current.setDate(current.getDate() + daysAhead);
-    const today = new Date();
-    today.setHours(12, 0, 0, 0);
-    if (current < today) current.setTime(today.getTime());
-    const nextIso = toIsoDate(current);
-
-    if (selectedItem.type === 'task' || selectedItem.type === 'rotina') {
-      await updateTask(selectedItem.sourceId, {
-        scheduledDate: nextIso,
-        dataSugeridaExecucao: nextIso,
-        scheduledPeriod: editPeriod,
-        periodoSugerido: editPeriod,
-        manualSchedule: true
-      });
-      toast.success('Item movido para outro dia.');
-      setSelectedItem(null);
-      return;
-    }
-
-    if (selectedItem.type === 'prazo') {
-      await updateTask(selectedItem.sourceId, { dueDate: nextIso });
-      toast.success('Prazo movido para outro dia.');
-      setSelectedItem(null);
-      return;
-    }
-
-    if (selectedItem.type === 'compromisso') {
-      updateCalendarCommitment(selectedItem.sourceId, { date: nextIso, syncStatus: 'pending_sync' });
-      setCommitmentsVersion((value) => value + 1);
-      toast.success('Compromisso movido para outro dia.');
-      setSelectedItem(null);
-    }
-  };
-
   const handleStartTask = async () => {
     if (!selectedItem?.sourceId) return;
     const task = tasks.find((item) => item.id === selectedItem.sourceId);
@@ -605,7 +552,33 @@ export default function CalendarPage() {
     if (!taskId) return;
     const task = tasks.find((item) => item.id === taskId);
     if (!task) return;
+    setSelectedItem(null);
     setDetailsTask(task);
+  };
+
+  const handleOpenFollowUp = () => {
+    const task = tasks.find((item) => item.id === selectedItem?.sourceId);
+    if (!task) return;
+    setFollowUpTask(task);
+    setSelectedItem(null);
+    setShowFollowUpDialog(true);
+  };
+
+  const handleRemoveFromCalendar = async () => {
+    if (!selectedItem?.sourceId) return;
+    if (selectedItem.type === 'prazo') {
+      await updateTask(selectedItem.sourceId, { dueDate: '' });
+    } else {
+      await updateTask(selectedItem.sourceId, {
+        scheduledDate: '',
+        dataSugeridaExecucao: '',
+        scheduledPeriod: '',
+        periodoSugerido: '',
+        manualSchedule: true
+      });
+    }
+    setSelectedItem(null);
+    toast.success('Item retirado do calendário.');
   };
 
   const handleReorganizeHeavyDay = async (dateIso) => {
@@ -858,6 +831,11 @@ export default function CalendarPage() {
     if (!selectedDayIso) return null;
     return weekData.find((day) => day.iso === selectedDayIso) || null;
   }, [weekData, selectedDayIso]);
+  const selectedTaskRecord = selectedItem?.sourceId
+    ? tasks.find((task) => task.id === selectedItem.sourceId) || null
+    : null;
+  const selectedTaskActions = getCalendarTaskActions(selectedTaskRecord?.status || selectedItem?.status);
+  const isSelectedTask = Boolean(selectedItem && ['task', 'rotina', 'prazo'].includes(selectedItem.type));
 
   return (
     <>
@@ -1197,20 +1175,27 @@ export default function CalendarPage() {
 
               <div className="flex flex-wrap gap-2">
                 {['task', 'rotina', 'prazo', 'compromisso'].includes(selectedItem.type) && (
-                  <>
-                    <Button variant="outline" onClick={handleSaveItemDate}>Editar data</Button>
-                    <Button variant="outline" onClick={() => handleMoveToAnotherDay(1)}>Mover para outro dia</Button>
-                  </>
+                  <Button variant="outline" onClick={handleSaveItemDate}>Mover</Button>
                 )}
 
-                {(selectedItem.type === 'task' || selectedItem.type === 'prazo' || selectedItem.type === 'rotina') && (
+                {isSelectedTask && (
                   <>
+                    {selectedTaskActions.primaryActionLabel && (
+                      <Button onClick={handleStartTask}><Clock3 className="w-4 h-4 mr-2" /> {selectedTaskActions.primaryActionLabel}</Button>
+                    )}
                     <Button variant="outline" onClick={handleOpenTaskDetails}>Abrir tarefa</Button>
-                    <Button onClick={handleStartTask}><Clock3 className="w-4 h-4 mr-2" /> Começar</Button>
-                    <Button variant="outline" onClick={handleCompleteTask}>Concluir</Button>
-                    <Button variant="outline" onClick={handleAutoFitTask}>Encaixar no calendário</Button>
-                    <Button variant="outline" onClick={() => setShowFollowUpDialog(true)}>Criar acompanhamento</Button>
-                    <Button variant="outline" onClick={handleReopenTask}>Reabrir</Button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="ghost" size="icon" aria-label="Mais ações da tarefa"><MoreHorizontal className="h-4 w-4" /></Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        {selectedTaskActions.showComplete && <DropdownMenuItem onSelect={handleCompleteTask}>Concluir</DropdownMenuItem>}
+                        {selectedTaskActions.showReopen && <DropdownMenuItem onSelect={handleReopenTask}>Reabrir</DropdownMenuItem>}
+                        <DropdownMenuItem onSelect={handleAutoFitTask}>Encaixar no calendário</DropdownMenuItem>
+                        <DropdownMenuItem onSelect={handleOpenFollowUp}>Criar acompanhamento</DropdownMenuItem>
+                        <DropdownMenuItem onSelect={handleRemoveFromCalendar}>Retirar do calendário</DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </>
                 )}
 
@@ -1223,7 +1208,10 @@ export default function CalendarPage() {
                 )}
 
                 {selectedItem.type === 'compromisso' && (
-                  <Button variant="outline" className="text-destructive" onClick={handleDeleteCommitment}>Excluir compromisso</Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" aria-label="Mais ações do compromisso"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
+                    <DropdownMenuContent align="end"><DropdownMenuItem className="text-destructive" onSelect={handleDeleteCommitment}>Excluir compromisso</DropdownMenuItem></DropdownMenuContent>
+                  </DropdownMenu>
                 )}
               </div>
             </div>
@@ -1289,8 +1277,8 @@ export default function CalendarPage() {
 
       <CreateFollowUpFromTaskDialog
         isOpen={showFollowUpDialog}
-        onOpenChange={setShowFollowUpDialog}
-        task={selectedItem ? tasks.find((task) => task.id === selectedItem.sourceId) : null}
+        onOpenChange={(open) => { setShowFollowUpDialog(open); if (!open) setFollowUpTask(null); }}
+        task={followUpTask}
         onConfirmMarkTaskDone={async () => {
           if (!selectedItem?.sourceId) return;
           const payload = { timeMode: 'planned' };

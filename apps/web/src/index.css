@@ -40,13 +40,13 @@ html.high-contrast { --muted-foreground: 220 20% 32%; --border: 220 15% 70%; }
 
 @layer base {
   :root {
-    --font-size-body: 1.0625rem;
-    --font-size-meta: 0.9375rem;
-    --font-size-control: 1rem;
-    --font-size-next-action: 1.125rem;
+    --font-size-body: 1rem;
+    --font-size-meta: 0.875rem;
+    --font-size-control: 0.875rem;
+    --font-size-next-action: 1rem;
     --font-size-task-title: 1.5rem;
-    --font-size-section-title: 1.25rem;
-    --font-size-page-title: 2.125rem;
+    --font-size-section-title: 1.125rem;
+    --font-size-page-title: 2rem;
     /* Calm, clean, welcoming design system */
     --background: 60 20% 98%; /* Warm off-white */
     --foreground: 220 20% 20%; /* Slate gray for text, softer than black */
@@ -119,9 +119,8 @@ html.high-contrast { --muted-foreground: 220 20% 32%; --border: 220 15% 70%; }
     color: hsl(var(--foreground));
   }
 
-  h1 { font-size: 2.5rem; }
-  h2 { font-size: 1.75rem; }
-  h3 { font-size: 1.25rem; }
+  h1 { font-size: var(--font-size-page-title); }
+  h2, h3 { font-size: var(--font-size-section-title); }
 
   button, input, textarea, select {
     font-size: var(--font-size-control);
@@ -152,7 +151,7 @@ html.high-contrast { --muted-foreground: 220 20% 32%; --border: 220 15% 70%; }
 
 @layer utilities {
   .text-sm { font-size: var(--font-size-meta); line-height: 1.5; }
-  .text-xs { font-size: 0.875rem; line-height: 1.45; }
+  .text-xs { font-size: 0.75rem; line-height: 1.45; }
 
   .pb-safe {
     padding-bottom: env(safe-area-inset-bottom);

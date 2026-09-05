@@ -37,7 +37,6 @@ export default function WaitingReturnPage() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [itemToDelete, setItemToDelete] = useState(null);
   const [form, setForm] = useState({
-    title: '',
     project: '',
     contactName: '',
     waitingFor: '',
@@ -60,16 +59,14 @@ export default function WaitingReturnPage() {
   const handleCreate = () => {
     const created = createWaitingReturn({
       ...form,
-      title: form.title || form.waitingFor,
       status: form.status || 'Aguardando retorno'
     });
     if (!created) {
-      toast.error('Preencha titulo, projeto, contato e o que está aguardando.');
+      toast.error('Conte o que você está aguardando.');
       return;
     }
 
     setForm({
-      title: '',
       project: '',
       contactName: '',
       waitingFor: '',
@@ -131,28 +128,28 @@ export default function WaitingReturnPage() {
               <Card className="bg-card border-border shadow-sm mb-6">
                 <CardContent className="p-6 space-y-4">
                   <h2 className="text-lg font-medium">Novo acompanhamento</h2>
-                  <p className="text-sm text-muted-foreground">Modo simples para registrar rápido sem sobrecarga.</p>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div className="space-y-2 md:col-span-2"><Label>O que estou aguardando?</Label><Textarea value={form.waitingFor} onChange={(e) => setForm((c) => ({ ...c, waitingFor: e.target.value }))} className="min-h-20" /></div>
-                    <div className="space-y-2"><Label>De quem?</Label><Input value={form.contactName} onChange={(e) => setForm((c) => ({ ...c, contactName: e.target.value }))} /></div>
-                    <div className="space-y-2"><Label>Projeto</Label><ProjectSelect value={form.project} onChange={(project) => setForm((current) => ({ ...current, project }))} /></div>
-                    <div className="space-y-2"><Label>Quando lembrar?</Label><Input type="date" value={form.reminderDate} onChange={(e) => setForm((c) => ({ ...c, reminderDate: e.target.value, nextFollowUpDate: e.target.value }))} /></div>
-                    <div className="space-y-2"><Label>Título (opcional)</Label><Input value={form.title} onChange={(e) => setForm((c) => ({ ...c, title: e.target.value }))} placeholder="Se vazio, usa o texto de aguardando" /></div>
+                  <div className="grid grid-cols-1 gap-3">
+                    <div className="space-y-2"><Label>O que você está aguardando?</Label><Textarea value={form.waitingFor} onChange={(e) => setForm((c) => ({ ...c, waitingFor: e.target.value }))} className="min-h-20" /></div>
+                    <div className="space-y-2"><Label>De quem? <span className="font-normal text-muted-foreground">(opcional)</span></Label><Input value={form.contactName} onChange={(e) => setForm((c) => ({ ...c, contactName: e.target.value }))} /></div>
                   </div>
 
-                  <Button variant="outline" onClick={() => setShowAdvanced((prev) => !prev)}>
-                    {showAdvanced ? 'Ocultar detalhes avançados' : 'Mostrar detalhes avançados'}
-                  </Button>
+                  <div className="flex flex-wrap gap-2">
+                    <Button onClick={handleCreate}><Plus className="w-4 h-4 mr-2" /> Salvar acompanhamento</Button>
+                    <Button variant="ghost" onClick={() => setShowAdvanced((prev) => !prev)}>
+                      {showAdvanced ? 'Ocultar detalhes' : 'Adicionar detalhes'}
+                    </Button>
+                  </div>
 
                   {showAdvanced && (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3 rounded-lg border border-border p-4">
+                      <div className="space-y-2"><Label>Projeto</Label><ProjectSelect value={form.project} onChange={(project) => setForm((current) => ({ ...current, project }))} /></div>
+                      <div className="space-y-2"><Label>Quando lembrar?</Label><Input type="date" value={form.reminderDate} onChange={(e) => setForm((c) => ({ ...c, reminderDate: e.target.value, nextFollowUpDate: e.target.value }))} /></div>
                       <div className="space-y-2"><Label>Último contato</Label><Input type="date" value={form.lastContactDate} onChange={(e) => setForm((c) => ({ ...c, lastContactDate: e.target.value }))} /></div>
                       <div className="space-y-2"><Label>Status</Label><Select value={form.status} onValueChange={(value) => setForm((c) => ({ ...c, status: value }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{STATUS_OPTIONS.map((option) => <SelectItem key={option} value={option}>{option}</SelectItem>)}</SelectContent></Select></div>
                       <div className="space-y-2 md:col-span-2"><Label>Próximo follow-up</Label><Input value={form.nextFollowUp} onChange={(e) => setForm((c) => ({ ...c, nextFollowUp: e.target.value }))} placeholder="Ex.: cobrar resposta por WhatsApp" /></div>
                       <div className="space-y-2 md:col-span-2"><Label>Observações</Label><Textarea value={form.observations} onChange={(e) => setForm((c) => ({ ...c, observations: e.target.value }))} className="min-h-20" /></div>
                     </div>
                   )}
-                  <Button onClick={handleCreate}><Plus className="w-4 h-4 mr-2" /> Salvar acompanhamento</Button>
                 </CardContent>
               </Card>
 

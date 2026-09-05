@@ -1,4 +1,4 @@
-import { readUserScopedJson, writeUserScopedJson } from '@/lib/userScopedStorage.js';
+import { readUserScopedJson, writeUserScopedJson } from '../lib/userScopedStorage.js';
 
 const PROJECT_HISTORY_KEY = 'clareia_project_history_v1';
 

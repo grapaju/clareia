@@ -16,6 +16,22 @@ function normalizeProjectKey(value) {
 		.replace(/[^a-z0-9]+/g, '');
 }
 
+function normalizeWorkDays(value) {
+	if (!Array.isArray(value)) return [1, 2, 3, 4, 5];
+	return [...new Set(value.map(Number).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))].sort();
+}
+
+function validateTimezone(value) {
+	const timezone = normalizeText(value);
+	if (!timezone) return '';
+	try {
+		new Intl.DateTimeFormat('pt-BR', { timeZone: timezone }).format();
+		return timezone;
+	} catch {
+		return null;
+	}
+}
+
 async function findNormalizedDuplicate(userId, name, excludedName = '') {
 	const result = await runQuery(
 		'SELECT name FROM project_profiles WHERE user_id = $1',
@@ -34,6 +50,10 @@ function mapProject(row) {
 		name: row.name,
 		summary: row.summary || '',
 		projectType: row.project_type || 'Administrativo',
+		professionalTrackingEnabled: Boolean(row.professional_tracking_enabled),
+		weeklyTargetMinutes: Number(row.weekly_target_minutes || 2400),
+		workDays: Array.isArray(row.work_days) ? row.work_days : [1, 2, 3, 4, 5],
+		timezone: row.timezone || '',
 		createdAt: row.created_at,
 		updatedAt: row.updated_at,
 	};
@@ -43,7 +63,8 @@ router.use(requireAuth);
 
 router.get('/', async (req, res) => {
 	const result = await runQuery(
-		`SELECT name, summary, project_type, created_at, updated_at
+		`SELECT name, summary, project_type, professional_tracking_enabled,
+		        weekly_target_minutes, work_days, timezone, created_at, updated_at
 		 FROM project_profiles
 		 WHERE user_id = $1
 		 ORDER BY lower(name) ASC`,
@@ -57,9 +78,19 @@ router.post('/', async (req, res) => {
 	const name = normalizeText(req.body?.name);
 	const summary = normalizeText(req.body?.summary);
 	const projectType = normalizeText(req.body?.projectType) || 'Administrativo';
+	const professionalTrackingEnabled = Boolean(req.body?.professionalTrackingEnabled);
+	const weeklyTargetMinutes = Number(req.body?.weeklyTargetMinutes || 2400);
+	const workDays = normalizeWorkDays(req.body?.workDays);
+	const timezone = validateTimezone(req.body?.timezone);
 
 	if (!name) {
 		return res.status(400).json({ message: 'Nome do projeto e obrigatorio.' });
+	}
+	if (!Number.isInteger(weeklyTargetMinutes) || weeklyTargetMinutes < 1 || weeklyTargetMinutes > 10080) {
+		return res.status(400).json({ message: 'Meta semanal invalida.' });
+	}
+	if (timezone === null) {
+		return res.status(400).json({ message: 'Fuso horario invalido.' });
 	}
 
 	const duplicate = await findNormalizedDuplicate(req.userId, name);
@@ -69,10 +100,15 @@ router.post('/', async (req, res) => {
 	}
 
 	const created = await runQuery(
-		`INSERT INTO project_profiles (user_id, name, summary, project_type)
-		 VALUES ($1, $2, $3, $4)
-		 RETURNING name, summary, project_type, created_at, updated_at`,
-		[req.userId, name, summary, projectType]
+		`INSERT INTO project_profiles (
+		   user_id, name, summary, project_type, professional_tracking_enabled,
+		   weekly_target_minutes, work_days, timezone
+		 )
+		 VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
+		 RETURNING name, summary, project_type, professional_tracking_enabled,
+		           weekly_target_minutes, work_days, timezone, created_at, updated_at`,
+		[req.userId, name, summary, projectType, professionalTrackingEnabled,
+		 weeklyTargetMinutes, JSON.stringify(workDays), timezone]
 	);
 
 	res.status(201).json({ item: mapProject(created.rows[0]) });
@@ -125,6 +161,16 @@ router.post('/merge', async (req, res) => {
 			 RETURNING id`,
 			[canonicalTarget, req.userId, source]
 		);
+		await client.query(
+			`UPDATE professional_journeys SET project_name = $1, updated_at = now()
+			 WHERE user_id = $2 AND lower(project_name) = lower($3)`,
+			[canonicalTarget, req.userId, source]
+		);
+		await client.query(
+			`UPDATE professional_activities SET project_name = $1, updated_at = now()
+			 WHERE user_id = $2 AND lower(project_name) = lower($3)`,
+			[canonicalTarget, req.userId, source]
+		);
 		const aliases = await client.query(
 			`UPDATE project_aliases SET project_name = $1, updated_at = now()
 			 WHERE user_id = $2 AND lower(project_name) = lower($3)
@@ -171,6 +217,7 @@ router.post('/merge', async (req, res) => {
 			 WHERE user_id = $2 AND lower(project_id) = lower($3)`,
 			[canonicalTarget, req.userId, source]
 		);
+
 		await client.query(
 			`DELETE FROM project_profiles
 			 WHERE user_id = $1 AND lower(name) = lower($2)`,
@@ -192,8 +239,11 @@ router.post('/merge', async (req, res) => {
 router.patch('/:name', async (req, res) => {
 	const currentName = normalizeText(req.params?.name);
 	const nextName = normalizeText(req.body?.name) || currentName;
-	const summary = normalizeText(req.body?.summary);
-	const projectType = normalizeText(req.body?.projectType) || 'Administrativo';
+	const timezone = Object.hasOwn(req.body || {}, 'timezone') ? validateTimezone(req.body?.timezone) : undefined;
+	const weeklyTargetMinutes = Object.hasOwn(req.body || {}, 'weeklyTargetMinutes')
+		? Number(req.body.weeklyTargetMinutes)
+		: undefined;
+	const workDays = Object.hasOwn(req.body || {}, 'workDays') ? normalizeWorkDays(req.body.workDays) : undefined;
 
 	if (!currentName) {
 		return res.status(400).json({ message: 'Nome atual do projeto e obrigatorio.' });
@@ -201,6 +251,12 @@ router.patch('/:name', async (req, res) => {
 
 	if (!nextName) {
 		return res.status(400).json({ message: 'Novo nome do projeto e obrigatorio.' });
+	}
+	if (weeklyTargetMinutes !== undefined && (!Number.isInteger(weeklyTargetMinutes) || weeklyTargetMinutes < 1 || weeklyTargetMinutes > 10080)) {
+		return res.status(400).json({ message: 'Meta semanal invalida.' });
+	}
+	if (timezone === null) {
+		return res.status(400).json({ message: 'Fuso horario invalido.' });
 	}
 
 	const found = await runQuery(
@@ -228,12 +284,26 @@ router.patch('/:name', async (req, res) => {
 			`UPDATE project_profiles
 			 SET
 				name = $1,
-				summary = $2,
-				project_type = $3,
+				summary = CASE WHEN $2::boolean THEN $3 ELSE summary END,
+				project_type = CASE WHEN $4::boolean THEN $5 ELSE project_type END,
+				professional_tracking_enabled = CASE WHEN $6::boolean THEN $7 ELSE professional_tracking_enabled END,
+				weekly_target_minutes = COALESCE($8, weekly_target_minutes),
+				work_days = COALESCE($9::jsonb, work_days),
+				timezone = COALESCE($10, timezone),
 				updated_at = now()
-			 WHERE user_id = $4 AND lower(name) = lower($5)
-			 RETURNING name, summary, project_type, created_at, updated_at`,
-			[nextName, summary, projectType, req.userId, currentName]
+			 WHERE user_id = $11 AND lower(name) = lower($12)
+			 RETURNING name, summary, project_type, professional_tracking_enabled,
+			           weekly_target_minutes, work_days, timezone, created_at, updated_at`,
+			[
+				nextName,
+				Object.hasOwn(req.body || {}, 'summary'), normalizeText(req.body?.summary),
+				Object.hasOwn(req.body || {}, 'projectType'), normalizeText(req.body?.projectType) || 'Administrativo',
+				Object.hasOwn(req.body || {}, 'professionalTrackingEnabled'), Boolean(req.body?.professionalTrackingEnabled),
+				weeklyTargetMinutes ?? null,
+				workDays === undefined ? null : JSON.stringify(workDays),
+				timezone ?? null,
+				req.userId, currentName,
+			]
 		);
 
 		await client.query(
@@ -242,6 +312,18 @@ router.patch('/:name', async (req, res) => {
 				 project_name = $1,
 				 updated_at = now()
 			 WHERE user_id = $2 AND project_id = $3`,
+			[nextName, req.userId, currentName]
+		);
+
+		await client.query(
+			`UPDATE professional_journeys SET project_name = $1, updated_at = now()
+			 WHERE user_id = $2 AND lower(project_name) = lower($3)`,
+			[nextName, req.userId, currentName]
+		);
+
+		await client.query(
+			`UPDATE professional_activities SET project_name = $1, updated_at = now()
+			 WHERE user_id = $2 AND lower(project_name) = lower($3)`,
 			[nextName, req.userId, currentName]
 		);
 

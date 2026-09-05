@@ -51,7 +51,7 @@ export default function CheckInCard({ compact = false }) {
         <div><h2 className="text-lg">Como está sua energia agora?</h2><p className="mt-1 text-sm text-muted-foreground">Uma estimativa já é suficiente.</p></div>
         <SelectionGroup icon={Battery} options={CAPACITY_OPTIONS} selected={energia} onSelect={setEnergia} />
 
-        <div><h3 className="text-base">Quanto tempo você tem?</h3></div>
+        <div><h3 className="text-lg">Quanto tempo você tem?</h3></div>
         <SelectionGroup icon={Clock} options={TIME_OPTIONS} selected={tempo} onSelect={setTempo} />
 
         <details className="rounded-md border border-border px-3 py-2">
@@ -89,7 +89,7 @@ function SelectionGroup({ icon: Icon, options, selected, onSelect }) {
           type="button"
           onClick={() => onSelect(option.value)}
           aria-pressed={selected === option.value}
-          className={cn('min-h-11 rounded-md border px-4 py-2 text-base transition-colors', selected === option.value ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background hover:bg-muted')}
+          className={cn('min-h-11 rounded-md border px-4 py-2 text-sm transition-colors', selected === option.value ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background hover:bg-muted')}
         >
           {Icon && <Icon className="mr-2 inline h-4 w-4" aria-hidden="true" />}{option.label}
         </button>

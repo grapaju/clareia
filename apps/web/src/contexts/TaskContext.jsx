@@ -496,7 +496,7 @@ export function TaskProvider({ children }) {
     }
 
     if (options.trackTime !== false) {
-      startTimerWorkSession({
+      await startTimerWorkSession({
         projectId: task.project || 'Pessoal',
         taskId: task.id,
         title: task.title || 'Sessão de trabalho'

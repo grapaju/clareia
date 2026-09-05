@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Helmet } from 'react-helmet';
 import {
@@ -6,9 +6,6 @@ import {
   Cloud,
   CheckCircle2,
   ChevronRight,
-  Copy,
-  Eye,
-  EyeOff,
   FileText,
   Folder,
   FolderKanban,
@@ -31,10 +28,13 @@ import MobileNav from '@/components/MobileNav.jsx';
 import TaskCard from '@/components/TaskCard.jsx';
 import TaskModal from '@/components/TaskModal.jsx';
 import ManualTimeDialog from '@/components/ManualTimeDialog.jsx';
+import ProjectMaterialsWorkspace from '@/components/ProjectMaterialsWorkspace.jsx';
 import { useTaskContext } from '@/hooks/useTaskContext.js';
+import { useProfessionalJourney } from '@/contexts/ProfessionalJourneyContext.jsx';
 import { getTaskWorkedMinutes, isTaskArchivedStatus, isTaskCompletedStatus, isTaskOpenStatus, normalizeTaskStatus, TASK_STATUS } from '@/lib/taskExecution.js';
 import { getTaskNextActionPresentation } from '@/lib/todayViewLogic.js';
 import { readUserScopedJson, writeUserScopedJson } from '@/lib/userScopedStorage.js';
+import { buildProjectItems, getDrivePresentationState } from '@/lib/projectMaterialsLogic.js';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -66,7 +66,6 @@ import {
   PROJECT_TYPE_OPTIONS,
   createProjectFolder,
   deleteProjectFolder,
-  ensureProjectTemplateFolders,
   listProjectFolders,
   updateProjectFolder
 } from '@/services/projectFolderService.js';
@@ -217,15 +216,11 @@ const MATERIAL_TYPE_FILTER_OPTIONS = [
   { value: 'modelo', label: 'Modelos' }
 ];
 
-const FILE_PROVIDER_OPTIONS = [
-  { value: 'external_link', label: 'Arquivo ou link externo' },
-  { value: 'google_drive', label: 'Vincular arquivo ja existente no Drive' },
-  { value: 'google_drive_upload_future', label: 'Criar documento no Drive' }
-];
-
 export default function ProjectsPage() {
   const { tasks, addTask, completeTask, reopenTask, updateTask, refreshTasks, resumeTask, setSelectedTask, startTask } = useTaskContext();
+  const { refresh: refreshProfessionalJourney } = useProfessionalJourney();
   const navigate = useNavigate();
+  const lastMaterialDialogTriggerRef = useRef(null);
 
   const [selectedProject, setSelectedProject] = useState(null);
   const [activeTab, setActiveTab] = useState('resumo');
@@ -234,7 +229,13 @@ export default function ProjectsPage() {
   const [historyItems, setHistoryItems] = useState([]);
 
   const [newProjectForm, setNewProjectForm] = useState({ name: '', projectType: 'Administrativo', summary: '' });
-  const [profileForm, setProfileForm] = useState({ name: '', projectType: 'Administrativo', summary: '' });
+  const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
+  const [isCreatingProject, setIsCreatingProject] = useState(false);
+  const [profileForm, setProfileForm] = useState({
+    name: '', projectType: 'Administrativo', summary: '',
+    professionalTrackingEnabled: false, weeklyTargetMinutes: 2400,
+    workDays: [1, 2, 3, 4, 5], timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+  });
 
   const [folders, setFolders] = useState([]);
   const [files, setFiles] = useState([]);
@@ -270,11 +271,15 @@ export default function ProjectsPage() {
   const [materialTypeFilter, setMaterialTypeFilter] = useState('all');
   const [fileViewMode, setFileViewMode] = useState('grid');
   const [isMaterialDialogOpen, setIsMaterialDialogOpen] = useState(false);
+  const [isAddMaterialDialogOpen, setIsAddMaterialDialogOpen] = useState(false);
+  const [itemDialogType, setItemDialogType] = useState(null);
   const [isDriveDialogOpen, setIsDriveDialogOpen] = useState(false);
   const [isAdvancedDetailsOpen, setIsAdvancedDetailsOpen] = useState(false);
   const [editingMaterialId, setEditingMaterialId] = useState(null);
   const [projectDriveConfig, setProjectDriveConfig] = useState(null);
   const [driveConnectionStatus, setDriveConnectionStatus] = useState({ connected: false });
+  const [driveLoadError, setDriveLoadError] = useState(false);
+  const [driveReloadKey, setDriveReloadKey] = useState(0);
   const [isConnectingDrive, setIsConnectingDrive] = useState(false);
   const [isBootstrappingDriveFolders, setIsBootstrappingDriveFolders] = useState(false);
   const [isDisconnectingProjectDrive, setIsDisconnectingProjectDrive] = useState(false);
@@ -315,7 +320,8 @@ export default function ProjectsPage() {
     description: '',
     favorite: false,
     storageProvider: 'external_link',
-    relatedTaskId: 'none'
+    relatedTaskId: 'none',
+    folder: ''
   });
 
   const [accessForm, setAccessForm] = useState({
@@ -323,19 +329,22 @@ export default function ProjectsPage() {
     platform: '',
     url: '',
     username: '',
-    password: '',
-    notes: ''
+    notes: '',
+    folder: ''
   });
+  const [editingAccessId, setEditingAccessId] = useState(null);
+  const [editingLinkId, setEditingLinkId] = useState(null);
 
   const [noteForm, setNoteForm] = useState({
     title: '',
     content: '',
     tags: '',
-    relatedTaskId: 'none'
+    relatedTaskId: 'none',
+    folder: '',
+    favorite: false
   });
   const [editingNoteId, setEditingNoteId] = useState(null);
 
-  const [visiblePasswords, setVisiblePasswords] = useState({});
   const [isDeletingProject, setIsDeletingProject] = useState(false);
   const [isRenamingProject, setIsRenamingProject] = useState(false);
   const [isRenameDialogOpen, setIsRenameDialogOpen] = useState(false);
@@ -460,6 +469,7 @@ export default function ProjectsPage() {
         if (!isMounted) return;
 
         setDriveConnectionStatus(status || { connected: false });
+        setDriveLoadError(false);
         setDriveConfigForm((current) => ({
           ...current,
           parentFolderUrl: normalizeText(status?.defaultParentFolderUrl),
@@ -468,6 +478,7 @@ export default function ProjectsPage() {
       } catch {
         if (!isMounted) return;
         setDriveConnectionStatus({ connected: false });
+        setDriveLoadError(true);
       }
 
       try {
@@ -507,7 +518,7 @@ export default function ProjectsPage() {
     return () => {
       isMounted = false;
     };
-  }, [selectedProject]);
+  }, [selectedProject, driveReloadKey]);
 
   const projectTasks = useMemo(
     () => tasks.filter((item) => item.project === selectedProject && !isTaskCompletedStatus(item.status)),
@@ -755,6 +766,23 @@ export default function ProjectsPage() {
     });
     return counters;
   }, [folders, folderPathMap, files]);
+  const projectMaterialItems = useMemo(
+    () => buildProjectItems({ files, links, notes, accesses }),
+    [files, links, notes, accesses]
+  );
+  const folderItemCounters = useMemo(() => {
+    const counters = {};
+    folders.forEach((folder) => {
+      const path = folderPathMap[folder.id];
+      counters[folder.id] = projectMaterialItems.filter((item) => item.folder === path).length;
+    });
+    return counters;
+  }, [folders, folderPathMap, projectMaterialItems]);
+  const drivePresentationState = useMemo(() => getDrivePresentationState({
+    connected: Boolean(driveConnectionStatus?.connected),
+    projectFolder: projectDriveConfig,
+    loadError: driveLoadError,
+  }), [driveConnectionStatus?.connected, projectDriveConfig, driveLoadError]);
   const projectFavoriteLinks = useMemo(() => listFavoriteProjectLinks(selectedProject || '', 5), [links, selectedProject]);
   const projectRecentNotes = useMemo(() => listRecentProjectNotes(selectedProject || '', 5), [notes, selectedProject]);
   const projectMainAccesses = useMemo(() => accesses.slice(0, 5), [accesses]);
@@ -804,9 +832,15 @@ export default function ProjectsPage() {
 
     const results = [];
 
-    projectTasks.forEach((item) => {
+    tasks.filter((item) => item.project === selectedProject).forEach((item) => {
       if (containsText(item.title, normalized) || containsText(item.nextAction, normalized)) {
         results.push({ id: `task-${item.id}`, type: 'Tarefa', label: item.title, meta: item.nextAction || 'Sem proxima acao definida' });
+      }
+    });
+
+    folders.forEach((item) => {
+      if (containsText(item.name, normalized)) {
+        results.push({ id: `folder-${item.id}`, type: 'Pasta', label: item.name, meta: folderPathMap[item.id] || item.name });
       }
     });
 
@@ -839,7 +873,7 @@ export default function ProjectsPage() {
     });
 
     return results.slice(0, 30);
-  }, [searchTerm, projectTasks, files, links, accesses, notes]);
+  }, [searchTerm, tasks, selectedProject, folders, folderPathMap, files, links, accesses, notes]);
 
   const projectLinkTypes = useMemo(() => getProjectLinkTypes(), []);
   const deleteImpact = useMemo(() => {
@@ -882,39 +916,13 @@ export default function ProjectsPage() {
     setProfileForm({
       name: selectedProfile?.name || selectedProject,
       projectType: selectedProfile?.projectType || 'Administrativo',
-      summary: selectedProfile?.summary || ''
+      summary: selectedProfile?.summary || '',
+      professionalTrackingEnabled: Boolean(selectedProfile?.professionalTrackingEnabled),
+      weeklyTargetMinutes: Number(selectedProfile?.weeklyTargetMinutes || 2400),
+      workDays: selectedProfile?.workDays || [1, 2, 3, 4, 5],
+      timezone: selectedProfile?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
     });
 
-    if (listProjectFolders(selectedProject).length === 0) {
-      ensureProjectTemplateFolders(selectedProject, selectedProfile?.projectType || 'Administrativo');
-      refreshWorkspaceData(selectedProject);
-    }
-
-    if (String(selectedProject).toLocaleLowerCase('pt-BR').includes('expocentro')) {
-      const expocentroDefaultFolders = [
-        'Orcamentos',
-        'Contratos',
-        'Propostas',
-        'Reunioes',
-        'Documentos recebidos',
-        'Documentos enviados',
-        'Prints',
-        'Historico'
-      ];
-      const existingNames = new Set(listProjectFolders(selectedProject).map((item) => String(item.name || '').toLocaleLowerCase('pt-BR')));
-      let createdCount = 0;
-
-      expocentroDefaultFolders.forEach((folderName) => {
-        if (!existingNames.has(folderName.toLocaleLowerCase('pt-BR'))) {
-          const folder = createProjectFolder({ projectName: selectedProject, name: folderName, parentId: null });
-          if (folder) createdCount += 1;
-        }
-      });
-
-      if (createdCount > 0) {
-        refreshWorkspaceData(selectedProject);
-      }
-    }
   }, [selectedProject, selectedProfile]);
 
   const appendHistory = (projectName, action, details) => {
@@ -935,7 +943,7 @@ export default function ProjectsPage() {
     setHistoryItems(next);
   };
 
-  const saveProfile = async ({ oldName, nextProfile, applyTemplate = false }) => {
+  const saveProfile = async ({ oldName, nextProfile }) => {
     const existing = [...profiles];
     const cleanName = normalizeText(nextProfile.name);
     if (!cleanName) {
@@ -958,6 +966,10 @@ export default function ProjectsPage() {
           name: cleanName,
           summary: normalizeText(nextProfile.summary),
           projectType: nextProfile.projectType || 'Administrativo',
+          professionalTrackingEnabled: Boolean(nextProfile.professionalTrackingEnabled),
+          weeklyTargetMinutes: Number(nextProfile.weeklyTargetMinutes || 2400),
+          workDays: nextProfile.workDays || [1, 2, 3, 4, 5],
+          timezone: nextProfile.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
         });
       } else {
         profilePayload = await createProjectProfileApi({
@@ -979,41 +991,35 @@ export default function ProjectsPage() {
     let next = existing.filter((item) => item.name !== oldName);
     next = [profilePayload, ...next].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
     setProfiles(next);
-
-    if (applyTemplate) {
-      ensureProjectTemplateFolders(cleanName, profilePayload.projectType);
-    }
+    await refreshProfessionalJourney();
 
     return profilePayload;
   };
 
   const handleCreateProject = async () => {
-    const created = await saveProfile({
-      oldName: null,
-      nextProfile: newProjectForm,
-      applyTemplate: true
-    });
+    if (isCreatingProject) return;
+    setIsCreatingProject(true);
+    const created = await saveProfile({ oldName: null, nextProfile: newProjectForm });
+    setIsCreatingProject(false);
 
     if (!created) return;
 
     appendHistory(created.name, 'Projeto criado', `Tipo definido: ${created.projectType}`);
-    toast.success('Projeto criado com estrutura inicial de pastas.');
-    setSelectedProject(created.name);
+    toast.success('Projeto criado.');
     setNewProjectForm({ name: '', projectType: 'Administrativo', summary: '' });
+    setIsCreateProjectOpen(false);
   };
 
   const handleUpdateProject = async () => {
     if (!selectedProject) return;
 
-    const previousType = selectedProfile?.projectType || 'Administrativo';
     const updated = await saveProfile({
       oldName: selectedProject,
       nextProfile: {
         ...profileForm,
         // Atualização do resumo deve permanecer no mesmo projeto selecionado.
         name: selectedProject
-      },
-      applyTemplate: previousType !== profileForm.projectType
+      }
     });
 
     if (!updated) return;
@@ -1238,16 +1244,6 @@ export default function ProjectsPage() {
     }
   };
 
-  const handleFutureDriveUpload = async () => {
-    if (!driveConnectionStatus?.connected) {
-      toast.info('Conecte o Google Drive primeiro para habilitar automacao.');
-      await handleConnectGoogleDriveAutomatic();
-      return;
-    }
-
-    toast.info('Conexao automatica ativa. O upload de arquivos sera o proximo passo do fluxo.');
-  };
-
   const buildDriveDocumentContent = () => {
     const sections = [];
     const cleanDescription = normalizeText(fileForm.description);
@@ -1286,6 +1282,17 @@ export default function ProjectsPage() {
     setIsNewFolderDialogOpen(false);
     refreshWorkspaceData(selectedProject);
     appendHistory(selectedProject, 'Pasta criada', folder.name);
+  };
+
+  const rememberMaterialDialogTrigger = () => {
+    if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+      lastMaterialDialogTriggerRef.current = document.activeElement;
+    }
+  };
+
+  const restoreMaterialDialogFocus = (event) => {
+    event.preventDefault();
+    lastMaterialDialogTriggerRef.current?.focus();
   };
 
   const handleUpdateFolder = () => {
@@ -1334,9 +1341,64 @@ export default function ProjectsPage() {
   };
 
   const openCreateFolderDialog = (parentId = null) => {
+    rememberMaterialDialogTrigger();
     setFolderName('');
     setNewFolderParentId(parentId);
     setIsNewFolderDialogOpen(true);
+  };
+
+  const openMaterialAddFlow = (type = 'choose') => {
+    if (type === 'choose') {
+      rememberMaterialDialogTrigger();
+      setIsAddMaterialDialogOpen(true);
+      return;
+    }
+
+    setIsAddMaterialDialogOpen(false);
+    setIsAdvancedDetailsOpen(false);
+    setEditingLinkId(null);
+    setEditingAccessId(null);
+    setEditingNoteId(null);
+
+    if (type === 'folder') {
+      openCreateFolderDialog(currentFolderId);
+      return;
+    }
+
+    if (type === 'file') {
+      setEditingMaterialId(null);
+      setIsAdvancedDetailsOpen(false);
+      setFileForm({
+        materialType: 'arquivo',
+        name: '',
+        type: 'arquivo',
+        folder: currentFolderPath,
+        description: '',
+        tags: '',
+        origin: '',
+        externalLink: '',
+        provider: 'external_link',
+        driveFileId: '',
+        driveFolderId: '',
+        autoSyncDrive: false,
+        storageProvider: 'external_link',
+        relatedTaskId: 'none',
+        favorite: false,
+      });
+      setIsMaterialDialogOpen(true);
+      return;
+    }
+
+    if (type === 'link') {
+      setLinkForm({ title: '', url: '', type: 'outro', description: '', favorite: false, storageProvider: 'external_link', relatedTaskId: 'none', folder: currentFolderPath });
+    }
+    if (type === 'note') {
+      setNoteForm({ title: '', content: '', tags: '', relatedTaskId: 'none', folder: currentFolderPath, favorite: false });
+    }
+    if (type === 'access') {
+      setAccessForm({ title: '', platform: '', url: '', username: '', notes: '', folder: currentFolderPath });
+    }
+    setItemDialogType(type);
   };
 
   const openRenameFolderDialog = (folder) => {
@@ -1364,7 +1426,12 @@ export default function ProjectsPage() {
     const relatedTaskId = fileForm.relatedTaskId && fileForm.relatedTaskId !== 'none' ? fileForm.relatedTaskId : '';
     const selectedFolderEntry = folders.find((folder) => folderPathMap[folder.id] === fileForm.folder);
     const inferredFolder = fileForm.folder || topFolderSuggestion?.folder || '';
-    const provider = fileForm.provider || (fileForm.materialType === 'google_drive' ? 'google_drive' : 'external_link');
+    const sourceUrl = normalizeText(fileForm.externalLink);
+    const provider = fileForm.autoSyncDrive
+      ? 'google_drive_upload_future'
+      : sourceUrl.includes('drive.google.com')
+        ? 'google_drive'
+        : 'external_link';
     const driveFolderIdFromUrl = extractDriveFolderId(fileForm.externalLink);
     const shouldSyncInDrive =
       (provider === 'google_drive' || provider === 'google_drive_upload_future')
@@ -1473,6 +1540,7 @@ export default function ProjectsPage() {
   };
 
   const handleEditMaterial = (material) => {
+    rememberMaterialDialogTrigger();
     const materialType = String(material.materialType || material.type || 'arquivo').toLocaleLowerCase('pt-BR');
     const normalizedMaterialType = materialType.includes('link')
       ? 'link'
@@ -1531,11 +1599,12 @@ export default function ProjectsPage() {
 
   const handleCreateLink = () => {
     if (!selectedProject) return;
-    const created = createProjectLink({
+    const payload = {
       ...linkForm,
       projectName: selectedProject,
       relatedTaskIds: linkForm.relatedTaskId && linkForm.relatedTaskId !== 'none' ? [linkForm.relatedTaskId] : []
-    });
+    };
+    const created = editingLinkId ? updateProjectLink(editingLinkId, payload) : createProjectLink(payload);
 
     if (!created) {
       toast.error('Nao foi possivel salvar o link (titulo e URL sao obrigatorios).');
@@ -1549,10 +1618,29 @@ export default function ProjectsPage() {
       description: '',
       favorite: false,
       storageProvider: 'external_link',
-      relatedTaskId: 'none'
+      relatedTaskId: 'none',
+      folder: ''
     });
+    setEditingLinkId(null);
+    setItemDialogType(null);
     setLinks(listProjectLinks(selectedProject));
-    appendHistory(selectedProject, 'Link cadastrado', created.title);
+    appendHistory(selectedProject, editingLinkId ? 'Link atualizado' : 'Link cadastrado', created.title);
+  };
+
+  const handleEditLink = (link) => {
+    rememberMaterialDialogTrigger();
+    setEditingLinkId(link.id);
+    setLinkForm({
+      title: link.title || '',
+      url: link.url || '',
+      type: link.type || 'outro',
+      description: link.description || '',
+      favorite: Boolean(link.favorite),
+      storageProvider: 'external_link',
+      relatedTaskId: link.relatedTaskIds?.[0] || 'none',
+      folder: link.folder || '',
+    });
+    setItemDialogType('link');
   };
 
   const handleDeleteLink = (id) => {
@@ -1569,15 +1657,32 @@ export default function ProjectsPage() {
 
   const handleCreateAccess = () => {
     if (!selectedProject) return;
-    const created = createProjectAccess({ ...accessForm, projectName: selectedProject });
+    const payload = { ...accessForm, projectName: selectedProject };
+    const created = editingAccessId ? updateProjectAccess(editingAccessId, payload) : createProjectAccess(payload);
     if (!created) {
       toast.error('Nao foi possivel salvar o acesso (titulo e projeto sao obrigatorios).');
       return;
     }
 
-    setAccessForm({ title: '', platform: '', url: '', username: '', password: '', notes: '' });
+    setAccessForm({ title: '', platform: '', url: '', username: '', notes: '', folder: '' });
+    setEditingAccessId(null);
+    setItemDialogType(null);
     setAccesses(listProjectAccesses(selectedProject));
-    appendHistory(selectedProject, 'Acesso cadastrado', created.title);
+    appendHistory(selectedProject, editingAccessId ? 'Acesso atualizado' : 'Acesso cadastrado', created.title);
+  };
+
+  const handleEditAccess = (access) => {
+    rememberMaterialDialogTrigger();
+    setEditingAccessId(access.id);
+    setAccessForm({
+      title: access.title || '',
+      platform: access.platform || '',
+      url: access.url || '',
+      username: access.username || '',
+      notes: access.notes || '',
+      folder: access.folder || '',
+    });
+    setItemDialogType('access');
   };
 
   const handleDeleteAccess = (id) => {
@@ -1610,24 +1715,6 @@ export default function ProjectsPage() {
     }
   };
 
-  const togglePasswordVisibility = (id) => {
-    setVisiblePasswords((current) => ({ ...current, [id]: !current[id] }));
-  };
-
-  const handleCopyPassword = async (password) => {
-    if (!password) {
-      toast.error('Senha vazia.');
-      return;
-    }
-
-    try {
-      await navigator.clipboard.writeText(password);
-      toast.success('Senha copiada para a area de transferencia.');
-    } catch {
-      toast.error('Nao foi possivel copiar a senha.');
-    }
-  };
-
   const handleCreateOrUpdateNote = () => {
     if (!selectedProject) return;
 
@@ -1651,18 +1738,23 @@ export default function ProjectsPage() {
 
     appendHistory(selectedProject, editingNoteId ? 'Nota atualizada' : 'Nota criada', saved.title || 'Nota sem titulo');
     setEditingNoteId(null);
-    setNoteForm({ title: '', content: '', tags: '', relatedTaskId: 'none' });
+    setNoteForm({ title: '', content: '', tags: '', relatedTaskId: 'none', folder: '', favorite: false });
+    setItemDialogType(null);
     setNotes(listProjectNotes(selectedProject));
   };
 
   const handleEditNote = (note) => {
+    rememberMaterialDialogTrigger();
     setEditingNoteId(note.id);
     setNoteForm({
       title: note.title || '',
       content: note.content || '',
       tags: (note.tags || []).join(', '),
-      relatedTaskId: note.relatedTaskIds?.[0] || 'none'
+      relatedTaskId: note.relatedTaskIds?.[0] || 'none',
+      folder: note.folder || '',
+      favorite: Boolean(note.favorite)
     });
+    setItemDialogType('note');
   };
 
   const handleDeleteNote = (id) => {
@@ -1675,6 +1767,49 @@ export default function ProjectsPage() {
       title: 'Excluir nota',
       description: 'Esta acao remove permanentemente a nota deste projeto.'
     });
+  };
+
+  const handleOpenProjectItem = (item) => {
+    if (item.entity === 'note') {
+      handleEditNote(item.source);
+      return;
+    }
+    if (item.url) {
+      window.open(item.url, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    if (item.entity === 'access' && item.source.username) {
+      navigator.clipboard.writeText(item.source.username);
+      toast.success('Usuário copiado.');
+      return;
+    }
+    toast.info('Este item não possui link para abrir.');
+  };
+
+  const handleEditProjectItem = (item) => {
+    if (item.entity === 'file') handleEditMaterial(item.source);
+    if (item.entity === 'link') handleEditLink(item.source);
+    if (item.entity === 'note') handleEditNote(item.source);
+    if (item.entity === 'access') handleEditAccess(item.source);
+  };
+
+  const handleDeleteProjectItem = (item) => {
+    if (item.entity === 'file') handleDeleteFile(item.id);
+    if (item.entity === 'link') handleDeleteLink(item.id);
+    if (item.entity === 'note') handleDeleteNote(item.id);
+    if (item.entity === 'access') handleDeleteAccess(item.id);
+  };
+
+  const handleToggleFavoriteProjectItem = (item) => {
+    if (item.entity === 'file') updateProjectFile(item.id, { favorite: !item.favorite });
+    if (item.entity === 'link') updateProjectLink(item.id, { favorite: !item.favorite });
+    if (item.entity === 'note') updateProjectNote(item.id, { favorite: !item.favorite });
+    refreshWorkspaceData(selectedProject);
+  };
+
+  const openDriveDialog = () => {
+    rememberMaterialDialogTrigger();
+    setIsDriveDialogOpen(true);
   };
 
   const openEditSessionDialog = (session) => {
@@ -2053,55 +2188,20 @@ export default function ProjectsPage() {
             <div className="page-container section-spacing">
               {!selectedProject ? (
                 <>
-                  <div className="mb-10">
-                    <div className="flex items-center gap-3 mb-3">
-                      <FolderKanban className="w-8 h-8 text-primary" />
-                      <h1 className="text-3xl font-medium text-foreground">Seus Projetos</h1>
+                  <div className="mb-10 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <div className="flex items-center gap-3 mb-3">
+                        <FolderKanban className="w-8 h-8 text-primary" />
+                        <h1 className="text-3xl font-medium text-foreground">Seus Projetos</h1>
+                      </div>
+                      <p className="text-sm text-muted-foreground">
+                        Entre em cada projeto para abrir uma area de trabalho com materiais, acessos, notas e tarefas no mesmo lugar.
+                      </p>
                     </div>
-                    <p className="text-lg text-muted-foreground">
-                      Entre em cada projeto para abrir uma area de trabalho com materiais, acessos, notas e tarefas no mesmo lugar.
-                    </p>
+                    <Button onClick={() => setIsCreateProjectOpen(true)} className="shrink-0">
+                      <Plus className="mr-2 h-4 w-4" /> Novo projeto
+                    </Button>
                   </div>
-
-                  <Card className="bg-card border-border shadow-sm mb-8">
-                    <CardContent className="p-6 grid gap-4 md:grid-cols-4">
-                      <div className="md:col-span-2 space-y-2">
-                        <Label htmlFor="new-project-name">Novo projeto</Label>
-                        <Input
-                          id="new-project-name"
-                          value={newProjectForm.name}
-                          onChange={(event) => setNewProjectForm((current) => ({ ...current, name: event.target.value }))}
-                          placeholder="Ex.: Monitoramento de Sites"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Tipo de projeto</Label>
-                        <Select value={newProjectForm.projectType} onValueChange={(value) => setNewProjectForm((current) => ({ ...current, projectType: value }))}>
-                          <SelectTrigger><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            {PROJECT_TYPE_OPTIONS.map((option) => (
-                              <SelectItem key={option} value={option}>{option}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="flex items-end">
-                        <Button onClick={handleCreateProject} className="w-full">
-                          <Plus className="w-4 h-4 mr-2" /> Criar projeto
-                        </Button>
-                      </div>
-                      <div className="md:col-span-4 space-y-2">
-                        <Label htmlFor="new-project-summary">Objetivo/resumo</Label>
-                        <Textarea
-                          id="new-project-summary"
-                          value={newProjectForm.summary}
-                          onChange={(event) => setNewProjectForm((current) => ({ ...current, summary: event.target.value }))}
-                          placeholder="Resumo executivo do objetivo do projeto."
-                          className="min-h-24"
-                        />
-                      </div>
-                    </CardContent>
-                  </Card>
 
                   {allProjects.length > 0 ? (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
@@ -2132,11 +2232,11 @@ export default function ProjectsPage() {
                               <div className="flex gap-4">
                                 <div className="bg-muted/50 rounded-lg p-3 flex-1">
                                   <p className="text-sm text-muted-foreground mb-1">Tarefas</p>
-                                  <p className="text-2xl font-medium text-foreground">{stats.openTasks}</p>
+                                  <p className="text-xl font-medium text-foreground">{stats.openTasks}</p>
                                 </div>
                                 <div className="bg-muted/50 rounded-lg p-3 flex-1">
                                   <p className="text-sm text-muted-foreground mb-1">Materiais</p>
-                                  <p className="text-2xl font-medium text-foreground">{stats.materialsCount}</p>
+                                  <p className="text-xl font-medium text-foreground">{stats.materialsCount}</p>
                                 </div>
                               </div>
                               {getProjectWhereStoppedPreview(projectName) && <p className="mt-4 line-clamp-1 text-sm text-muted-foreground" title={getProjectWhereStoppedPreview(projectName)}>{getProjectWhereStoppedPreview(projectName)}</p>}
@@ -2162,7 +2262,7 @@ export default function ProjectsPage() {
                   <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
                     <div>
                       <h1 className="text-3xl font-medium text-foreground">{selectedProject}</h1>
-                      <p className="text-muted-foreground mt-1">Area de trabalho do projeto</p>
+                      <p className="mt-1 text-sm text-muted-foreground">Area de trabalho do projeto</p>
                     </div>
 
                     <DropdownMenu>
@@ -2181,7 +2281,7 @@ export default function ProjectsPage() {
                       </DropdownMenuContent>
                     </DropdownMenu>
 
-                    <div className="w-full lg:w-[360px]">
+                    {activeTab !== 'materiais' && <div className="w-full lg:w-[360px]">
                       <Label htmlFor="project-search">Buscar neste projeto...</Label>
                       <div className="relative mt-2">
                         <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-3" />
@@ -2193,11 +2293,11 @@ export default function ProjectsPage() {
                           placeholder="Buscar tarefas, arquivos, links, notas e acessos"
                         />
                       </div>
-                    </div>
+                    </div>}
                   </div>
 
                   <section className="mb-6 rounded-lg border border-border bg-card p-5" aria-labelledby="project-resume-title">
-                    <h2 id="project-resume-title" className="text-xl font-medium">
+                    <h2 id="project-resume-title" className="text-lg font-medium">
                       {projectResumeTask
                         ? normalizeTaskStatus(projectResumeTask.status) === TASK_STATUS.PAUSADA ? 'Onde você parou' : 'Próximo passo do projeto'
                         : 'Nenhuma próxima ação definida.'}
@@ -2258,7 +2358,7 @@ export default function ProjectsPage() {
                       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
                         <Card className="xl:col-span-2 bg-card border-border shadow-sm">
                           <CardContent className="p-6 space-y-4">
-                            <h2 className="text-xl font-medium">Resumo do projeto</h2>
+                            <h2 className="text-lg font-medium">Resumo do projeto</h2>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                               <div className="space-y-2">
                                 <Label>Nome do projeto</Label>
@@ -2284,6 +2384,43 @@ export default function ProjectsPage() {
                                 className="min-h-24"
                                 placeholder="Descreva o objetivo principal, escopo e resultado esperado."
                               />
+                            </div>
+                            <div className="border-y border-border py-4">
+                              <label className="flex cursor-pointer items-start gap-3">
+                                <input
+                                  type="checkbox"
+                                  className="mt-1 h-4 w-4 accent-sky-500"
+                                  checked={profileForm.professionalTrackingEnabled}
+                                  onChange={(event) => setProfileForm((current) => ({ ...current, professionalTrackingEnabled: event.target.checked }))}
+                                />
+                                <span>
+                                  <span className="block text-sm font-medium text-foreground">Acompanhar jornada profissional</span>
+                                  <span className="mt-0.5 block text-sm text-muted-foreground">Registra o período líquido trabalhado neste projeto, separado dos timers de tarefa.</span>
+                                </span>
+                              </label>
+                              {profileForm.professionalTrackingEnabled && (
+                                <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                                  <div className="space-y-2">
+                                    <Label htmlFor="weekly-hours">Carga semanal</Label>
+                                    <div className="flex items-center gap-2">
+                                      <Input
+                                        id="weekly-hours"
+                                        type="number"
+                                        min="1"
+                                        max="168"
+                                        step="0.5"
+                                        value={profileForm.weeklyTargetMinutes / 60}
+                                        onChange={(event) => setProfileForm((current) => ({ ...current, weeklyTargetMinutes: Math.round(Number(event.target.value || 0) * 60) }))}
+                                      />
+                                      <span className="text-sm text-muted-foreground">horas</span>
+                                    </div>
+                                  </div>
+                                  <div className="space-y-2">
+                                    <Label>Fuso horário</Label>
+                                    <Input value={profileForm.timezone} readOnly className="bg-muted/40" />
+                                  </div>
+                                </div>
+                              )}
                             </div>
                             <div className="flex flex-wrap gap-2">
                               <Button onClick={handleUpdateProject}>Salvar projeto</Button>
@@ -2402,7 +2539,7 @@ export default function ProjectsPage() {
                       <Card className="bg-card border-border shadow-sm">
                         <CardContent className="p-6 space-y-4">
                           <div className="flex flex-wrap items-center justify-between gap-3">
-                            <h2 className="text-xl font-medium">Tarefas relacionadas ao projeto</h2>
+                            <h2 className="text-lg font-medium">Tarefas relacionadas ao projeto</h2>
                             <div className="flex flex-wrap items-center gap-2">
                               <Select value={taskFilter} onValueChange={setTaskFilter}>
                                 <SelectTrigger className="w-[220px]"><SelectValue /></SelectTrigger>
@@ -2510,12 +2647,39 @@ export default function ProjectsPage() {
                     </TabsContent>
 
                     <TabsContent value="materiais">
+                      <ProjectMaterialsWorkspace
+                        items={projectMaterialItems}
+                        folders={folders}
+                        folderPathMap={folderPathMap}
+                        folderItemCounters={folderItemCounters}
+                        currentFolder={currentFolder}
+                        currentFolderPath={currentFolderPath}
+                        foldersInCurrentLevel={foldersInCurrentLevel}
+                        driveState={drivePresentationState}
+                        driveFolder={projectDriveConfig}
+                        onAdd={openMaterialAddFlow}
+                        onOpenFolder={openFolder}
+                        onBackFolder={goBackFolder}
+                        onEditFolder={openRenameFolderDialog}
+                        onDeleteFolder={handleDeleteFolder}
+                        onOpenDrive={openDriveDialog}
+                        onOpenDriveFolder={handleOpenProjectDriveFolder}
+                        onDisconnectDriveFolder={handleDisconnectProjectDriveFolder}
+                        onRetryDrive={() => setDriveReloadKey((current) => current + 1)}
+                        onOpenItem={handleOpenProjectItem}
+                        onEditItem={handleEditProjectItem}
+                        onDeleteItem={handleDeleteProjectItem}
+                        onToggleFavorite={handleToggleFavoriteProjectItem}
+                      />
+                    </TabsContent>
+
+                    <TabsContent value="materiais-legado-arquivos">
                       <div className="space-y-6">
                         <Card className="bg-card border-border shadow-sm">
                           <CardContent className="p-6 space-y-4">
                             <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
                               <div>
-                                <h3 className="text-xl font-medium">Arquivos do projeto</h3>
+                                <h3 className="text-lg font-medium">Arquivos do projeto</h3>
                                 <p className="text-sm text-muted-foreground">Materiais, links, prints, documentos e referencias deste projeto.</p>
                               </div>
                               <div className="flex flex-wrap gap-2">
@@ -2784,7 +2948,7 @@ export default function ProjectsPage() {
                       </div>
                     </TabsContent>
 
-                    <TabsContent value="materiais">
+                    <TabsContent value="materiais-legado-links">
                       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
                         <Card className="bg-card border-border shadow-sm">
                           <CardContent className="p-6 space-y-4">
@@ -2890,7 +3054,7 @@ export default function ProjectsPage() {
                       </div>
                     </TabsContent>
 
-                    <TabsContent value="materiais">
+                    <TabsContent value="materiais-legado-acessos">
                       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
                         <Card className="bg-card border-border shadow-sm">
                           <CardContent className="p-6 space-y-4">
@@ -2920,19 +3084,7 @@ export default function ProjectsPage() {
                                 <p className="text-xs text-muted-foreground">{item.platform || 'Plataforma nao informada'}</p>
                                 {item.url && <a href={item.url} target="_blank" rel="noreferrer" className="text-xs text-primary underline block">{item.url}</a>}
                                 <p className="text-xs text-muted-foreground">Usuario: {item.username || '-'}</p>
-                                <div className="flex items-center gap-2">
-                                  <Input
-                                    readOnly
-                                    type={visiblePasswords[item.id] ? 'text' : 'password'}
-                                    value={item.password || ''}
-                                  />
-                                  <Button size="icon" variant="outline" onClick={() => togglePasswordVisibility(item.id)}>
-                                    {visiblePasswords[item.id] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                                  </Button>
-                                  <Button size="icon" variant="outline" onClick={() => handleCopyPassword(item.password)}>
-                                    <Copy className="w-4 h-4" />
-                                  </Button>
-                                </div>
+                                {item.password && <p className="text-xs text-muted-foreground">Senha legada oculta. Migre-a para um gerenciador seguro.</p>}
                                 {item.notes && <p className="text-xs text-muted-foreground">Obs.: {item.notes}</p>}
                               </div>
                             ))}
@@ -2941,7 +3093,7 @@ export default function ProjectsPage() {
                       </div>
                     </TabsContent>
 
-                    <TabsContent value="materiais">
+                    <TabsContent value="materiais-legado-notas">
                       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
                         <Card className="bg-card border-border shadow-sm">
                           <CardContent className="p-6 space-y-4">
@@ -2988,7 +3140,7 @@ export default function ProjectsPage() {
                     <TabsContent value="historico">
                       <Card className="bg-card border-border shadow-sm">
                         <CardContent className="p-6">
-                          <h2 className="text-xl font-medium mb-4">Historico do projeto</h2>
+                          <h2 className="text-lg font-medium mb-4">Historico do projeto</h2>
                           {historyItems.length === 0 ? (
                             <p className="text-sm text-muted-foreground">Sem eventos registrados ainda.</p>
                           ) : (
@@ -3025,6 +3177,177 @@ export default function ProjectsPage() {
           onSaved={() => refreshWorkspaceData(selectedProject)}
         />
 
+        <Dialog open={isAddMaterialDialogOpen} onOpenChange={setIsAddMaterialDialogOpen}>
+          <DialogContent className="max-w-lg [&>button]:h-11 [&>button]:w-11 [&>button]:flex [&>button]:items-center [&>button]:justify-center" onInteractOutside={(event) => event.preventDefault()} onCloseAutoFocus={restoreMaterialDialogFocus}>
+            <DialogHeader>
+              <DialogTitle>O que você quer guardar?</DialogTitle>
+              <DialogDescription>Escolha o tipo de item para adicionar ao projeto.</DialogDescription>
+            </DialogHeader>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {[
+                { type: 'file', label: 'Arquivo', icon: FileText, description: 'Documento, imagem ou referência' },
+                { type: 'link', label: 'Link', icon: Link2, description: 'Site, painel ou página útil' },
+                { type: 'note', label: 'Nota', icon: NotebookText, description: 'Decisão ou informação do projeto' },
+                { type: 'access', label: 'Acesso', icon: Lock, description: 'URL e usuário, sem armazenar senha' },
+                { type: 'folder', label: 'Pasta', icon: Folder, description: 'Organize os itens do projeto' },
+              ].map((option) => {
+                const OptionIcon = option.icon;
+                return (
+                  <button key={option.type} type="button" onClick={() => openMaterialAddFlow(option.type)} className="rounded-lg border border-border p-4 text-left transition-colors hover:bg-muted/50">
+                    <OptionIcon className="mb-3 h-5 w-5 text-primary" />
+                    <span className="block text-sm font-medium">{option.label}</span>
+                    <span className="mt-1 block text-xs text-muted-foreground">{option.description}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setIsAddMaterialDialogOpen(false)}>Cancelar</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog
+          open={Boolean(itemDialogType)}
+          onOpenChange={(open) => {
+            if (!open) {
+              setItemDialogType(null);
+              setEditingLinkId(null);
+              setEditingAccessId(null);
+              setEditingNoteId(null);
+              setIsAdvancedDetailsOpen(false);
+            }
+          }}
+        >
+          <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto [&>button]:h-11 [&>button]:w-11 [&>button]:flex [&>button]:items-center [&>button]:justify-center" onInteractOutside={(event) => event.preventDefault()} onCloseAutoFocus={restoreMaterialDialogFocus}>
+            <DialogHeader>
+              <DialogTitle>
+                {itemDialogType === 'link' && (editingLinkId ? 'Editar link' : 'Adicionar link')}
+                {itemDialogType === 'note' && (editingNoteId ? 'Editar nota' : 'Nova nota')}
+                {itemDialogType === 'access' && (editingAccessId ? 'Editar acesso' : 'Adicionar acesso')}
+              </DialogTitle>
+              <DialogDescription>
+                {itemDialogType === 'access'
+                  ? 'Guarde apenas os dados necessários para localizar o acesso.'
+                  : 'Salve este item sem sair da área do projeto.'}
+              </DialogDescription>
+            </DialogHeader>
+
+            {itemDialogType === 'link' && (
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="material-link-title">Título</Label>
+                  <Input id="material-link-title" value={linkForm.title} onChange={(event) => setLinkForm((current) => ({ ...current, title: event.target.value }))} />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="material-link-url">URL</Label>
+                  <Input
+                    id="material-link-url"
+                    value={linkForm.url}
+                    onChange={(event) => setLinkForm((current) => ({ ...current, url: event.target.value }))}
+                    onBlur={() => {
+                      if (linkForm.title || !linkForm.url) return;
+                      try {
+                        const hostname = new URL(linkForm.url).hostname.replace(/^www\./, '');
+                        setLinkForm((current) => ({ ...current, title: hostname }));
+                      } catch {
+                        // Mantém o título vazio para o usuário corrigir a URL.
+                      }
+                    }}
+                    placeholder="https://..."
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="material-link-description">Descrição <span className="text-muted-foreground">(opcional)</span></Label>
+                  <Textarea id="material-link-description" value={linkForm.description} onChange={(event) => setLinkForm((current) => ({ ...current, description: event.target.value }))} className="min-h-20" />
+                </div>
+              </div>
+            )}
+
+            {itemDialogType === 'note' && (
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="material-note-title">Título</Label>
+                  <Input id="material-note-title" value={noteForm.title} onChange={(event) => setNoteForm((current) => ({ ...current, title: event.target.value }))} placeholder="Nota rápida" />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="material-note-content">Conteúdo</Label>
+                  <Textarea id="material-note-content" value={noteForm.content} onChange={(event) => setNoteForm((current) => ({ ...current, content: event.target.value }))} className="min-h-40" autoFocus />
+                </div>
+              </div>
+            )}
+
+            {itemDialogType === 'access' && (
+              <div className="space-y-4">
+                <div className="space-y-2"><Label htmlFor="material-access-title">Nome do acesso</Label><Input id="material-access-title" value={accessForm.title} onChange={(event) => setAccessForm((current) => ({ ...current, title: event.target.value }))} placeholder="Ex.: WordPress IDT-PR" /></div>
+                <div className="space-y-2"><Label htmlFor="material-access-platform">Plataforma</Label><Input id="material-access-platform" value={accessForm.platform} onChange={(event) => setAccessForm((current) => ({ ...current, platform: event.target.value }))} placeholder="Ex.: WordPress" /></div>
+                <div className="space-y-2"><Label htmlFor="material-access-url">URL</Label><Input id="material-access-url" value={accessForm.url} onChange={(event) => setAccessForm((current) => ({ ...current, url: event.target.value }))} placeholder="https://..." /></div>
+                <div className="space-y-2"><Label htmlFor="material-access-username">Usuário/e-mail</Label><Input id="material-access-username" value={accessForm.username} onChange={(event) => setAccessForm((current) => ({ ...current, username: event.target.value }))} /></div>
+                <div className="space-y-2"><Label htmlFor="material-access-notes">Observação <span className="text-muted-foreground">(opcional)</span></Label><Textarea id="material-access-notes" value={accessForm.notes} onChange={(event) => setAccessForm((current) => ({ ...current, notes: event.target.value }))} className="min-h-20" placeholder="Ex.: Senha armazenada no Bitwarden" /></div>
+                <p className="text-xs text-muted-foreground">Por segurança, o Clareia não armazena senhas neste momento.</p>
+              </div>
+            )}
+
+            {(itemDialogType === 'link' || itemDialogType === 'note' || itemDialogType === 'access') && (
+              <div className="space-y-3">
+                <Button type="button" variant="outline" size="sm" onClick={() => setIsAdvancedDetailsOpen((current) => !current)}>
+                  {isAdvancedDetailsOpen ? 'Ocultar opções' : 'Mais opções'}
+                </Button>
+                {isAdvancedDetailsOpen && (
+                  <div className="space-y-4 rounded-lg border border-border p-4">
+                    <div className="space-y-2">
+                      <Label>Pasta</Label>
+                      <Select
+                        value={(itemDialogType === 'link' ? linkForm.folder : itemDialogType === 'note' ? noteForm.folder : accessForm.folder) || 'none'}
+                        onValueChange={(value) => {
+                          const folder = value === 'none' ? '' : value;
+                          if (itemDialogType === 'link') setLinkForm((current) => ({ ...current, folder }));
+                          if (itemDialogType === 'note') setNoteForm((current) => ({ ...current, folder }));
+                          if (itemDialogType === 'access') setAccessForm((current) => ({ ...current, folder }));
+                        }}
+                      >
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">Sem pasta</SelectItem>
+                          {folders.map((folder) => <SelectItem key={folder.id} value={folderPathMap[folder.id]}>{folderPathMap[folder.id]}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    {(itemDialogType === 'link' || itemDialogType === 'note') && (
+                      <div className="space-y-2">
+                        <Label>Relacionar a tarefa</Label>
+                        <Select
+                          value={itemDialogType === 'link' ? linkForm.relatedTaskId : noteForm.relatedTaskId}
+                          onValueChange={(value) => itemDialogType === 'link'
+                            ? setLinkForm((current) => ({ ...current, relatedTaskId: value }))
+                            : setNoteForm((current) => ({ ...current, relatedTaskId: value }))}
+                        >
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="none">Não vincular</SelectItem>
+                            {projectTasks.map((task) => <SelectItem key={task.id} value={task.id}>{task.title}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+                    {itemDialogType === 'note' && <div className="space-y-2"><Label>Tags</Label><Input value={noteForm.tags} onChange={(event) => setNoteForm((current) => ({ ...current, tags: event.target.value }))} placeholder="decisão, cliente" /></div>}
+                    {(itemDialogType === 'link' || itemDialogType === 'note') && (
+                      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={itemDialogType === 'link' ? linkForm.favorite : noteForm.favorite} onChange={(event) => itemDialogType === 'link' ? setLinkForm((current) => ({ ...current, favorite: event.target.checked })) : setNoteForm((current) => ({ ...current, favorite: event.target.checked }))} /> Favorito</label>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setItemDialogType(null)}>Cancelar</Button>
+              {itemDialogType === 'link' && <Button onClick={handleCreateLink}>{editingLinkId ? 'Salvar alterações' : 'Salvar link'}</Button>}
+              {itemDialogType === 'note' && <Button onClick={handleCreateOrUpdateNote}>{editingNoteId ? 'Salvar alterações' : 'Salvar nota'}</Button>}
+              {itemDialogType === 'access' && <Button onClick={handleCreateAccess}>{editingAccessId ? 'Salvar alterações' : 'Salvar acesso'}</Button>}
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
         <Dialog open={isCreateTaskDialogOpen} onOpenChange={setIsCreateTaskDialogOpen}>
           <DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
@@ -3046,7 +3369,7 @@ export default function ProjectsPage() {
         </Dialog>
 
         <Dialog open={isNewFolderDialogOpen} onOpenChange={setIsNewFolderDialogOpen}>
-          <DialogContent className="max-w-md">
+          <DialogContent className="max-w-md [&>button]:h-11 [&>button]:w-11 [&>button]:flex [&>button]:items-center [&>button]:justify-center" onCloseAutoFocus={restoreMaterialDialogFocus}>
             <DialogHeader>
               <DialogTitle>Nova pasta</DialogTitle>
               <DialogDescription>
@@ -3065,7 +3388,7 @@ export default function ProjectsPage() {
         </Dialog>
 
         <Dialog open={isRenameFolderDialogOpen} onOpenChange={setIsRenameFolderDialogOpen}>
-          <DialogContent className="max-w-md">
+          <DialogContent className="max-w-md [&>button]:h-11 [&>button]:w-11 [&>button]:flex [&>button]:items-center [&>button]:justify-center" onCloseAutoFocus={restoreMaterialDialogFocus}>
             <DialogHeader>
               <DialogTitle>Renomear pasta</DialogTitle>
             </DialogHeader>
@@ -3081,30 +3404,12 @@ export default function ProjectsPage() {
         </Dialog>
 
         <Dialog open={isMaterialDialogOpen} onOpenChange={setIsMaterialDialogOpen}>
-          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto [&>button]:h-11 [&>button]:w-11 [&>button]:flex [&>button]:items-center [&>button]:justify-center" onInteractOutside={(event) => event.preventDefault()} onCloseAutoFocus={restoreMaterialDialogFocus}>
             <DialogHeader>
-              <DialogTitle>{editingMaterialId ? 'Editar material' : 'Adicionar material'}</DialogTitle>
-              <DialogDescription>
-                Cadastre material do projeto sem sair da navegação visual.
-              </DialogDescription>
+              <DialogTitle>{editingMaterialId ? 'Editar arquivo' : 'Adicionar arquivo'}</DialogTitle>
+              <DialogDescription>Guarde um arquivo ou uma referência sem sair do projeto.</DialogDescription>
             </DialogHeader>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div className="space-y-2 md:col-span-2">
-                <Label>Projeto</Label>
-                <Input value={selectedProject || ''} readOnly className="bg-muted/40" />
-              </div>
-              <div className="space-y-2">
-                <Label>Tipo de material</Label>
-                <Select value={fileForm.materialType} onValueChange={(value) => setFileForm((current) => ({ ...current, materialType: value, type: value }))}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="arquivo">Arquivo</SelectItem>
-                    <SelectItem value="link">Link</SelectItem>
-                    <SelectItem value="nota">Nota</SelectItem>
-                    <SelectItem value="acesso">Acesso</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
               <div className="space-y-2">
                 <Label>Nome</Label>
                 <Input value={fileForm.name} onChange={(event) => setFileForm((current) => ({ ...current, name: event.target.value }))} />
@@ -3119,56 +3424,10 @@ export default function ProjectsPage() {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-2">
-                <Label>Modo de cadastro</Label>
-                <Select
-                  value={fileForm.provider}
-                  onValueChange={(value) => setFileForm((current) => ({
-                    ...current,
-                    provider: value,
-                    storageProvider: value,
-                    autoSyncDrive: value === 'google_drive_upload_future'
-                  }))}
-                >
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {FILE_PROVIDER_OPTIONS.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
               <div className="space-y-2 md:col-span-2">
-                <Label>{fileForm.provider === 'google_drive' ? 'Link do arquivo existente no Google Drive' : 'Link externo'}</Label>
+                <Label>Arquivo ou link</Label>
                 <Input value={fileForm.externalLink} onChange={(event) => setFileForm((current) => ({ ...current, externalLink: event.target.value }))} placeholder="https://..." />
               </div>
-
-              {(fileForm.provider === 'google_drive' || fileForm.provider === 'google_drive_upload_future') && (
-                <>
-                  <div className="space-y-2">
-                    <Label>driveFileId (opcional)</Label>
-                    <Input
-                      value={fileForm.driveFileId}
-                      onChange={(event) => setFileForm((current) => ({ ...current, driveFileId: event.target.value }))}
-                      placeholder="ID do arquivo no Drive"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>driveFolderId (opcional)</Label>
-                    <Input
-                      value={fileForm.driveFolderId || projectDriveConfig?.driveFolderId || ''}
-                      onChange={(event) => setFileForm((current) => ({ ...current, driveFolderId: event.target.value }))}
-                      placeholder="ID da pasta no Drive"
-                    />
-                  </div>
-                  {fileForm.provider === 'google_drive_upload_future' && (
-                    <div className="space-y-2 md:col-span-2 rounded-lg border border-border px-3 py-2">
-                      <p className="text-sm font-medium text-foreground">Criar ou atualizar documento</p>
-                      <p className="text-sm text-muted-foreground">O conteúdo será sincronizado na pasta do projeto ao salvar.</p>
-                    </div>
-                  )}
-                </>
-              )}
 
               {folderSuggestions.length > 0 && (
                 <div className="md:col-span-2 rounded-lg border border-amber-400/40 bg-amber-50 p-3 space-y-2">
@@ -3212,7 +3471,7 @@ export default function ProjectsPage() {
               </div>
               <div className="md:col-span-2">
                 <Button variant="outline" size="sm" onClick={() => setIsAdvancedDetailsOpen((current) => !current)}>
-                  {isAdvancedDetailsOpen ? 'Ocultar detalhes avançados' : 'Detalhes avançados'}
+                  {isAdvancedDetailsOpen ? 'Ocultar opções' : 'Mais opções'}
                 </Button>
               </div>
               {isAdvancedDetailsOpen && (
@@ -3235,25 +3494,23 @@ export default function ProjectsPage() {
                       </SelectContent>
                     </Select>
                   </div>
+                  {driveConnectionStatus?.connected && (
+                    <label className="md:col-span-2 flex items-start gap-2 text-sm">
+                      <input type="checkbox" checked={fileForm.autoSyncDrive} onChange={(event) => setFileForm((current) => ({ ...current, autoSyncDrive: event.target.checked }))} />
+                      <span><span className="block text-foreground">Criar ou atualizar documento no Drive</span><span className="block text-xs text-muted-foreground">O conteúdo será salvo na pasta do projeto.</span></span>
+                    </label>
+                  )}
                 </>
               )}
               <div className="md:col-span-2 flex items-center gap-2 text-sm text-muted-foreground">
                 <input type="checkbox" checked={fileForm.favorite} onChange={(event) => setFileForm((current) => ({ ...current, favorite: event.target.checked }))} />
                 Marcar como favorito
               </div>
-              <div className="md:col-span-2 rounded-lg border border-dashed border-border p-3 text-sm text-muted-foreground space-y-2">
-                <p>
-                  Integracao com Google Drive ativa por OAuth. Ao marcar sincronizacao automatica, o Clareia cria ou atualiza um documento de texto no Drive e salva o link no material.
-                </p>
-                <Button size="sm" variant="outline" onClick={handleFutureDriveUpload}>
-                  Conectar ou validar Google Drive
-                </Button>
-              </div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setIsMaterialDialogOpen(false)}>Cancelar</Button>
               <Button onClick={handleSaveMaterial} disabled={isSyncingDriveMaterial}>
-                {isSyncingDriveMaterial ? 'Sincronizando...' : editingMaterialId ? 'Salvar alteracoes' : 'Adicionar material'}
+                {isSyncingDriveMaterial ? 'Sincronizando...' : editingMaterialId ? 'Salvar alterações' : 'Adicionar'}
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -3269,7 +3526,7 @@ export default function ProjectsPage() {
             }
           }}
         >
-          <DialogContent className="w-[calc(100vw-1.5rem)] max-w-lg overflow-hidden">
+          <DialogContent className="w-[calc(100vw-1.5rem)] max-w-lg overflow-hidden [&>button]:h-11 [&>button]:w-11 [&>button]:flex [&>button]:items-center [&>button]:justify-center" onInteractOutside={(event) => event.preventDefault()} onCloseAutoFocus={restoreMaterialDialogFocus}>
             <DialogHeader>
               <DialogTitle>{projectDriveConfig ? 'Alterar conexao do Google Drive' : 'Conectar Google Drive'}</DialogTitle>
               <DialogDescription>
@@ -3630,6 +3887,54 @@ export default function ProjectsPage() {
               <Button variant="outline" onClick={() => setIsMergeDialogOpen(false)} disabled={isMergingProject}>Cancelar</Button>
               <Button onClick={confirmMergeProject} disabled={!mergeTargetName || isMergingProject}>
                 <GitMerge className="mr-2 h-4 w-4" /> {isMergingProject ? 'Mesclando...' : 'Mesclar projetos'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={isCreateProjectOpen} onOpenChange={setIsCreateProjectOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Novo projeto</DialogTitle>
+              <DialogDescription>Crie o projeto agora. Os detalhes podem ser ajustados depois.</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="new-project-name">Nome</Label>
+                <Input
+                  id="new-project-name"
+                  value={newProjectForm.name}
+                  onChange={(event) => setNewProjectForm((current) => ({ ...current, name: event.target.value }))}
+                  placeholder="Ex.: Monitoramento de Sites"
+                  autoFocus
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Tipo de projeto</Label>
+                <Select value={newProjectForm.projectType} onValueChange={(value) => setNewProjectForm((current) => ({ ...current, projectType: value }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {PROJECT_TYPE_OPTIONS.map((option) => (
+                      <SelectItem key={option} value={option}>{option}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="new-project-summary">Objetivo/resumo</Label>
+                <Textarea
+                  id="new-project-summary"
+                  value={newProjectForm.summary}
+                  onChange={(event) => setNewProjectForm((current) => ({ ...current, summary: event.target.value }))}
+                  placeholder="Resumo executivo do objetivo do projeto."
+                  className="min-h-24"
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setIsCreateProjectOpen(false)} disabled={isCreatingProject}>Cancelar</Button>
+              <Button onClick={handleCreateProject} disabled={isCreatingProject}>
+                {isCreatingProject ? 'Criando...' : 'Criar projeto'}
               </Button>
             </DialogFooter>
           </DialogContent>

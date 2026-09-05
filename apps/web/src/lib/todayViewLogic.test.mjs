@@ -59,13 +59,35 @@ test('tarefa pontual não recebe classificação de rotina por título ou projet
   assert.equal(getTodayTaskSituation({ recurrenceRuleId: 'rule-1' }, referenceDate).routine, true);
 });
 
-test('diferença pequena de capacidade gera mensagem neutra', () => {
-  assert.deepEqual(getTodayCapacityState(105, 102), {
-    differenceMinutes: 3,
+test('capacidade distingue sobra, limite exato, quase cheia e excedida', () => {
+  assert.deepEqual(getTodayCapacityState(80, 102), {
+    differenceMinutes: -22,
+    remainingMinutes: 22,
+    isExactCapacity: false,
+    isNearCapacity: false,
+    isOverCapacity: false,
+  });
+  assert.deepEqual(getTodayCapacityState(102, 102), {
+    differenceMinutes: 0,
+    remainingMinutes: 0,
+    isExactCapacity: true,
+    isNearCapacity: false,
+    isOverCapacity: false,
+  });
+  assert.deepEqual(getTodayCapacityState(95, 102), {
+    differenceMinutes: -7,
+    remainingMinutes: 7,
+    isExactCapacity: false,
     isNearCapacity: true,
     isOverCapacity: false,
   });
-  assert.equal(getTodayCapacityState(140, 102).isOverCapacity, true);
+  assert.deepEqual(getTodayCapacityState(105, 102), {
+    differenceMinutes: 3,
+    remainingMinutes: 0,
+    isExactCapacity: false,
+    isNearCapacity: false,
+    isOverCapacity: true,
+  });
 });
 
 test('situação atrasada não é rotulada como hoje à tarde', () => {
@@ -182,6 +204,39 @@ test('sessao ativa prevalece e trocar destaque devolve a tarefa anterior para a 
   assert.equal(secondSuggestion.visibleTasks.some(({ id }) => id === 'second'), false);
 });
 
+test('energia baixa prefere alternativa executável à retomada de alta energia', () => {
+  const tasks = [
+    { id: 'heavy', status: 'em_andamento', energiaNecessaria: 'alta' },
+    { id: 'light', status: 'pendente', energiaNecessaria: 'baixa' },
+  ];
+
+  const highlight = getTodayHighlight(tasks, tasks[1], { id: 'session', taskId: 'heavy' }, { energia: 'baixa' });
+
+  assert.equal(highlight.reason, 'recommended');
+  assert.equal(highlight.task.id, 'light');
+});
+
+test('diferença pequena de energia mantém a continuidade da tarefa', () => {
+  const tasks = [
+    { id: 'heavy', status: 'em_andamento', energiaNecessaria: 'alta' },
+    { id: 'medium', status: 'pendente', energiaNecessaria: 'média' },
+  ];
+
+  const highlight = getTodayHighlight(tasks, tasks[1], { id: 'session', taskId: 'heavy' }, { energia: 'média' });
+
+  assert.equal(highlight.reason, 'active_session');
+  assert.equal(highlight.task.id, 'heavy');
+});
+
+test('sem alternativa adequada preserva retomada mesmo com energia baixa', () => {
+  const tasks = [{ id: 'heavy', status: 'em_andamento', energiaNecessaria: 'alta' }];
+
+  const highlight = getTodayHighlight(tasks, null, { id: 'session', taskId: 'heavy' }, { energia: 'baixa' });
+
+  assert.equal(highlight.reason, 'active_session');
+  assert.equal(highlight.task.id, 'heavy');
+});
+
 test('próxima ação usa a microtarefa da própria tarefa e separa passo de bloco', () => {
   const presentation = getTaskNextActionPresentation({
     id: 'task-a',
@@ -208,4 +263,18 @@ test('próxima ação não reaproveita microtarefa associada a outra tarefa', ()
 
   assert.equal(presentation.action, 'Abrir o pedido atual');
   assert.equal(presentation.actionMinutes, 5);
+});
+
+test('retomada não repete onde parou quando o texto já é o próximo passo', () => {
+  const repeated = getTaskNextActionPresentation({
+    nextAction: 'Separar nome, localização e descrição do empreendimento',
+    pauseNote: 'Separar nome, localização e descrição do empreendimento',
+  });
+  const distinct = getTaskNextActionPresentation({
+    nextAction: 'Separar nome, localização e descrição do empreendimento',
+    pauseNote: 'A planilha está aberta na segunda aba',
+  });
+
+  assert.equal(repeated.pauseNote, '');
+  assert.equal(distinct.pauseNote, 'A planilha está aberta na segunda aba');
 });

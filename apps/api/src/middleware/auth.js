@@ -23,6 +23,7 @@ export async function requireAuth(req, res, next) {
 		req.authUser = {
 			id: String(payload.sub),
 			email: String(payload.email || ''),
+			role: String(payload.role || 'user'),
 			accountId: String(payload.accountId || ''),
 		};
 
@@ -30,4 +31,15 @@ export async function requireAuth(req, res, next) {
 	} catch {
 		return next(unauthorizedError('Your session has expired. Please sign in again.'));
 	}
+}
+
+export function requirePrivileged(req, res, next) {
+	const privilegedRoles = new Set(['admin', 'owner', 'proprietario']);
+	if (!privilegedRoles.has(String(req.authUser?.role || '').toLowerCase())) {
+		const error = new Error('Apenas administradores podem alterar a configuracao OAuth.');
+		error.status = 403;
+		return next(error);
+	}
+
+	return next();
 }
