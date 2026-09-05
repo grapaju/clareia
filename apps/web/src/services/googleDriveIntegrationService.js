@@ -1,4 +1,4 @@
-import { integratedAiClient } from '@/lib/integratedAiClient.js';
+import { integratedAiClient } from '../lib/integratedAiClient.js';
 
 function normalizeText(value) {
   return String(value || '').trim();
@@ -110,6 +110,36 @@ export async function syncGoogleDriveDocument(payload = {}) {
       'Content-Type': 'application/json'
     },
     body: JSON.stringify(payload)
+  });
+}
+
+export async function uploadGoogleDriveMaterial(payload = {}) {
+  const formData = new FormData();
+  formData.append('projectId', payload.projectId || '');
+  formData.append('projectName', payload.projectName || payload.projectId || '');
+  formData.append('projectType', payload.projectType || 'Administrativo');
+  formData.append('folderId', payload.folderId || '');
+  formData.append('file', payload.file);
+
+  return integratedAiClient.fetch('/google-drive/materials/upload', {
+    method: 'POST',
+    body: formData
+  });
+}
+
+export async function confirmGoogleDriveMaterialUpload(receiptId) {
+  return integratedAiClient.fetch(`/google-drive/materials/uploads/${encodeURIComponent(receiptId)}/confirm`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({})
+  });
+}
+
+export async function rollbackGoogleDriveMaterialUpload(receiptId) {
+  return integratedAiClient.fetch(`/google-drive/materials/uploads/${encodeURIComponent(receiptId)}`, {
+    method: 'DELETE'
   });
 }
 

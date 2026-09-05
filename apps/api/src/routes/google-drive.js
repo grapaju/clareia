@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import {
 	bootstrapGoogleDriveProjectFolders,
+	confirmGoogleDriveMaterialUpload,
 	disconnectGoogleDrive,
 	getGoogleDriveConfigChecklist,
 	getGoogleDriveAuthUrl,
@@ -9,14 +10,18 @@ import {
 	getGoogleDriveStatus,
 	handleGoogleDriveOAuthCallback,
 	removeGoogleDriveProjectFolderConfig,
+	rollbackGoogleDriveMaterialUpload,
 	saveGoogleDriveDefaultParentFolder,
 	saveGoogleDriveProjectFolderConfig,
 	saveGoogleDriveOAuthUserConfig,
 	syncGoogleDriveDocument,
 	syncGoogleDriveProjectFolder,
 	testGoogleDriveConnection,
+	uploadGoogleDriveMaterial,
 } from '../api/google-drive.js';
+import { MaterialUpload } from '../constants/common.js';
 import { requireAuth, requirePrivileged } from '../middleware/auth.js';
+import { uploadSingleFile } from '../middleware/file-upload.js';
 
 const router = Router();
 
@@ -159,6 +164,43 @@ router.post('/documents/sync', async (req, res) => {
 		content: req.body?.content,
 	});
 
+	res.json(result);
+});
+
+router.post(
+	'/materials/upload',
+	uploadSingleFile({
+		maxSizeMB: MaterialUpload.MaxSizeMB,
+		allowedMimeTypes: MaterialUpload.AllowedMimeTypes,
+		fieldName: 'file',
+	}),
+	async (req, res) => {
+		const result = await uploadGoogleDriveMaterial({
+			userId: req.userId,
+			projectId: req.body?.projectId,
+			projectName: req.body?.projectName,
+			projectType: req.body?.projectType,
+			folderId: req.body?.folderId,
+			file: req.file,
+		});
+
+		res.status(201).json(result);
+	}
+);
+
+router.post('/materials/uploads/:receiptId/confirm', async (req, res) => {
+	const result = await confirmGoogleDriveMaterialUpload({
+		userId: req.userId,
+		receiptId: req.params.receiptId,
+	});
+	res.json(result);
+});
+
+router.delete('/materials/uploads/:receiptId', async (req, res) => {
+	const result = await rollbackGoogleDriveMaterialUpload({
+		userId: req.userId,
+		receiptId: req.params.receiptId,
+	});
 	res.json(result);
 });
 

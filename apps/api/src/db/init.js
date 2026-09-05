@@ -126,6 +126,29 @@ CREATE TABLE IF NOT EXISTS google_drive_project_folder_links (
 CREATE INDEX IF NOT EXISTS idx_google_drive_project_folder_links_project
   ON google_drive_project_folder_links(user_id, project_id, parent_folder_id);
 
+CREATE TABLE IF NOT EXISTS google_drive_material_uploads (
+  id UUID PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL,
+  folder_id TEXT NOT NULL,
+  drive_file_id TEXT NOT NULL,
+  file_name TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  size_bytes BIGINT NOT NULL,
+  web_view_link TEXT DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending',
+  error_message TEXT DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  FOREIGN KEY (user_id, folder_id)
+    REFERENCES google_drive_project_folder_links(user_id, folder_id)
+    ON DELETE CASCADE,
+  UNIQUE(user_id, drive_file_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_google_drive_material_uploads_recovery
+  ON google_drive_material_uploads(user_id, status, created_at);
+
 CREATE TABLE IF NOT EXISTS project_profiles (
   id BIGSERIAL PRIMARY KEY,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,

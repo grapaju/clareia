@@ -5,11 +5,13 @@ import { fileURLToPath } from 'node:url';
 import { Readable } from 'node:stream';
 import { google } from 'googleapis';
 import { runQuery } from '../db/postgres.js';
+import logger from '../utils/logger.js';
 import {
 	getDriveMoveParameters,
 	normalizeGoogleDocumentName,
 	resolveMaterialDriveFolder,
 } from '../utils/google-drive-materials.js';
+import { validateMaterialUpload } from '../utils/material-upload.js';
 
 const GOOGLE_DRIVE_FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
 const GOOGLE_DRIVE_DOCUMENT_MIME_TYPE = 'application/vnd.google-apps.document';
@@ -330,6 +332,18 @@ async function upsertProjectFolderLink({ userId, projectId, folderId, parentFold
 		 WHERE google_drive_project_folder_links.project_id = EXCLUDED.project_id`,
 		[userId, projectId, folderId, normalizeNullableText(parentFolderId), folderName, driveFolderId, driveFolderUrl]
 	);
+}
+
+async function getMaterialUploadReceipt({ userId, receiptId }) {
+	const result = await runQuery(
+		`SELECT id, user_id, project_id, folder_id, drive_file_id, file_name, mime_type,
+		        size_bytes, web_view_link, status
+		 FROM google_drive_material_uploads
+		 WHERE id = $1 AND user_id = $2
+		 LIMIT 1`,
+		[receiptId, userId]
+	);
+	return result.rows[0] || null;
 }
 
 async function upsertConnectionByUserId({ userId, payload }) {
@@ -1049,6 +1063,117 @@ export async function syncGoogleDriveDocument({ userId, projectId, projectName, 
 		updated: false,
 		moved: false,
 	};
+}
+
+export async function uploadGoogleDriveMaterial({ userId, projectId, projectName, projectType, folderId, file }) {
+	const normalizedUserId = normalizeText(userId);
+	const normalizedProjectId = normalizeText(projectId);
+	const normalizedFolderId = normalizeText(folderId);
+	if (!normalizedUserId || !normalizedProjectId || !normalizedFolderId) {
+		throw createError('Projeto e pasta sao obrigatorios para enviar um arquivo.', 400);
+	}
+
+	const validatedFile = await validateMaterialUpload(file);
+	const targetDriveFolderId = await resolveTargetFolderId({
+		userId: normalizedUserId,
+		projectId: normalizedProjectId,
+		projectName,
+		projectType,
+		folderId: normalizedFolderId,
+	});
+	const { drive } = await createDriveClientForUser(normalizedUserId);
+	const created = await drive.files.create({
+		requestBody: {
+			name: validatedFile.fileName,
+			parents: [targetDriveFolderId],
+		},
+		media: {
+			mimeType: validatedFile.mimeType,
+			body: Readable.from(file.buffer),
+		},
+		fields: 'id,name,webViewLink,mimeType,parents,size',
+	});
+
+	const receiptId = crypto.randomUUID();
+	const webViewLink = normalizeText(created.data.webViewLink)
+		|| `https://drive.google.com/file/d/${created.data.id}/view`;
+
+	try {
+		await runQuery(
+			`INSERT INTO google_drive_material_uploads (
+			   id, user_id, project_id, folder_id, drive_file_id, file_name,
+			   mime_type, size_bytes, web_view_link, status
+			 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending')`,
+			[
+				receiptId,
+				normalizedUserId,
+				normalizedProjectId,
+				normalizedFolderId,
+				created.data.id,
+				validatedFile.fileName,
+				validatedFile.mimeType,
+				validatedFile.size,
+				webViewLink,
+			]
+		);
+	} catch (error) {
+		try {
+			await drive.files.delete({ fileId: created.data.id });
+		} catch (rollbackError) {
+			logger.error('Falha ao reverter upload do Google Drive sem recibo.', rollbackError.message);
+		}
+		throw error;
+	}
+
+	return {
+		receiptId,
+		driveFileId: created.data.id,
+		driveFolderId: normalizeText(created.data.parents?.[0]) || targetDriveFolderId,
+		fileName: created.data.name || validatedFile.fileName,
+		mimeType: created.data.mimeType || validatedFile.mimeType,
+		size: Number(created.data.size || validatedFile.size),
+		webViewLink,
+	};
+}
+
+export async function confirmGoogleDriveMaterialUpload({ userId, receiptId }) {
+	const result = await runQuery(
+		`UPDATE google_drive_material_uploads
+		 SET status = 'confirmed', error_message = '', updated_at = now()
+		 WHERE id = $1 AND user_id = $2 AND status = 'pending'
+		 RETURNING id`,
+		[normalizeText(receiptId), userId]
+	);
+	if (!result.rows[0]) throw createError('Upload pendente nao encontrado.', 404);
+	return { confirmed: true, receiptId: result.rows[0].id };
+}
+
+export async function rollbackGoogleDriveMaterialUpload({ userId, receiptId }) {
+	const receipt = await getMaterialUploadReceipt({ userId, receiptId: normalizeText(receiptId) });
+	if (!receipt || receipt.status !== 'pending') {
+		throw createError('Upload pendente nao encontrado.', 404);
+	}
+
+	const { drive } = await createDriveClientForUser(userId);
+	try {
+		await drive.files.delete({ fileId: receipt.drive_file_id });
+		await runQuery(
+			`UPDATE google_drive_material_uploads
+			 SET status = 'rolled_back', error_message = '', updated_at = now()
+			 WHERE id = $1 AND user_id = $2`,
+			[receipt.id, userId]
+		);
+	} catch (error) {
+		await runQuery(
+			`UPDATE google_drive_material_uploads
+			 SET error_message = $3, updated_at = now()
+			 WHERE id = $1 AND user_id = $2`,
+			[receipt.id, userId, normalizeText(error?.message).slice(0, 500)]
+		);
+		throw error;
+	}
+
+	return { rolledBack: true, receiptId: receipt.id };
 }
 
 function hasEnv(name) {

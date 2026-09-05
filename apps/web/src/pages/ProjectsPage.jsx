@@ -20,7 +20,9 @@ import {
   Plus,
   Search,
   Star,
-  Trash2
+  Trash2,
+  Upload,
+  X
 } from 'lucide-react';
 import Header from '@/components/Header.jsx';
 import Sidebar from '@/components/Sidebar.jsx';
@@ -38,7 +40,9 @@ import {
   buildProjectItems,
   buildDriveDocumentPayload,
   createMaterialDraft,
+  formatMaterialFileSize,
   getDrivePresentationState,
+  getFileTitle,
   getFolderHierarchy,
   getMaterialFormVisibility,
 } from '@/lib/projectMaterialsLogic.js';
@@ -92,8 +96,11 @@ import {
   removeGoogleDriveProjectFolderConfig,
   saveGoogleDriveDefaultParentFolder,
   saveGoogleDriveProjectFolderConfig,
+  confirmGoogleDriveMaterialUpload,
+  rollbackGoogleDriveMaterialUpload,
   syncGoogleDriveDocument,
-  syncGoogleDriveProjectFolder
+  syncGoogleDriveProjectFolder,
+  uploadGoogleDriveMaterial
 } from '@/services/googleDriveIntegrationService.js';
 import { createProjectLink, deleteProjectLink, getProjectLinkTypes, listFavoriteProjectLinks, listProjectLinks, updateProjectLink } from '@/services/projectLinkService.js';
 import { createProjectAccess, deleteProjectAccess, listProjectAccesses, updateProjectAccess } from '@/services/projectAccessService.js';
@@ -111,6 +118,8 @@ import {
 
 const LEGACY_PROJECT_PROFILES_KEY = 'clareia_project_profiles_v1';
 const PROJECT_HISTORY_KEY = 'clareia_project_history_v1';
+const MATERIAL_UPLOAD_ACCEPT = '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.png,.jpg,.jpeg,.zip';
+const MATERIAL_UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
 
 function readProjectProfiles() {
   return readUserScopedJson(LEGACY_PROJECT_PROFILES_KEY, []);
@@ -229,6 +238,7 @@ export default function ProjectsPage() {
   const { refresh: refreshProfessionalJourney } = useProfessionalJourney();
   const navigate = useNavigate();
   const lastMaterialDialogTriggerRef = useRef(null);
+  const materialSaveLockRef = useRef(false);
 
   const [selectedProject, setSelectedProject] = useState(null);
   const [activeTab, setActiveTab] = useState('resumo');
@@ -295,6 +305,7 @@ export default function ProjectsPage() {
   const [isManualDriveSectionOpen, setIsManualDriveSectionOpen] = useState(false);
   const [isParentFolderSectionOpen, setIsParentFolderSectionOpen] = useState(false);
   const [isSyncingDriveMaterial, setIsSyncingDriveMaterial] = useState(false);
+  const [selectedMaterialFile, setSelectedMaterialFile] = useState(null);
   const [driveConfigForm, setDriveConfigForm] = useState({
     folderName: '',
     parentFolderUrl: '',
@@ -1325,6 +1336,7 @@ export default function ProjectsPage() {
     setFolderName('');
     setNewFolderParentId(null);
     setIsNewFolderDialogOpen(false);
+    if (folders.length === 0) setCurrentFolderId(folder.id);
     refreshWorkspaceData(selectedProject);
     appendHistory(selectedProject, 'Pasta criada', folder.name);
   };
@@ -1413,6 +1425,7 @@ export default function ProjectsPage() {
     if (type === 'file' || type === 'document') {
       setEditingMaterialId(null);
       setEditingDriveFileId('');
+      setSelectedMaterialFile(null);
       setIsAdvancedDetailsOpen(false);
       setFileForm(createMaterialDraft({
         materialType: type === 'document' ? 'documento' : 'arquivo',
@@ -1452,33 +1465,60 @@ export default function ProjectsPage() {
     setCurrentFolderId(current?.parentId || null);
   };
 
+  const selectMaterialFile = (file) => {
+    if (!file) return;
+    if (file.size > MATERIAL_UPLOAD_MAX_BYTES) {
+      setSelectedMaterialFile(null);
+      toast.error('Este arquivo e maior que o limite permitido de 25 MB.');
+      return;
+    }
+    setSelectedMaterialFile(file);
+    setFileForm((current) => ({
+      ...current,
+      name: current.name || getFileTitle(file.name),
+    }));
+  };
+
   const handleSaveMaterial = async () => {
-    if (!selectedProject) return;
+    if (!selectedProject || isSyncingDriveMaterial || materialSaveLockRef.current) return;
 
     const topFolderSuggestion = folderSuggestions[0] || null;
     const autoSuggestionApplied = !fileForm.folder && Boolean(topFolderSuggestion?.folder);
     const relatedTaskId = fileForm.relatedTaskId && fileForm.relatedTaskId !== 'none' ? fileForm.relatedTaskId : '';
     const inferredFolder = fileForm.folder || topFolderSuggestion?.folder || '';
     const selectedFolderEntry = folders.find((folder) => folderPathMap[folder.id] === inferredFolder);
-    const sourceUrl = normalizeText(fileForm.externalLink);
     const shouldSyncInDrive = fileForm.materialType === 'documento';
-    const provider = shouldSyncInDrive ? 'google_drive' : 'external_link';
+    const shouldUploadFile = fileForm.materialType === 'arquivo' && Boolean(selectedMaterialFile);
+    const isNewFileWithoutUpload = fileForm.materialType === 'arquivo' && !editingMaterialId && !selectedMaterialFile;
+    const provider = shouldSyncInDrive || fileForm.materialType === 'arquivo' ? 'google_drive' : 'external_link';
+    const existingMaterial = editingMaterialId ? files.find((item) => item.id === editingMaterialId) : null;
 
     let driveSyncResult = null;
 
-    if (shouldSyncInDrive) {
-      if (!driveConnectionStatus?.connected) {
-        toast.error('Conecte o Google Drive antes de criar/atualizar documentos automaticamente.');
-        return;
-      }
+    if (isNewFileWithoutUpload) {
+      toast.error('Selecione um arquivo para enviar ao Google Drive.');
+      return;
+    }
 
-      if (!normalizeText(fileForm.name)) {
-        toast.error('Informe o nome do material para sincronizar no Google Drive.');
-        return;
-      }
+    if ((shouldSyncInDrive || shouldUploadFile) && !driveConnectionStatus?.connected) {
+      toast.error('Conecte o Google Drive antes de salvar este material.');
+      return;
+    }
 
-      try {
-        setIsSyncingDriveMaterial(true);
+    if (shouldUploadFile && !selectedFolderEntry) {
+      toast.error('Escolha uma pasta para enviar o arquivo ao Google Drive.');
+      return;
+    }
+
+    materialSaveLockRef.current = true;
+    try {
+      setIsSyncingDriveMaterial(true);
+      if (shouldSyncInDrive) {
+        if (!normalizeText(fileForm.name)) {
+          toast.error('Informe o nome do material para sincronizar no Google Drive.');
+          return;
+        }
+
         if (selectedFolderEntry) {
           await syncFolderHierarchyWithDrive(selectedFolderEntry);
         }
@@ -1490,70 +1530,114 @@ export default function ProjectsPage() {
           fileName: normalizeText(fileForm.name),
           content: buildDriveDocumentContent(),
         }));
-      } catch (error) {
-        toast.error(error?.message || 'Nao foi possivel sincronizar o documento no Google Drive.');
-        return;
-      } finally {
-        setIsSyncingDriveMaterial(false);
       }
+
+      if (shouldUploadFile) {
+        await syncFolderHierarchyWithDrive(selectedFolderEntry);
+        driveSyncResult = await uploadGoogleDriveMaterial({
+          projectId: selectedProject,
+          projectName: selectedProject,
+          projectType: selectedProfile?.projectType || 'Administrativo',
+          folderId: selectedFolderEntry.id,
+          file: selectedMaterialFile,
+        });
+      }
+
+      const payload = {
+        ...fileForm,
+        projectId: selectedProject,
+        projectName: selectedProject,
+        tags: toArray(fileForm.tags),
+        relatedTaskId,
+        relatedTaskIds: relatedTaskId ? [relatedTaskId] : [],
+        folderId: selectedFolderEntry?.id || '',
+        folder: inferredFolder,
+        type: fileForm.type || fileForm.materialType,
+        provider,
+        storageProvider: provider,
+        driveFileId: driveSyncResult?.driveFileId || editingDriveFileId,
+        driveFolderId: driveSyncResult?.driveFolderId || existingMaterial?.driveFolderId || '',
+        mimeType: driveSyncResult?.mimeType,
+        size: driveSyncResult?.size,
+        uploadReceiptId: driveSyncResult?.receiptId,
+        uploadStatus: driveSyncResult?.receiptId ? 'pending_confirmation' : '',
+        url: driveSyncResult?.webViewLink || fileForm.externalLink,
+        externalLink: driveSyncResult?.webViewLink || fileForm.externalLink
+      };
+
+      let created;
+      const rollbackPendingUpload = async () => {
+        if (!driveSyncResult?.receiptId) return;
+        try {
+          await rollbackGoogleDriveMaterialUpload(driveSyncResult.receiptId);
+        } catch {
+          throw new Error('O material nao foi salvo no Clareia e o upload nao pode ser revertido. Remova o arquivo no Google Drive.');
+        }
+      };
+      try {
+        created = editingMaterialId
+          ? updateProjectFile(editingMaterialId, payload)
+          : createProjectFile(payload);
+      } catch (error) {
+        await rollbackPendingUpload();
+        throw error;
+      }
+
+      if (!created) {
+        await rollbackPendingUpload();
+        toast.error('Nao foi possivel salvar o material (nome e projeto sao obrigatorios).');
+        return;
+      }
+
+      if (driveSyncResult?.receiptId) {
+        try {
+          await confirmGoogleDriveMaterialUpload(driveSyncResult.receiptId);
+          updateProjectFile(created.id, { uploadStatus: 'confirmed' });
+        } catch {
+          toast.warning('O material foi salvo, mas a confirmacao do upload ficou pendente.');
+        }
+      }
+
+      setFileForm(createMaterialDraft());
+      setSelectedMaterialFile(null);
+      setEditingMaterialId(null);
+      setEditingDriveFileId('');
+      setIsAdvancedDetailsOpen(false);
+      setIsMaterialDialogOpen(false);
+      refreshWorkspaceData(selectedProject);
+
+      const baseAction = editingMaterialId ? 'Material atualizado' : 'Material cadastrado';
+      let historyDetails = created.name;
+      if (driveSyncResult?.driveFileId) {
+        historyDetails = `${historyDetails} | Google Drive: ${driveSyncResult.updated ? 'documento atualizado' : 'arquivo criado'}`;
+      }
+      if (autoSuggestionApplied && topFolderSuggestion) {
+        const confidenceLabel = topFolderSuggestion.confidence === 'alta'
+          ? 'alta'
+          : topFolderSuggestion.confidence === 'media'
+            ? 'media'
+            : 'baixa';
+        historyDetails = `${created.name} | Pasta aplicada automaticamente: ${inferredFolder} | Confianca: ${confidenceLabel} | Motivo: ${topFolderSuggestion.reason}`;
+      }
+      appendHistory(selectedProject, baseAction, historyDetails);
+    } catch (error) {
+      toast.error(error?.message || 'Nao foi possivel salvar o material no Google Drive.');
+    } finally {
+      materialSaveLockRef.current = false;
+      setIsSyncingDriveMaterial(false);
     }
-
-    const payload = {
-      ...fileForm,
-      projectId: selectedProject,
-      projectName: selectedProject,
-      tags: toArray(fileForm.tags),
-      relatedTaskId,
-      relatedTaskIds: relatedTaskId ? [relatedTaskId] : [],
-      folderId: selectedFolderEntry?.id || '',
-      folder: inferredFolder,
-      type: fileForm.type || fileForm.materialType,
-      provider,
-      storageProvider: provider,
-      driveFileId: driveSyncResult?.driveFileId || editingDriveFileId,
-      driveFolderId: driveSyncResult?.driveFolderId || '',
-      url: driveSyncResult?.webViewLink || fileForm.externalLink,
-      externalLink: driveSyncResult?.webViewLink || fileForm.externalLink
-    };
-
-    const created = editingMaterialId
-      ? updateProjectFile(editingMaterialId, payload)
-      : createProjectFile(payload);
-
-    if (!created) {
-      toast.error('Nao foi possivel salvar o material (nome e projeto sao obrigatorios).');
-      return;
-    }
-
-    setFileForm(createMaterialDraft());
-    setEditingMaterialId(null);
-    setEditingDriveFileId('');
-    setIsAdvancedDetailsOpen(false);
-    setIsMaterialDialogOpen(false);
-    refreshWorkspaceData(selectedProject);
-
-    const baseAction = editingMaterialId ? 'Material atualizado' : 'Material cadastrado';
-    let historyDetails = created.name;
-    if (driveSyncResult?.driveFileId) {
-      historyDetails = `${historyDetails} | Google Drive: ${driveSyncResult.updated ? 'documento atualizado' : 'documento criado'}`;
-    }
-    if (autoSuggestionApplied && topFolderSuggestion) {
-      const confidenceLabel = topFolderSuggestion.confidence === 'alta'
-        ? 'alta'
-        : topFolderSuggestion.confidence === 'media'
-          ? 'media'
-          : 'baixa';
-      historyDetails = `${created.name} | Pasta aplicada automaticamente: ${inferredFolder} | Confianca: ${confidenceLabel} | Motivo: ${topFolderSuggestion.reason}`;
-    }
-    appendHistory(selectedProject, baseAction, historyDetails);
   };
 
   const handleEditMaterial = (material) => {
     rememberMaterialDialogTrigger();
     const materialType = String(material.materialType || material.type || 'arquivo').toLocaleLowerCase('pt-BR');
     const provider = material.provider || material.storageProvider || 'external_link';
-    const normalizedMaterialType = materialType.includes('document') || provider.includes('google_drive')
+    const normalizedMaterialType = materialType.includes('document')
       ? 'documento'
+      : materialType.includes('arquivo')
+        ? 'arquivo'
+        : provider.includes('google_drive')
+          ? 'documento'
       : materialType.includes('link')
       ? 'link'
       : materialType.includes('nota')
@@ -1563,6 +1647,7 @@ export default function ProjectsPage() {
           : 'arquivo';
     setEditingMaterialId(material.id);
     setEditingDriveFileId(material.driveFileId || '');
+    setSelectedMaterialFile(null);
     setFileForm({
       materialType: normalizedMaterialType,
       name: material.name || '',
@@ -2665,6 +2750,7 @@ export default function ProjectsPage() {
                         folderItemCounters={folderItemCounters}
                         currentFolder={currentFolder}
                         currentFolderPath={currentFolderPath}
+                        currentFolderBreadcrumb={currentFolderBreadcrumb}
                         foldersInCurrentLevel={foldersInCurrentLevel}
                         driveState={drivePresentationState}
                         driveFolder={projectDriveConfig}
@@ -3404,6 +3490,7 @@ export default function ProjectsPage() {
             setIsMaterialDialogOpen(open);
             if (!open) {
               setFileForm(createMaterialDraft());
+              setSelectedMaterialFile(null);
               setEditingMaterialId(null);
               setEditingDriveFileId('');
               setIsAdvancedDetailsOpen(false);
@@ -3420,13 +3507,16 @@ export default function ProjectsPage() {
                 <Label>Tipo</Label>
                 <Select
                   value={fileForm.materialType}
-                  onValueChange={(value) => setFileForm((current) => ({
-                    ...current,
-                    materialType: value,
-                    type: value,
-                    externalLink: value === 'documento' ? '' : current.externalLink,
-                    autoSyncDrive: value === 'documento' && Boolean(driveConnectionStatus?.connected),
-                  }))}
+                  onValueChange={(value) => {
+                    setSelectedMaterialFile(null);
+                    setFileForm((current) => ({
+                      ...current,
+                      materialType: value,
+                      type: value,
+                      externalLink: value === 'documento' ? '' : current.externalLink,
+                      autoSyncDrive: value === 'documento' && Boolean(driveConnectionStatus?.connected),
+                    }));
+                  }}
                 >
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -3441,10 +3531,10 @@ export default function ProjectsPage() {
               </div>
               <div className="space-y-2">
                 <Label>Pasta</Label>
-                <Select value={fileForm.folder || 'none'} onValueChange={(value) => setFileForm((current) => ({ ...current, folder: value === 'none' ? '' : value }))}>
+                <Select value={fileForm.folder || 'none'} disabled={fileForm.materialType === 'arquivo' && Boolean(editingMaterialId)} onValueChange={(value) => setFileForm((current) => ({ ...current, folder: value === 'none' ? '' : value }))}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="none">Sem pasta</SelectItem>
+                    <SelectItem value="none">{fileForm.materialType === 'arquivo' ? 'Selecione uma pasta' : 'Sem pasta'}</SelectItem>
                     {folders.map((folder) => <SelectItem key={folder.id} value={folderPathMap[folder.id]}>{folderPathMap[folder.id]}</SelectItem>)}
                   </SelectContent>
                 </Select>
@@ -3453,6 +3543,45 @@ export default function ProjectsPage() {
                 <div className="space-y-2 md:col-span-2">
                   <Label>Endereço do arquivo</Label>
                   <Input value={fileForm.externalLink} onChange={(event) => setFileForm((current) => ({ ...current, externalLink: event.target.value }))} placeholder="https://..." />
+                </div>
+              )}
+              {materialFormVisibility.showFileUpload && !editingMaterialId && (
+                <div className="space-y-2 md:col-span-2">
+                  <Label htmlFor="material-file">Arquivo</Label>
+                  <div
+                    className="rounded-lg border border-dashed border-border bg-muted/20 p-4"
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      selectMaterialFile(event.dataTransfer.files?.[0]);
+                    }}
+                  >
+                    <input
+                      id="material-file"
+                      type="file"
+                      className="sr-only"
+                      accept={MATERIAL_UPLOAD_ACCEPT}
+                      onChange={(event) => selectMaterialFile(event.target.files?.[0])}
+                    />
+                    {selectedMaterialFile ? (
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium">{selectedMaterialFile.name}</p>
+                          <p className="text-xs text-muted-foreground">{selectedMaterialFile.type || 'Tipo identificado no envio'} · {formatMaterialFileSize(selectedMaterialFile.size)}</p>
+                        </div>
+                        <div className="flex gap-2">
+                          <Label htmlFor="material-file" className="inline-flex h-9 cursor-pointer items-center rounded-md border border-input bg-background px-3 text-sm font-medium hover:bg-accent">Trocar arquivo</Label>
+                          <Button type="button" size="icon" variant="ghost" onClick={() => setSelectedMaterialFile(null)} aria-label="Remover arquivo selecionado"><X className="h-4 w-4" /></Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <Label htmlFor="material-file" className="flex cursor-pointer flex-col items-center gap-2 py-4 text-center">
+                        <Upload className="h-5 w-5 text-primary" />
+                        <span className="text-sm font-medium">Selecionar arquivo</span>
+                        <span className="text-xs text-muted-foreground">PDF, Office, texto, imagem ou ZIP · até 25 MB</span>
+                      </Label>
+                    )}
+                  </div>
                 </div>
               )}
               {materialFormVisibility.showContent && (
@@ -3551,8 +3680,17 @@ export default function ProjectsPage() {
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setIsMaterialDialogOpen(false)}>Cancelar</Button>
-              <Button onClick={handleSaveMaterial} disabled={isSyncingDriveMaterial || (fileForm.materialType === 'documento' && !driveConnectionStatus?.connected)}>
-                {isSyncingDriveMaterial ? 'Sincronizando...' : editingMaterialId ? 'Salvar alterações' : 'Adicionar'}
+              <Button
+                onClick={handleSaveMaterial}
+                disabled={isSyncingDriveMaterial
+                  || ((fileForm.materialType === 'documento' || fileForm.materialType === 'arquivo') && !driveConnectionStatus?.connected)
+                  || (fileForm.materialType === 'arquivo' && !editingMaterialId && (!selectedMaterialFile || !fileForm.folder))}
+              >
+                {isSyncingDriveMaterial
+                  ? fileForm.materialType === 'arquivo' ? 'Enviando...' : 'Sincronizando...'
+                  : editingMaterialId
+                    ? 'Salvar alterações'
+                    : fileForm.materialType === 'arquivo' ? 'Enviar para o Drive' : 'Criar no Drive'}
               </Button>
             </DialogFooter>
           </DialogContent>

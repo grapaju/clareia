@@ -132,3 +132,17 @@ test('materiais locais são isolados por usuário', () => {
   assert.equal(accesses.listProjectAccesses('IDT-PR').length, 1);
   assert.equal(accesses.deleteProjectAccess(accesses.listProjectAccesses('IDT-PR')[0].id), true);
 });
+
+test('persiste MIME e tamanho do arquivo retornados pelo Drive', () => {
+  resetStorage();
+  const file = files.createProjectFile({
+    projectName: 'Clareia',
+    name: 'Contrato.pdf',
+    provider: 'google_drive',
+    mimeType: 'application/pdf',
+    size: 2048,
+  });
+
+  assert.equal(file.mimeType, 'application/pdf');
+  assert.equal(file.size, 2048);
+});

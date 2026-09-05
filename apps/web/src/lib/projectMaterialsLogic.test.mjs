@@ -6,8 +6,11 @@ import {
   buildDriveDocumentPayload,
   createMaterialDraft,
   filterProjectItems,
+  formatMaterialFileSize,
+  getFileTitle,
   getFolderHierarchy,
   getMaterialFormVisibility,
+  getMaterialsEmptyState,
   getDrivePresentationState,
   getFavoriteProjectItems,
   getMaterialFilterOptions,
@@ -123,8 +126,15 @@ test('campos do formulario reagem ao tipo sem expor ids tecnicos', () => {
   assert.equal(documentFields.showDriveDestination, true);
   assert.equal(documentFields.showConnectDrive, false);
   assert.equal(documentFields.showTechnicalDriveFields, false);
-  assert.equal(fileFields.showDriveDestination, false);
+  assert.equal(fileFields.showDriveDestination, true);
+  assert.equal(fileFields.showFileUpload, true);
+  assert.equal(fileFields.showExternalFileUrl, false);
   assert.equal(linkFields.showDriveDestination, false);
+});
+
+test('arquivo local gera titulo e metadados legiveis', () => {
+  assert.equal(getFileTitle('Contrato.final.pdf'), 'Contrato.final');
+  assert.equal(formatMaterialFileSize(1536), '1,5 KB');
 });
 
 test('payload do documento envia folderId interno sem driveFolderId', () => {
@@ -139,4 +149,16 @@ test('payload do documento envia folderId interno sem driveFolderId', () => {
 
   assert.equal(payload.folderId, 'folder-history');
   assert.equal(Object.hasOwn(payload, 'driveFolderId'), false);
+});
+
+test('estado inicial conduz primeiro à criação de pasta', () => {
+  const empty = getMaterialsEmptyState({ folderCount: 0 });
+  assert.equal(empty.title, 'Organize os materiais deste projeto');
+  assert.equal(empty.actionType, 'folder');
+});
+
+test('pasta vazia conduz ao primeiro material', () => {
+  const empty = getMaterialsEmptyState({ folderCount: 2, currentFolder: { id: 'docs' } });
+  assert.equal(empty.title, 'Esta pasta ainda está vazia.');
+  assert.equal(empty.action, 'Adicionar primeiro material');
 });

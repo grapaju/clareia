@@ -3,14 +3,14 @@ import assert from 'node:assert/strict';
 import { startServer } from './main.js';
 import { pool, runQuery } from './db/postgres.js';
 
-async function api(baseUrl, path, { token = '', method = 'GET', body } = {}) {
+async function api(baseUrl, path, { token = '', method = 'GET', body, formData } = {}) {
   const response = await globalThis.fetch(`${baseUrl}${path}`, {
     method,
     headers: {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(body ? { 'Content-Type': 'application/json' } : {}),
+      ...(body && !formData ? { 'Content-Type': 'application/json' } : {}),
     },
-    ...(body ? { body: JSON.stringify(body) } : {}),
+    ...(formData ? { body: formData } : body ? { body: JSON.stringify(body) } : {}),
   });
   const payload = response.status === 204 ? null : await response.json();
   return { status: response.status, payload };
@@ -129,6 +129,45 @@ test('isola dados, materiais e Google Drive entre usuários A e B', async (conte
      ) VALUES ($1, $2, $3, $4, $5, $6)`,
     [userA.user.id, 'Projeto A', 'folder-history-a', 'Historico', 'drive-history-a', 'https://drive.google.com/drive/folders/drive-history-a']
   );
+
+  const materialForm = ({ projectId, folderId, type = 'text/plain', size = 8 }) => {
+    const form = new globalThis.FormData();
+    form.append('projectId', projectId);
+    if (folderId) form.append('folderId', folderId);
+    const content = size > 1024 ? new Uint8Array(size) : 'conteudo'.padEnd(size, 'a');
+    form.append('file', new globalThis.Blob([content], { type }), 'material.txt');
+    return form;
+  };
+
+  assert.equal((await api(baseUrl, '/google-drive/materials/upload', {
+    token: userA.token,
+    method: 'POST',
+    formData: materialForm({ projectId: 'Projeto A' }),
+  })).status, 400);
+
+  assert.equal((await api(baseUrl, '/google-drive/materials/upload', {
+    token: userA.token,
+    method: 'POST',
+    formData: materialForm({ projectId: 'Projeto A secundario', folderId: 'folder-history-a' }),
+  })).status, 403);
+
+  assert.equal((await api(baseUrl, '/google-drive/materials/upload', {
+    token: userB.token,
+    method: 'POST',
+    formData: materialForm({ projectId: 'Projeto B', folderId: 'folder-history-a' }),
+  })).status, 404);
+
+  assert.equal((await api(baseUrl, '/google-drive/materials/upload', {
+    token: userA.token,
+    method: 'POST',
+    formData: materialForm({ projectId: 'Projeto A', folderId: 'folder-history-a', type: 'application/javascript' }),
+  })).status, 415);
+
+  assert.equal((await api(baseUrl, '/google-drive/materials/upload', {
+    token: userA.token,
+    method: 'POST',
+    formData: materialForm({ projectId: 'Projeto A', folderId: 'folder-history-a', size: (25 * 1024 * 1024) + 1 }),
+  })).status, 413);
 
   const crossProjectFolder = await api(baseUrl, '/google-drive/documents/sync', {
     token: userA.token,
