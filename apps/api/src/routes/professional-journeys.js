@@ -42,7 +42,6 @@ function mapActivity(row) {
     id: row.id,
     journeyId: row.journey_id,
     projectName: row.project_name,
-    taskId: row.task_id || null,
     title: row.title,
     category: row.category,
     source: row.source,
@@ -66,8 +65,6 @@ function mapJourney(row) {
     grossMinutes: Number(row.gross_minutes || 0),
     pauseMinutes: Number(row.pause_minutes || 0),
     netMinutes: Number(row.net_minutes || 0),
-    activityMinutes: Number(row.activity_minutes || 0),
-    unclassifiedMinutes: Math.max(0, Number(row.net_minutes || 0) - Number(row.activity_minutes || 0)),
   };
 }
 
@@ -86,14 +83,7 @@ const journeyProjection = `
         FROM professional_journey_pauses AS pause
         WHERE pause.journey_id = journey.id AND pause.user_id = journey.user_id
       ), 0)
-    ) AS net_minutes,
-    COALESCE((
-      SELECT SUM(CASE WHEN activity.ended_at IS NULL
-        THEN GREATEST(0, ROUND(EXTRACT(EPOCH FROM (now() - activity.started_at)) / 60))
-        ELSE activity.duration_minutes END)
-      FROM professional_activities AS activity
-      WHERE activity.journey_id = journey.id AND activity.user_id = journey.user_id
-    ), 0) AS activity_minutes
+    ) AS net_minutes
   FROM professional_journeys AS journey`;
 
 async function loadJourney(client, journeyId, userId, forUpdate = false) {
@@ -124,7 +114,7 @@ router.get('/', async (req, res) => {
   const startDate = req.query?.startDate ? isoDate(`${req.query.startDate}T00:00:00`) : null;
   const endDate = req.query?.endDate ? isoDate(`${req.query.endDate}T23:59:59.999`) : null;
   const params = [req.userId, projectName, startDate, endDate];
-  const [journeys, activities, edits] = await Promise.all([
+  const [journeys, pauses, activities, edits] = await Promise.all([
     runQuery(
       `${journeyProjection}
        WHERE journey.user_id = $1
@@ -132,6 +122,16 @@ router.get('/', async (req, res) => {
          AND ($3::timestamptz IS NULL OR COALESCE(journey.ended_at, now()) >= $3)
          AND ($4::timestamptz IS NULL OR journey.started_at <= $4)
        ORDER BY journey.started_at DESC`, params
+    ),
+    runQuery(
+      `SELECT pause.id, pause.journey_id, pause.category, pause.started_at, pause.ended_at
+       FROM professional_journey_pauses AS pause
+       JOIN professional_journeys AS journey ON journey.id = pause.journey_id AND journey.user_id = pause.user_id
+       WHERE pause.user_id = $1
+         AND ($2 = '' OR lower(journey.project_name) = lower($2))
+         AND ($3::timestamptz IS NULL OR COALESCE(pause.ended_at, now()) >= $3)
+         AND ($4::timestamptz IS NULL OR pause.started_at <= $4)
+       ORDER BY pause.started_at DESC`, params
     ),
     runQuery(
       `SELECT * FROM professional_activities
@@ -154,6 +154,10 @@ router.get('/', async (req, res) => {
   ]);
   res.json({
     journeys: journeys.rows.map(mapJourney),
+    pauses: pauses.rows.map((row) => ({
+      id: row.id, journeyId: row.journey_id, category: row.category || '',
+      startedAt: row.started_at, endedAt: row.ended_at,
+    })),
     activities: activities.rows.map(mapActivity),
     edits: edits.rows.map((row) => ({
       id: row.id, activityId: row.activity_id, previousData: row.previous_data,
@@ -235,7 +239,6 @@ router.post('/:journeyId/pause', async (req, res) => {
     const journey = await loadJourney(client, req.params.journeyId, req.userId, true);
     if (journey.status === 'paused') return journey;
     if (journey.status !== 'active') throw httpError(409, 'A jornada ja foi encerrada.');
-    await closeActiveActivity(client, req.userId, pausedAt);
     await client.query(
       `INSERT INTO professional_journey_pauses (id, journey_id, user_id, category, started_at)
        VALUES ($1, $2, $3, $4, $5)`,
@@ -274,7 +277,6 @@ router.post('/:journeyId/close', async (req, res) => {
     const journey = await loadJourney(client, req.params.journeyId, req.userId, true);
     if (journey.status === 'closed') return journey;
     if (new Date(endedAt) < new Date(journey.started_at)) throw httpError(400, 'O encerramento deve ocorrer depois do inicio.');
-    await closeActiveActivity(client, req.userId, endedAt);
     await client.query(
       `UPDATE professional_journey_pauses SET ended_at = $1, updated_at = now()
        WHERE journey_id = $2 AND user_id = $3 AND ended_at IS NULL`, [endedAt, journey.id, req.userId]
@@ -291,7 +293,7 @@ router.post('/:journeyId/close', async (req, res) => {
 
 router.post('/:journeyId/activities', async (req, res) => {
   const title = text(req.body?.title);
-  const source = ['task', 'quick', 'manual', 'timer'].includes(req.body?.source) ? req.body.source : 'quick';
+  const source = ['quick', 'manual'].includes(req.body?.source) ? req.body.source : 'quick';
   const startedAt = isoDate(req.body?.startedAt);
   const endedAt = source === 'manual' ? isoDate(req.body?.endedAt) : null;
   const idempotencyKey = text(req.body?.idempotencyKey);
@@ -305,10 +307,6 @@ router.post('/:journeyId/activities', async (req, res) => {
     if (new Date(startedAt) < new Date(journey.started_at)) throw httpError(400, 'A atividade deve ocorrer dentro da jornada.');
     if (source === 'manual' && journey.ended_at && new Date(endedAt) > new Date(journey.ended_at)) {
       throw httpError(400, 'A atividade deve ocorrer dentro da jornada.');
-    }
-    if (req.body?.taskId) {
-      const task = await client.query('SELECT id FROM tasks WHERE id = $1 AND user_id = $2', [text(req.body.taskId), req.userId]);
-      if (!task.rows[0]) throw httpError(404, 'Tarefa nao encontrada.');
     }
     if (idempotencyKey) {
       const existing = await client.query(
@@ -328,7 +326,7 @@ router.post('/:journeyId/activities', async (req, res) => {
          CASE WHEN $12::timestamptz IS NULL THEN 0 ELSE GREATEST(0, ROUND(EXTRACT(EPOCH FROM ($12::timestamptz - $11::timestamptz)) / 60)) END,
          $13, $14) RETURNING *`,
       [id, journey.id, req.userId, text(req.authUser?.accountId), journey.project_name,
-       text(req.body?.taskId) || null, text(req.body?.workSessionId) || null, title, category,
+       null, null, title, category,
        source, startedAt, endedAt, text(req.body?.notes), idempotencyKey]
     );
     return { row: created.rows[0], alreadyRecorded: false };

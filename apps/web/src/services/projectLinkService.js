@@ -1,6 +1,7 @@
 const STORAGE_KEY = 'clareia_project_links_v1';
 import { appendProjectHistory } from './projectHistoryService.js';
 import { readUserScopedJson, writeUserScopedJson } from '../lib/userScopedStorage.js';
+import { notifyProjectMaterialsUpdated } from './projectMaterialOrganizationService.js';
 
 const LINK_TYPES = [
   'site',
@@ -21,6 +22,7 @@ function readAll() {
 
 function writeAll(items) {
   writeUserScopedJson(STORAGE_KEY, items);
+  notifyProjectMaterialsUpdated();
 }
 
 function uid(prefix = 'link') {
@@ -63,11 +65,12 @@ export function createProjectLink(payload) {
     favorite: Boolean(payload.favorite),
     storageProvider: payload.storageProvider || 'external_link',
     relatedTaskIds: toArray(payload.relatedTaskIds),
+    organizationStatus: String(payload.organizationStatus || '').trim(),
     createdAt: now,
     updatedAt: now
   };
 
-  if (!item.projectName || !item.title || !item.url) return null;
+  if (!item.projectName || !item.url) return null;
   const items = readAll();
   items.push(item);
   writeAll(items);

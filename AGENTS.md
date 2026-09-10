@@ -45,6 +45,7 @@ npm run test:calendar-date --prefix apps/web
 ## Convenções de código do projeto
 
 - Frontend concentra regras de priorização/agendamento em libs de domínio, não em componentes de UI.
+- Jornada profissional controla somente carga horária (`professional_journeys` + pausas); tarefas e seus tempos usam `tasks` + `workSessionService`. Nunca derive saldo, progresso ou tempo sem tarefa comparando esses módulos.
 - Backend usa middleware para autenticação JWT e rate-limit; manter lógica transversal em `apps/api/src/middleware`.
 - Mudanças de schema PostgreSQL devem ser idempotentes e feitas em `apps/api/src/db/init.js`.
 

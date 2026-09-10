@@ -35,8 +35,10 @@ import { listDailyWrapUps } from '@/services/dailyWrapUpService.js';
 import { toast } from 'sonner';
 import { formatDurationFriendly, pluralizeCount } from '@/lib/reportFormatting.js';
 import { normalizeTaskStatus, TASK_STATUS } from '@/lib/taskExecution.js';
-import { createProfessionalActivity, listProfessionalJourneys, updateProfessionalActivity } from '@/services/professionalJourneyApiService.js';
-import { PROFESSIONAL_CATEGORIES, professionalActivitiesToCsv } from '@/lib/professionalJourneyLogic.js';
+import { listProfessionalJourneys } from '@/services/professionalJourneyApiService.js';
+import { buildWorkdayReport } from '@/lib/professionalJourneyLogic.js';
+import { buildTaskTimeReport } from '@/lib/taskTimeReportLogic.js';
+import { useProfessionalJourney } from '@/contexts/ProfessionalJourneyContext.jsx';
 
 function formatDateTime(value) {
   if (!value) return '-';
@@ -50,32 +52,27 @@ function formatDateInputValue(value) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate()).toISOString().split('T')[0];
 }
 
-function formatDateTimeInputValue(value) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  date.setMinutes(date.getMinutes() - date.getTimezoneOffset());
-  return date.toISOString().slice(0, 16);
+function formatSignedDuration(minutes) {
+  const value = Number(minutes || 0);
+  if (value === 0) return '0h';
+  return `${value > 0 ? '+' : '-'}${formatDurationFriendly(Math.abs(value))}`;
 }
 
 export default function ReportsPage() {
   const { currentUser } = useAuth();
   const { tasks } = useTaskContext();
+  const { professionalProjects } = useProfessionalJourney();
   const [projectFilter, setProjectFilter] = useState('all');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [taskTypeFilter, setTaskTypeFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [categoryFilter, setCategoryFilter] = useState('all');
   const [sourceFilter, setSourceFilter] = useState('all');
   const [journeyStatusFilter, setJourneyStatusFilter] = useState('all');
-  const [professionalData, setProfessionalData] = useState({ journeys: [], activities: [], edits: [] });
+  const [professionalData, setProfessionalData] = useState({ journeys: [], pauses: [] });
   const [isManualTimeOpen, setIsManualTimeOpen] = useState(false);
   const [sessionToDelete, setSessionToDelete] = useState(null);
   const [editingSession, setEditingSession] = useState(null);
-  const [editingProfessionalActivity, setEditingProfessionalActivity] = useState(null);
-  const [professionalEditForm, setProfessionalEditForm] = useState({
-    title: '', category: 'Outro', startedAt: '', endedAt: '', notes: '', reason: '',
-  });
   const [editSessionForm, setEditSessionForm] = useState({
     projectId: '',
     startedAtDate: '',
@@ -89,8 +86,8 @@ export default function ReportsPage() {
   useEffect(() => {
     if (!currentUser?.id) return;
     listProfessionalJourneys()
-      .then((data) => setProfessionalData(data || { journeys: [], activities: [], edits: [] }))
-      .catch(() => setProfessionalData({ journeys: [], activities: [], edits: [] }));
+      .then((data) => setProfessionalData(data || { journeys: [], pauses: [] }))
+      .catch(() => setProfessionalData({ journeys: [], pauses: [] }));
   }, [currentUser?.id, sessionVersion]);
 
   const escapeCsv = (value) => {
@@ -127,26 +124,18 @@ export default function ReportsPage() {
     return true;
   }), [professionalData.journeys, projectFilter, startDate, endDate, journeyStatusFilter]);
 
-  const professionalJourneyIds = useMemo(() => new Set(professionalJourneyRows.map((journey) => journey.id)), [professionalJourneyRows]);
-  const professionalRows = useMemo(() => professionalData.activities.filter((activity) => {
-    if (!professionalJourneyIds.has(activity.journeyId)) return false;
-    if (categoryFilter !== 'all' && activity.category !== categoryFilter) return false;
-    if (sourceFilter !== 'all' && activity.source !== sourceFilter) return false;
-    return true;
-  }), [professionalData.activities, professionalJourneyIds, categoryFilter, sourceFilter]);
-
-  const professionalTotals = useMemo(() => {
-    const categoryMinutes = professionalRows.reduce((totalsByCategory, activity) => {
-      totalsByCategory[activity.category] = (totalsByCategory[activity.category] || 0) + Number(activity.durationMinutes || 0);
-      return totalsByCategory;
-    }, {});
-    return {
-      netMinutes: professionalJourneyRows.reduce((total, journey) => total + Number(journey.netMinutes || 0), 0),
-      classifiedMinutes: professionalRows.reduce((total, activity) => total + Number(activity.durationMinutes || 0), 0),
-      unclassifiedMinutes: professionalJourneyRows.reduce((total, journey) => total + Number(journey.unclassifiedMinutes || 0), 0),
-      categoryMinutes,
-    };
-  }, [professionalJourneyRows, professionalRows]);
+  const workdayWeeklyTarget = useMemo(() => professionalProjects
+    .filter((profile) => projectFilter === 'all' || profile.name === projectFilter)
+    .reduce((total, profile) => total + Number(profile.weeklyTargetMinutes || 0), 0), [professionalProjects, projectFilter]);
+  const workdayTimeZone = professionalProjects.find((profile) => profile.name === projectFilter)?.timezone
+    || professionalProjects[0]?.timezone
+    || Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const workdayReport = useMemo(() => buildWorkdayReport({
+    journeys: professionalJourneyRows,
+    pauses: professionalData.pauses || [],
+    weeklyTargetMinutes: workdayWeeklyTarget,
+    timeZone: workdayTimeZone,
+  }), [professionalData.pauses, professionalJourneyRows, workdayTimeZone, workdayWeeklyTarget]);
 
   const taskTypeOptions = useMemo(() => {
     const set = new Set();
@@ -173,9 +162,10 @@ export default function ReportsPage() {
         if (endDate && new Date(session.startedAt) > new Date(`${endDate}T23:59:59`)) return false;
         if (taskTypeFilter !== 'all' && session.taskType !== taskTypeFilter) return false;
         if (statusFilter !== 'all' && session.taskStatus !== statusFilter) return false;
+          if (sourceFilter !== 'all' && session.source !== sourceFilter) return false;
         return true;
       });
-  }, [allSessions, taskById, projectFilter, startDate, endDate, taskTypeFilter, statusFilter]);
+        }, [allSessions, taskById, projectFilter, startDate, endDate, taskTypeFilter, statusFilter, sourceFilter]);
 
   const completedEvents = useMemo(() => {
     return allHistory.filter((event) => {
@@ -194,18 +184,17 @@ export default function ReportsPage() {
     });
   }, [allHistory, projectFilter, startDate, endDate, taskTypeFilter, statusFilter, taskById]);
 
-  const totals = useMemo(() => {
-    const totalMinutes = sessionRows.reduce((sum, item) => sum + Number(item.durationMinutes || 0), 0);
+  const taskTimeReport = useMemo(() => buildTaskTimeReport(sessionRows), [sessionRows]);
+  const taskTotals = useMemo(() => {
     const completedTaskIds = new Set(completedEvents.map((event) => event.taskId));
-    const workedProjects = new Set(sessionRows.map((item) => item.projectId || 'Pessoal'));
 
     return {
-      totalMinutes,
+      taskTrackedTime: taskTimeReport.taskTrackedTime,
       completedTasks: completedTaskIds.size,
-      sessions: sessionRows.length,
-      projectsWorked: workedProjects.size
+      sessions: taskTimeReport.sessionCount,
+      projectsWorked: taskTimeReport.byProject.length
     };
-  }, [sessionRows, completedEvents]);
+  }, [completedEvents, taskTimeReport]);
 
   const wrapUpRows = useMemo(() => {
     return allWrapUps.filter((item) => {
@@ -230,45 +219,20 @@ export default function ReportsPage() {
   }, [wrapUpRows]);
 
   const perProjectRows = useMemo(() => {
-    const accumulator = {};
-
-    sessionRows.forEach((session) => {
-      const key = session.projectId || 'Pessoal';
-      if (!accumulator[key]) {
-        accumulator[key] = {
-          project: key,
-          minutes: 0,
-          sessions: 0,
-          completedTaskIds: new Set()
-        };
-      }
-
-      accumulator[key].minutes += Number(session.durationMinutes || 0);
-      accumulator[key].sessions += 1;
-    });
-
+    const completedByProject = new Map();
     completedEvents.forEach((event) => {
-      const key = event.projectId || 'Pessoal';
-      if (!accumulator[key]) {
-        accumulator[key] = {
-          project: key,
-          minutes: 0,
-          sessions: 0,
-          completedTaskIds: new Set()
-        };
-      }
-      accumulator[key].completedTaskIds.add(event.taskId);
+      const project = event.projectId || 'Pessoal';
+      const ids = completedByProject.get(project) || new Set();
+      ids.add(event.taskId);
+      completedByProject.set(project, ids);
     });
+    return taskTimeReport.byProject.map((row) => ({
+      ...row,
+      tasksDone: completedByProject.get(row.project)?.size || 0,
+    }));
+  }, [completedEvents, taskTimeReport.byProject]);
 
-    return Object.values(accumulator)
-      .map((item) => ({
-        project: item.project,
-        minutes: item.minutes,
-        sessions: item.sessions,
-        tasksDone: item.completedTaskIds.size
-      }))
-      .sort((a, b) => b.minutes - a.minutes);
-  }, [sessionRows, completedEvents]);
+  const perTaskRows = taskTimeReport.byTask;
 
   const handleDeleteSession = () => {
     if (!sessionToDelete?.id) return;
@@ -314,55 +278,31 @@ export default function ReportsPage() {
     toast.success('Sessão atualizada.');
   };
 
-  const openProfessionalEdit = (activity) => {
-    setEditingProfessionalActivity(activity);
-    setProfessionalEditForm({
-      title: activity.title,
-      category: activity.category || 'Outro',
-      startedAt: formatDateTimeInputValue(activity.startedAt),
-      endedAt: formatDateTimeInputValue(activity.endedAt),
-      notes: activity.notes || '',
-      reason: '',
-    });
+  const downloadCsv = (content, fileName) => {
+    const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', fileName);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
-  const handleSaveProfessionalEdit = async () => {
-    if (!editingProfessionalActivity?.id || !professionalEditForm.reason.trim()) {
-      toast.error('Informe o motivo da correção.');
-      return;
-    }
-    try {
-      await updateProfessionalActivity(editingProfessionalActivity.id, {
-        title: professionalEditForm.title,
-        category: professionalEditForm.category,
-        startedAt: new Date(professionalEditForm.startedAt).toISOString(),
-        endedAt: new Date(professionalEditForm.endedAt).toISOString(),
-        notes: professionalEditForm.notes,
-        reason: professionalEditForm.reason,
-      });
-      setEditingProfessionalActivity(null);
-      setSessionVersion((value) => value + 1);
-      toast.success('Atividade corrigida com histórico preservado.');
-    } catch (error) {
-      toast.error(error?.message || 'Não foi possível corrigir a atividade.');
-    }
+  const handleExportWorkdayCsv = () => {
+    const lines = [['Data', 'Jornada (min)', 'Pausas (min)', 'Encerramentos'].join(';')];
+    workdayReport.dailyRows.forEach((row) => lines.push([
+      row.date,
+      row.workdayDuration,
+      row.pauseDuration,
+      row.closedWorkdays,
+    ].join(';')));
+    downloadCsv(lines.join('\n'), `clareia-jornada-${new Date().toISOString().split('T')[0]}.csv`);
+    toast.success('CSV de jornada exportado.');
   };
 
-  const handleExportCsv = () => {
-    if (professionalRows.length > 0) {
-      const csvContent = professionalActivitiesToCsv(professionalRows, Intl.DateTimeFormat().resolvedOptions().timeZone);
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', `clareia-jornada-profissional-${new Date().toISOString().split('T')[0]}.csv`);
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-      toast.success('CSV profissional exportado com sucesso.');
-      return;
-    }
+  const handleExportTaskCsv = () => {
     const header = [
       'Data',
       'Projeto',
@@ -391,29 +331,20 @@ export default function ReportsPage() {
       lines.push('Sem dados;Sem dados;Sem dados;0;0 min;Sem dados;Sem observacao');
     }
 
-    const csvContent = lines.join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', `clareia-relatorio-horas-${new Date().toISOString().split('T')[0]}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-    toast.success('CSV exportado com sucesso.');
+    downloadCsv(lines.join('\n'), `clareia-tarefas-${new Date().toISOString().split('T')[0]}.csv`);
+    toast.success('CSV de tarefas exportado.');
   };
 
   const handleCopySummary = async () => {
     const lines = [
-      'Resumo de horas - Clareia',
+      'Resumo de projetos e tarefas - Clareia',
       `Periodo: ${startDate || 'inicio'} ate ${endDate || 'hoje'}`,
       `Projeto: ${projectFilter === 'all' ? 'Todos' : projectFilter}`,
       '',
-      `Total de horas: ${formatDurationFriendly(totals.totalMinutes)}`,
-      pluralizeCount(totals.completedTasks, 'tarefa concluída', 'tarefas concluídas'),
-      pluralizeCount(totals.sessions, 'sessão registrada', 'sessões registradas'),
-      `Projetos com horas registradas: ${totals.projectsWorked}`,
+      `Tempo registrado em tarefas: ${formatDurationFriendly(taskTotals.taskTrackedTime)}`,
+      pluralizeCount(taskTotals.completedTasks, 'tarefa concluída', 'tarefas concluídas'),
+      pluralizeCount(taskTotals.sessions, 'sessão registrada', 'sessões registradas'),
+      `Projetos com tempo registrado: ${taskTotals.projectsWorked}`,
       '',
       'Total por projeto:'
     ];
@@ -428,10 +359,10 @@ export default function ReportsPage() {
 
     try {
       await navigator.clipboard.writeText(lines.join('\n'));
-      toast.success('Resumo copiado para a area de transferencia.');
+      toast.success('Resumo copiado.');
     } catch (error) {
       console.error(error);
-      toast.error('Nao foi possivel copiar o resumo.');
+      toast.error('Não consegui copiar o resumo. Tente novamente.');
     }
   };
 
@@ -474,7 +405,7 @@ export default function ReportsPage() {
         cursorY += 4;
       };
 
-      writeLine('Relatório de horas - Clareia', { fontSize: 16, bold: true });
+      writeLine('Relatórios de jornada e tarefas - Clareia', { fontSize: 16, bold: true });
       writeLine(`Gerado em: ${new Date().toLocaleString('pt-BR')}`);
       writeLine(`Período: ${startDate || 'início'} até ${endDate || 'hoje'}`);
       writeLine(`Projeto: ${projectFilter === 'all' ? 'Todos' : projectFilter}`);
@@ -483,23 +414,20 @@ export default function ReportsPage() {
 
       if (professionalJourneyRows.length > 0) {
         divider();
-        writeLine('Jornada profissional', { fontSize: 12, bold: true });
-        writeLine(`Período líquido trabalhado: ${formatDurationFriendly(professionalTotals.netMinutes)}`);
-        writeLine(`Tempo associado a atividades: ${formatDurationFriendly(professionalTotals.classifiedMinutes)}`);
-        writeLine(`Tempo sem atividade associada: ${formatDurationFriendly(professionalTotals.unclassifiedMinutes)}`);
-        Object.entries(professionalTotals.categoryMinutes).forEach(([category, minutes]) => {
-          writeLine(`${category}: ${formatDurationFriendly(minutes)}`);
-        });
-        writeLine('Principais atividades', { bold: true });
-        [...new Set(professionalRows.map((activity) => activity.title))].forEach((title) => writeLine(`- ${title}`));
+        writeLine('A) Relatório de jornada', { fontSize: 12, bold: true });
+        writeLine(`Jornada no período: ${formatDurationFriendly(workdayReport.workdayDuration)}`);
+        writeLine(`Pausas no período: ${formatDurationFriendly(workdayReport.pauseDuration)}`);
+        writeLine(`Semana atual: ${formatDurationFriendly(workdayReport.weekly.totalMinutes)} de ${formatDurationFriendly(workdayReport.weekly.targetMinutes)}`);
+        writeLine(`Saldo semanal: ${formatSignedDuration(workdayReport.weekly.balanceMinutes)}`);
+        workdayReport.dailyRows.forEach((row) => writeLine(`${row.date}: ${formatDurationFriendly(row.workdayDuration)} | pausas ${formatDurationFriendly(row.pauseDuration)} | ${pluralizeCount(row.closedWorkdays, 'encerramento', 'encerramentos')}`));
       }
 
       divider();
-      writeLine('Resumo executivo', { fontSize: 12, bold: true });
-      writeLine(`Total de horas: ${formatDurationFriendly(totals.totalMinutes)}`);
-      writeLine(pluralizeCount(totals.completedTasks, 'tarefa concluída', 'tarefas concluídas'));
-      writeLine(pluralizeCount(totals.sessions, 'sessão registrada', 'sessões registradas'));
-      writeLine(`Projetos com horas registradas: ${totals.projectsWorked}`);
+      writeLine('B) Relatório de projetos e tarefas', { fontSize: 12, bold: true });
+      writeLine(`Tempo registrado em tarefas: ${formatDurationFriendly(taskTotals.taskTrackedTime)}`);
+      writeLine(pluralizeCount(taskTotals.completedTasks, 'tarefa concluída', 'tarefas concluídas'));
+      writeLine(pluralizeCount(taskTotals.sessions, 'sessão registrada', 'sessões registradas'));
+      writeLine(`Projetos com tempo registrado: ${taskTotals.projectsWorked}`);
 
       divider();
       writeLine('Total por projeto', { fontSize: 12, bold: true });
@@ -524,10 +452,10 @@ export default function ReportsPage() {
       }
 
       doc.save(`clareia-relatorio-horas-${new Date().toISOString().split('T')[0]}.pdf`);
-      toast.success('PDF exportado com sucesso.');
+      toast.success('PDF exportado.');
     } catch (error) {
       console.error(error);
-      toast.error('Erro ao exportar PDF.');
+      toast.error('Não consegui gerar o PDF. Tente novamente em alguns instantes.');
     } finally {
       setIsExportingPdf(false);
     }
@@ -545,8 +473,8 @@ export default function ReportsPage() {
               <div className="flex items-center gap-3">
                 <BarChart3 className="w-8 h-8 text-primary" />
                 <div>
-                  <h1 className="text-3xl font-medium text-foreground">Relatório de horas</h1>
-                  <p className="text-sm text-muted-foreground">Visão consolidada por projeto para controle interno e envio ao cliente.</p>
+                  <h1 className="text-3xl font-medium text-foreground">Relatórios</h1>
+                  <p className="text-sm text-muted-foreground">Carga horária e execução dos projetos são apresentadas separadamente.</p>
                 </div>
               </div>
 
@@ -588,18 +516,9 @@ export default function ReportsPage() {
                       </select>
                     </div>
                     <div className="space-y-1">
-                      <Label>Categoria profissional</Label>
-                      <select className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm" value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}>
-                        <option value="all">Todas</option>
-                        {PROFESSIONAL_CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}
-                      </select>
-                    </div>
-                    <div className="space-y-1">
-                      <Label>Origem</Label>
+                      <Label>Origem do tempo da tarefa</Label>
                       <select className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm" value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}>
                         <option value="all">Todas</option>
-                        <option value="task">Tarefa</option>
-                        <option value="quick">Atividade rápida</option>
                         <option value="manual">Manual</option>
                         <option value="timer">Timer</option>
                       </select>
@@ -617,8 +536,11 @@ export default function ReportsPage() {
 
                   <div className="flex flex-wrap gap-2">
                     <Button onClick={() => setIsManualTimeOpen(true)}>Adicionar tempo manual</Button>
-                    <Button variant="outline" onClick={handleExportCsv}>
-                      <Download className="w-4 h-4 mr-2" /> Exportar CSV
+                    <Button variant="outline" onClick={handleExportWorkdayCsv}>
+                      <Download className="w-4 h-4 mr-2" /> CSV da jornada
+                    </Button>
+                    <Button variant="outline" onClick={handleExportTaskCsv}>
+                      <Download className="w-4 h-4 mr-2" /> CSV das tarefas
                     </Button>
                     <Button variant="outline" onClick={handleExportPdf} disabled={isExportingPdf}>
                       <FileText className="w-4 h-4 mr-2" /> {isExportingPdf ? 'Gerando PDF...' : 'Exportar PDF'}
@@ -630,53 +552,49 @@ export default function ReportsPage() {
                 </CardContent>
               </Card>
 
-              {professionalJourneyRows.length > 0 && (
+              {(professionalProjects.length > 0 || professionalJourneyRows.length > 0) && (
                 <section className="space-y-4" aria-labelledby="professional-report-title">
                   <div>
-                    <h2 id="professional-report-title" className="text-lg font-medium text-foreground">Jornada profissional</h2>
-                    <p className="text-sm text-muted-foreground">Período líquido e atividades registradas no servidor.</p>
+                    <h2 id="professional-report-title" className="text-lg font-medium text-foreground">A) Relatório de jornada</h2>
+                    <p className="text-sm text-muted-foreground">Carga horária, pausas, meta e compensação. Não inclui tempo de tarefas.</p>
                   </div>
                   <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                    <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Tempo trabalhado</p><p className="text-2xl font-medium">{formatDurationFriendly(professionalTotals.netMinutes)}</p></CardContent></Card>
-                    <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Em atividades</p><p className="text-2xl font-medium">{formatDurationFriendly(professionalTotals.classifiedMinutes)}</p></CardContent></Card>
-                    <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Sem atividade</p><p className="text-2xl font-medium">{formatDurationFriendly(professionalTotals.unclassifiedMinutes)}</p></CardContent></Card>
-                    <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Jornadas</p><p className="text-2xl font-medium">{professionalJourneyRows.length}</p></CardContent></Card>
+                    <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Semana atual</p><p className="text-2xl font-medium">{formatDurationFriendly(workdayReport.weekly.totalMinutes)}</p></CardContent></Card>
+                    <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Meta semanal</p><p className="text-2xl font-medium">{formatDurationFriendly(workdayReport.weekly.targetMinutes)}</p></CardContent></Card>
+                    <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Saldo semanal</p><p className="text-2xl font-medium">{formatSignedDuration(workdayReport.weekly.balanceMinutes)}</p></CardContent></Card>
+                    <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Pausas no período</p><p className="text-2xl font-medium">{formatDurationFriendly(workdayReport.pauseDuration)}</p></CardContent></Card>
                   </div>
                   <Card>
-                    <CardContent className="p-6">
-                      <h3 className="font-medium text-foreground">Por categoria</h3>
-                      <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                        {Object.entries(professionalTotals.categoryMinutes).map(([category, minutes]) => (
-                          <div key={category} className="flex items-center justify-between border-b border-border py-2 text-sm"><span>{category}</span><span className="text-muted-foreground">{formatDurationFriendly(minutes)}</span></div>
-                        ))}
-                      </div>
-                      <h3 className="mt-6 font-medium text-foreground">Atividades reais</h3>
-                      <div className="mt-2 divide-y divide-border">
-                        {professionalRows.map((activity) => (
-                          <div key={activity.id} className="grid gap-1 py-3 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center">
-                            <div className="min-w-0"><p className="truncate text-sm font-medium">{activity.title}</p><p className="text-xs text-muted-foreground">{activity.projectName} · {activity.category} · {activity.source === 'manual' ? 'manual' : activity.source === 'task' ? 'tarefa' : 'atividade rápida'}</p></div>
-                            <p className="text-sm text-muted-foreground">{formatDurationFriendly(activity.durationMinutes)}</p>
-                            {activity.endedAt && <Button size="icon" variant="ghost" aria-label={`Corrigir ${activity.title}`} onClick={() => openProfessionalEdit(activity)}><Pencil className="h-4 w-4" /></Button>}
-                          </div>
-                        ))}
-                      </div>
+                    <CardContent className="p-6 space-y-3">
+                      <h3 className="font-medium text-foreground">Horas por dia</h3>
+                      {workdayReport.dailyRows.length === 0 ? <p className="text-sm text-muted-foreground">Nenhuma jornada encontrada para os filtros atuais.</p> : workdayReport.dailyRows.map((row) => (
+                        <div key={row.date} className="grid grid-cols-[1fr_auto] gap-3 border-b border-border py-2 text-sm">
+                          <span>{new Date(`${row.date}T12:00:00`).toLocaleDateString('pt-BR')}</span>
+                          <span className="text-right text-muted-foreground">{formatDurationFriendly(row.workdayDuration)} · pausas {formatDurationFriendly(row.pauseDuration)} · {pluralizeCount(row.closedWorkdays, 'encerramento', 'encerramentos')}</span>
+                        </div>
+                      ))}
                     </CardContent>
                   </Card>
                 </section>
               )}
 
+              <section className="space-y-4" aria-labelledby="task-report-title">
+                <div>
+                  <h2 id="task-report-title" className="text-lg font-medium text-foreground">B) Relatório de projetos e tarefas</h2>
+                  <p className="text-sm text-muted-foreground">Execução registrada por cronômetro ou lançamento manual. Não altera a jornada.</p>
+                </div>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <Card className="bg-card border-border"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Total de horas</p><p className="text-2xl font-medium">{formatDurationFriendly(totals.totalMinutes)}</p></CardContent></Card>
-                <Card className="bg-card border-border"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Tarefas concluídas</p><p className="text-2xl font-medium">{totals.completedTasks}</p></CardContent></Card>
-                <Card className="bg-card border-border"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Sessões registradas</p><p className="text-2xl font-medium">{totals.sessions}</p></CardContent></Card>
-                <Card className="bg-card border-border"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Projetos com horas registradas</p><p className="text-2xl font-medium">{totals.projectsWorked}</p></CardContent></Card>
+                <Card className="bg-card border-border"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Tempo em tarefas</p><p className="text-2xl font-medium">{formatDurationFriendly(taskTotals.taskTrackedTime)}</p></CardContent></Card>
+                <Card className="bg-card border-border"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Tarefas concluídas</p><p className="text-2xl font-medium">{taskTotals.completedTasks}</p></CardContent></Card>
+                <Card className="bg-card border-border"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Sessões registradas</p><p className="text-2xl font-medium">{taskTotals.sessions}</p></CardContent></Card>
+                <Card className="bg-card border-border"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Projetos com tempo</p><p className="text-2xl font-medium">{taskTotals.projectsWorked}</p></CardContent></Card>
               </div>
 
               <Card className="bg-card border-border shadow-sm">
                 <CardContent className="p-6 space-y-3">
                   <h2 className="text-lg font-medium text-foreground">Total por projeto</h2>
                   {perProjectRows.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">Sem dados no período selecionado.</p>
+                    <p className="text-sm text-muted-foreground">Ainda não há horas registradas neste período. Ajuste os filtros ou volte quando houver novos registros.</p>
                   ) : (
                     <div className="space-y-2">
                       {perProjectRows.map((row) => (
@@ -692,9 +610,21 @@ export default function ReportsPage() {
 
               <Card className="bg-card border-border shadow-sm">
                 <CardContent className="p-6 space-y-3">
+                  <h2 className="text-lg font-medium text-foreground">Total por tarefa</h2>
+                  {perTaskRows.length === 0 ? <p className="text-sm text-muted-foreground">Ainda não há tempo vinculado a tarefas neste período.</p> : perTaskRows.map((row) => (
+                    <div key={row.taskId} className="flex flex-col gap-1 border-b border-border py-2 sm:flex-row sm:items-center sm:justify-between">
+                      <div><p className="text-sm font-medium">{row.taskTitle}</p><p className="text-xs text-muted-foreground">{row.project}</p></div>
+                      <p className="text-sm text-muted-foreground">{formatDurationFriendly(row.minutes)} · {pluralizeCount(row.sessions, 'sessão', 'sessões')}</p>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+
+              <Card className="bg-card border-border shadow-sm">
+                <CardContent className="p-6 space-y-3">
                   <h2 className="text-lg font-medium text-foreground">Sessões registradas</h2>
                   {sessionRows.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">Nenhuma sessão encontrada para os filtros atuais.</p>
+                    <p className="text-sm text-muted-foreground">Nenhuma sessão corresponde a estes filtros. Você pode ajustar a busca ou manter como está.</p>
                   ) : (
                     <div className="overflow-x-auto">
                       <table className="w-full text-sm">
@@ -736,6 +666,7 @@ export default function ReportsPage() {
                   )}
                 </CardContent>
               </Card>
+              </section>
 
               <Card className="bg-card border-border shadow-sm">
                 <CardContent className="p-6 space-y-4">
@@ -752,7 +683,7 @@ export default function ReportsPage() {
                   </div>
 
                   {wrapUpRows.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">Nenhum encerramento encontrado no período selecionado.</p>
+                    <p className="text-sm text-muted-foreground">Ainda não há encerramentos neste período.</p>
                   ) : (
                     <div className="space-y-3">
                       {wrapUpRows.slice(0, 15).map((row) => (
@@ -786,11 +717,6 @@ export default function ReportsPage() {
         defaultProject={projectFilter === 'all' ? 'Pessoal' : projectFilter}
         defaultTaskId="none"
         tasks={tasks}
-        professionalJourneys={professionalData.journeys}
-        onSaveProfessional={async ({ journeyId, ...payload }) => {
-          await createProfessionalActivity(journeyId, payload);
-          setSessionVersion((value) => value + 1);
-        }}
         onSaved={() => setSessionVersion((value) => value + 1)}
       />
 
@@ -844,22 +770,6 @@ export default function ReportsPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={Boolean(editingProfessionalActivity)} onOpenChange={(open) => !open && setEditingProfessionalActivity(null)}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader><DialogTitle>Corrigir atividade</DialogTitle><DialogDescription>A versão anterior será preservada no histórico de auditoria.</DialogDescription></DialogHeader>
-          <div className="space-y-3">
-            <div className="space-y-1"><Label>Atividade</Label><Input value={professionalEditForm.title} onChange={(event) => setProfessionalEditForm((current) => ({ ...current, title: event.target.value }))} /></div>
-            <div className="space-y-1"><Label>Categoria</Label><select className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm" value={professionalEditForm.category} onChange={(event) => setProfessionalEditForm((current) => ({ ...current, category: event.target.value }))}>{PROFESSIONAL_CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}</select></div>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div className="space-y-1"><Label>Início</Label><Input type="datetime-local" value={professionalEditForm.startedAt} onChange={(event) => setProfessionalEditForm((current) => ({ ...current, startedAt: event.target.value }))} /></div>
-              <div className="space-y-1"><Label>Fim</Label><Input type="datetime-local" value={professionalEditForm.endedAt} onChange={(event) => setProfessionalEditForm((current) => ({ ...current, endedAt: event.target.value }))} /></div>
-            </div>
-            <div className="space-y-1"><Label>Observação</Label><Input value={professionalEditForm.notes} onChange={(event) => setProfessionalEditForm((current) => ({ ...current, notes: event.target.value }))} /></div>
-            <div className="space-y-1"><Label>Motivo da correção</Label><Input value={professionalEditForm.reason} onChange={(event) => setProfessionalEditForm((current) => ({ ...current, reason: event.target.value }))} placeholder="Ex.: esqueci de encerrar no horário" /></div>
-          </div>
-          <DialogFooter><Button variant="outline" onClick={() => setEditingProfessionalActivity(null)}>Cancelar</Button><Button onClick={handleSaveProfessionalEdit}>Salvar correção</Button></DialogFooter>
-        </DialogContent>
-      </Dialog>
     </>
   );
 }

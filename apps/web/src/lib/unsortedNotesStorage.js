@@ -76,17 +76,23 @@ export async function syncUnsortedNotesFromApi(userId) {
   const local = readRawNotes(userId).map((note) => normalizeNote(note, note?.userId));
   const remote = (Array.isArray(response?.items) ? response.items : []).map((note) => normalizeNote(note, userId));
   const merged = new Map(local.map((note) => [note.id, note]));
+  const pendingUpserts = new Set(local.map((note) => note.id));
 
   remote.forEach((remoteNote) => {
     const localNote = merged.get(remoteNote.id);
     const localTimestamp = new Date(localNote?.updatedAt || localNote?.createdAt || 0).getTime();
     const remoteTimestamp = new Date(remoteNote.updatedAt || remoteNote.createdAt || 0).getTime();
-    if (!localNote || remoteTimestamp >= localTimestamp) merged.set(remoteNote.id, remoteNote);
+    if (!localNote || remoteTimestamp >= localTimestamp) {
+      merged.set(remoteNote.id, remoteNote);
+      pendingUpserts.delete(remoteNote.id);
+    }
   });
 
   const notes = Array.from(merged.values());
   writeRawNotes(notes, userId);
-  notes.filter((note) => note.userId === userId).forEach(queueRemoteUpsert);
+  notes
+    .filter((note) => note.userId === userId && pendingUpserts.has(note.id))
+    .forEach(queueRemoteUpsert);
   return listUnsortedNotes(userId);
 }
 

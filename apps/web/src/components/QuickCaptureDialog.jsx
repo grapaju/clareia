@@ -50,7 +50,8 @@ export default function QuickCaptureDialog({ triggerLabel = 'Tirar da cabeça' }
     const note = createUnsortedNote({ content: text, userId, source: 'captura-rapida' });
     if (!note) return;
     clearAndClose();
-    toast.success('Guardado para você revisar depois.', {
+    toast.success('Guardado.', {
+      description: 'Isso continua salvo, mas sai do seu caminho por enquanto.',
       action: { label: 'Ver guardado', onClick: () => navigate('/guardados') },
       cancel: { label: 'Desfazer', onClick: () => removeUnsortedNote(note.id, userId) },
     });
@@ -62,7 +63,7 @@ export default function QuickCaptureDialog({ triggerLabel = 'Tirar da cabeça' }
 
     if (!hasActionableCapture(content)) {
       handleSaveForLater();
-      toast.info('Ainda não parece uma ação clara, então guardamos para você decidir depois.');
+      toast.info('Guardamos para depois.', { description: 'Você pode organizar isso quando fizer sentido.' });
       return;
     }
 
@@ -79,7 +80,7 @@ export default function QuickCaptureDialog({ triggerLabel = 'Tirar da cabeça' }
       navigate('/plano-clareado', { state: { planRecord: record } });
     } catch (error) {
       console.error(error);
-      toast.error('Não foi possível organizar agora. Seu texto continua aqui.');
+      toast.error('Não consegui organizar isso agora.', { description: 'Seu texto continua aqui. Tente novamente em alguns instantes.' });
     } finally {
       setIsProcessing(false);
     }
@@ -95,19 +96,19 @@ export default function QuickCaptureDialog({ triggerLabel = 'Tirar da cabeça' }
       </DialogTrigger>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>Tirar da cabeça</DialogTitle>
+          <DialogTitle>Descarregue a mente</DialogTitle>
           <DialogDescription>
-            Escreva antes que você esqueça. Pode ser uma ou várias coisas.
+            Escreva do seu jeito. Pode colocar várias coisas juntas — o Clareia ajuda a separar em passos depois.
           </DialogDescription>
         </DialogHeader>
         <Textarea
           autoFocus
           value={text}
           onChange={(event) => setText(event.target.value)}
-          placeholder="Ex.: acompanhar Google Ads da Corcril, cobrar fatura do IDT-PR"
+          placeholder="Ex.: terminar o relatório, responder uma mensagem e renovar o domínio..."
           className="min-h-40 resize-y text-base"
         />
-        <p className="text-xs text-muted-foreground">O rascunho é salvo enquanto você escreve.</p>
+        <p className="text-xs text-muted-foreground">O rascunho fica salvo enquanto você escreve. Nada será criado sem sua revisão.</p>
         <DialogFooter className="gap-2 sm:space-x-0">
           <Button variant="outline" onClick={handleSaveForLater} disabled={!text.trim() || isProcessing}>
             Guardar para depois

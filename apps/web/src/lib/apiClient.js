@@ -50,7 +50,7 @@ async function requestApi(path, options = {}) {
 		let message = text;
 		try {
 			const parsed = JSON.parse(text);
-			message = parsed?.message || parsed?.error?.message || message;
+			message = parsed?.message || parsed?.error?.message || parsed?.error || message;
 		} catch {
 			// keep raw text
 		}

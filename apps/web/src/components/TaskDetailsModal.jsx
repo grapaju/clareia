@@ -286,7 +286,7 @@ export default function TaskDetailsModal({ task, isOpen, onClose }) {
                   <div>
                     <p className="text-sm font-medium text-foreground">Arquivos vinculados ({relatedMaterials.files.length})</p>
                     {relatedMaterials.files.length === 0 ? (
-                      <p className="text-xs text-muted-foreground">Nenhum arquivo vinculado.</p>
+                      <p className="text-xs text-muted-foreground">Ainda não há arquivos relacionados.</p>
                     ) : (
                       <ul className="mt-1 space-y-1">
                         {relatedMaterials.files.slice(0, 5).map((item) => (
@@ -299,7 +299,7 @@ export default function TaskDetailsModal({ task, isOpen, onClose }) {
                   <div>
                     <p className="text-sm font-medium text-foreground">Links vinculados ({relatedMaterials.links.length})</p>
                     {relatedMaterials.links.length === 0 ? (
-                      <p className="text-xs text-muted-foreground">Nenhum link vinculado.</p>
+                      <p className="text-xs text-muted-foreground">Ainda não há links relacionados.</p>
                     ) : (
                       <ul className="mt-1 space-y-1">
                         {relatedMaterials.links.slice(0, 5).map((item) => (
@@ -312,7 +312,7 @@ export default function TaskDetailsModal({ task, isOpen, onClose }) {
                   <div>
                     <p className="text-sm font-medium text-foreground">Acessos vinculados ({relatedMaterials.accesses.length})</p>
                     {relatedMaterials.accesses.length === 0 ? (
-                      <p className="text-xs text-muted-foreground">Nenhum acesso vinculado.</p>
+                      <p className="text-xs text-muted-foreground">Ainda não há acessos relacionados.</p>
                     ) : (
                       <ul className="mt-1 space-y-1">
                         {relatedMaterials.accesses.slice(0, 5).map((item) => (
@@ -325,7 +325,7 @@ export default function TaskDetailsModal({ task, isOpen, onClose }) {
                   <div>
                     <p className="text-sm font-medium text-foreground">Notas vinculadas ({relatedMaterials.notes.length})</p>
                     {relatedMaterials.notes.length === 0 ? (
-                      <p className="text-xs text-muted-foreground">Nenhuma nota vinculada.</p>
+                      <p className="text-xs text-muted-foreground">Ainda não há notas relacionadas.</p>
                     ) : (
                       <ul className="mt-1 space-y-1">
                         {relatedMaterials.notes.slice(0, 5).map((item) => (
@@ -339,7 +339,7 @@ export default function TaskDetailsModal({ task, isOpen, onClose }) {
                 {task.project && (
                   <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-2">
                     <Select value={linkSelection.fileId} onValueChange={(value) => setLinkSelection((current) => ({ ...current, fileId: value }))}>
-                      <SelectTrigger><SelectValue placeholder="Vincular arquivo" /></SelectTrigger>
+                      <SelectTrigger><SelectValue placeholder="Adicionar arquivo" /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="none">Sem arquivo</SelectItem>
                         {projectMaterials.files.map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}
@@ -347,7 +347,7 @@ export default function TaskDetailsModal({ task, isOpen, onClose }) {
                     </Select>
 
                     <Select value={linkSelection.linkId} onValueChange={(value) => setLinkSelection((current) => ({ ...current, linkId: value }))}>
-                      <SelectTrigger><SelectValue placeholder="Vincular link" /></SelectTrigger>
+                      <SelectTrigger><SelectValue placeholder="Adicionar link" /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="none">Sem link</SelectItem>
                         {projectMaterials.links.map((item) => <SelectItem key={item.id} value={item.id}>{item.title}</SelectItem>)}
@@ -355,7 +355,7 @@ export default function TaskDetailsModal({ task, isOpen, onClose }) {
                     </Select>
 
                     <Select value={linkSelection.accessId} onValueChange={(value) => setLinkSelection((current) => ({ ...current, accessId: value }))}>
-                      <SelectTrigger><SelectValue placeholder="Vincular acesso" /></SelectTrigger>
+                      <SelectTrigger><SelectValue placeholder="Adicionar acesso" /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="none">Sem acesso</SelectItem>
                         {projectMaterials.accesses.map((item) => <SelectItem key={item.id} value={item.id}>{item.title}</SelectItem>)}
@@ -363,7 +363,7 @@ export default function TaskDetailsModal({ task, isOpen, onClose }) {
                     </Select>
 
                     <Select value={linkSelection.noteId} onValueChange={(value) => setLinkSelection((current) => ({ ...current, noteId: value }))}>
-                      <SelectTrigger><SelectValue placeholder="Vincular nota" /></SelectTrigger>
+                      <SelectTrigger><SelectValue placeholder="Adicionar nota" /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="none">Sem nota</SelectItem>
                         {projectMaterials.notes.map((item) => <SelectItem key={item.id} value={item.id}>{item.title || 'Nota sem titulo'}</SelectItem>)}
@@ -371,7 +371,7 @@ export default function TaskDetailsModal({ task, isOpen, onClose }) {
                     </Select>
 
                     <div className="md:col-span-2">
-                      <Button size="sm" variant="outline" onClick={linkMaterial}>Vincular materiais selecionados</Button>
+                      <Button size="sm" variant="outline" onClick={linkMaterial}>Adicionar materiais selecionados</Button>
                     </div>
                   </div>
                 )}
@@ -480,15 +480,15 @@ export default function TaskDetailsModal({ task, isOpen, onClose }) {
       <AlertDialog open={isDeleteOpen} onOpenChange={setIsDeleteOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Tem certeza que deseja excluir esta tarefa?</AlertDialogTitle>
+            <AlertDialogTitle>Remover “{task?.title}”?</AlertDialogTitle>
             <AlertDialogDescription>
-              Esta ação remove a tarefa da agenda atual.
+              A tarefa será removida para sempre e não poderá ser recuperada.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogCancel>Agora não</AlertDialogCancel>
             <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-              Excluir tarefa
+              Remover tarefa
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -503,7 +503,7 @@ export default function TaskDetailsModal({ task, isOpen, onClose }) {
             <Button onClick={() => handleReopen('Hoje')}>Reabrir para hoje</Button>
             <Button variant="outline" onClick={() => handleReopen('Esta semana')}>Reabrir para esta semana</Button>
             <Button variant="outline" onClick={() => handleReopen('Pendente')}>Reabrir como pendente</Button>
-            <Button variant="ghost" onClick={() => setIsReopenOpen(false)}>Cancelar</Button>
+            <Button variant="ghost" onClick={() => setIsReopenOpen(false)}>Agora não</Button>
           </div>
         </DialogContent>
       </Dialog>

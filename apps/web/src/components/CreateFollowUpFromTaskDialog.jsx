@@ -129,8 +129,8 @@ export default function CreateFollowUpFromTaskDialog({
           </div>
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button>
-            <Button onClick={handleSave} disabled={!task?.id}>Salvar acompanhamento</Button>
+            <Button variant="outline" onClick={() => onOpenChange(false)}>Agora não</Button>
+            <Button onClick={handleSave} disabled={!task?.id}>Guardar acompanhamento</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

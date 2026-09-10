@@ -35,7 +35,7 @@ export function ReportExporter() {
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      toast.success('Relatório CSV exportado com sucesso.');
+      toast.success('Relatório CSV exportado.');
     } catch (error) {
       console.error(error);
       toast.error('Erro ao exportar CSV.');
@@ -58,7 +58,7 @@ export function ReportExporter() {
       doc.text(`Cobranças pendentes: ${charges.filter(c => c.status !== 'paid').length}`, 20, 60);
 
       doc.save(`clareia-relatorio-${new Date().toISOString().split('T')[0]}.pdf`);
-      toast.success('Relatório PDF exportado com sucesso.');
+      toast.success('Relatório PDF exportado.');
     } catch (error) {
       console.error(error);
       toast.error('Erro ao exportar PDF.');

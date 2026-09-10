@@ -13,5 +13,3 @@ export const startProfessionalJourney = (payload) => request('/professional-jour
 export const pauseProfessionalJourney = (journeyId, payload = {}) => request(`/professional-journeys/${journeyId}/pause`, 'POST', payload);
 export const resumeProfessionalJourney = (journeyId, payload = {}) => request(`/professional-journeys/${journeyId}/resume`, 'POST', payload);
 export const closeProfessionalJourney = (journeyId, payload = {}) => request(`/professional-journeys/${journeyId}/close`, 'POST', payload);
-export const createProfessionalActivity = (journeyId, payload) => request(`/professional-journeys/${journeyId}/activities`, 'POST', payload);
-export const updateProfessionalActivity = (activityId, payload) => request(`/professional-journeys/activities/${activityId}`, 'PATCH', payload);

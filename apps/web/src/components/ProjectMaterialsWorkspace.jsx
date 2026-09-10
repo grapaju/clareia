@@ -35,6 +35,7 @@ import {
   getRecentProjectItems,
   searchProjectItems,
 } from '@/lib/projectMaterialsLogic.js';
+import { UI_COPY } from '@/lib/uiCopy.js';
 import { readUserScopedJson, writeUserScopedJson } from '@/lib/userScopedStorage.js';
 
 const VIEW_MODE_KEY = 'clareia_material_view_mode_v1';
@@ -66,6 +67,7 @@ function ItemCard({ item, viewMode, onOpen, onEdit, onDelete, onToggleFavorite }
               {item.folder ? ` · ${item.folder}` : ''}
             </span>
             {item.description && <span className="mt-1 block line-clamp-2 text-xs text-muted-foreground">{item.description}</span>}
+            {item.organizationStatus === 'para_organizar' && <span className="mt-2 inline-block rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">Para organizar</span>}
             <span className="mt-2 block text-xs font-medium text-primary">Abrir</span>
           </span>
         </button>
@@ -121,6 +123,8 @@ export default function ProjectMaterialsWorkspace({
   foldersInCurrentLevel,
   driveState,
   driveFolder,
+  organizingOnly = false,
+  onShowAll,
   onAdd,
   onOpenFolder,
   onBackFolder,
@@ -213,15 +217,21 @@ export default function ProjectMaterialsWorkspace({
 
   return (
     <div className="min-w-0 space-y-5">
+      {organizingOnly && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/30 p-3">
+          <p className="text-sm text-foreground">Mostrando materiais para organizar.</p>
+          <Button size="sm" variant="outline" onClick={onShowAll}>Ver todos</Button>
+        </div>
+      )}
       <Card className="border-border bg-card shadow-sm">
         <CardContent className="space-y-4 p-5 sm:p-6">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <h2 className="text-xl font-medium text-foreground">Materiais</h2>
-              <p className="mt-1 text-sm text-muted-foreground">Arquivos, links, notas e referências deste projeto.</p>
+              <p className="mt-1 text-sm text-muted-foreground">{UI_COPY.materials.intro}</p>
             </div>
-            <Button onClick={() => onAdd(hasFolders ? 'choose' : 'folder')}>
-              <Plus className="mr-2 h-4 w-4" /> {hasFolders ? 'Adicionar' : 'Criar primeira pasta'}
+            <Button onClick={() => onAdd('choose')}>
+              <Plus className="mr-2 h-4 w-4" /> Adicionar material
             </Button>
           </div>
           <div className="relative max-w-2xl">

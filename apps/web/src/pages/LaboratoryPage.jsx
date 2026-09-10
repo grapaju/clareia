@@ -26,7 +26,7 @@ export default function LaboratoryPage() {
 
   const save = async () => {
     if (!draft.title.trim()) {
-      toast.error('Informe o título da melhoria.');
+      toast.error('Só preciso de um título para guardar esta melhoria.');
       return;
     }
     setSaving(true);
@@ -35,7 +35,8 @@ export default function LaboratoryPage() {
       setDraft((current) => ({ ...current, title: '', description: '', includeInToday: false }));
       toast.success('Melhoria guardada para revisar depois.');
     } catch (error) {
-      toast.error(error?.message || 'Não foi possível guardar a melhoria.');
+      console.error(error);
+      toast.error('Não consegui guardar esta melhoria. O texto continua aqui; tente novamente.');
     } finally {
       setSaving(false);
     }

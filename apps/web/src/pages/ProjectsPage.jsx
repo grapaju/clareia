@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Helmet } from 'react-helmet';
 import {
   ArrowLeft,
@@ -105,6 +105,7 @@ import {
 import { createProjectLink, deleteProjectLink, getProjectLinkTypes, listFavoriteProjectLinks, listProjectLinks, updateProjectLink } from '@/services/projectLinkService.js';
 import { createProjectAccess, deleteProjectAccess, listProjectAccesses, updateProjectAccess } from '@/services/projectAccessService.js';
 import { createProjectNote, deleteProjectNote, listProjectNotes, listRecentProjectNotes, updateProjectNote } from '@/services/projectNoteService.js';
+import { listProjectMaterialsToOrganize } from '@/services/projectMaterialOrganizationService.js';
 import { listProjectWaitingReturns } from '@/services/waitingReturnService.js';
 import { deleteWorkSession, getWorkTimeSummary, listProjectWorkSessions, reassignProjectWorkSessions, toHours, updateWorkSession } from '@/services/workSessionService.js';
 import { getTaskLastCompletionDate, reassignTaskHistoryProject } from '@/services/taskHistoryService.js';
@@ -237,6 +238,7 @@ export default function ProjectsPage() {
   const { tasks, addTask, completeTask, reopenTask, updateTask, refreshTasks, resumeTask, setSelectedTask, startTask } = useTaskContext();
   const { refresh: refreshProfessionalJourney } = useProfessionalJourney();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const lastMaterialDialogTriggerRef = useRef(null);
   const materialSaveLockRef = useRef(false);
 
@@ -290,6 +292,7 @@ export default function ProjectsPage() {
   const [fileViewMode, setFileViewMode] = useState('grid');
   const [isMaterialDialogOpen, setIsMaterialDialogOpen] = useState(false);
   const [isAddMaterialDialogOpen, setIsAddMaterialDialogOpen] = useState(false);
+  const [quickMaterialType, setQuickMaterialType] = useState('link');
   const [itemDialogType, setItemDialogType] = useState(null);
   const [isDriveDialogOpen, setIsDriveDialogOpen] = useState(false);
   const [isAdvancedDetailsOpen, setIsAdvancedDetailsOpen] = useState(false);
@@ -400,7 +403,7 @@ export default function ProjectsPage() {
       } catch {
         if (!isMounted) return;
         setProfiles([]);
-        toast.error('Nao foi possivel carregar projetos da API. Verifique se o backend foi atualizado.');
+        toast.error('Não consegui carregar seus projetos. Tente novamente em alguns instantes.');
       }
     };
 
@@ -417,7 +420,7 @@ export default function ProjectsPage() {
     const url = new URL(window.location.href);
     if (url.searchParams.get('driveConnected') !== '1') return;
 
-    toast.success('Google Drive conectado com sucesso.');
+    toast.success('Google Drive conectado.');
     url.searchParams.delete('driveConnected');
     url.searchParams.delete('driveProject');
     window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
@@ -775,6 +778,13 @@ export default function ProjectsPage() {
     () => buildProjectItems({ files, links, notes, accesses }),
     [files, links, notes, accesses]
   );
+  const showMaterialsToOrganize = searchParams.get('materialStatus') === 'para_organizar';
+  const visibleProjectMaterialItems = useMemo(
+    () => showMaterialsToOrganize
+      ? projectMaterialItems.filter((item) => item.organizationStatus === 'para_organizar')
+      : projectMaterialItems,
+    [projectMaterialItems, showMaterialsToOrganize]
+  );
   const folderItemCounters = useMemo(() => {
     const counters = {};
     folders.forEach((folder) => {
@@ -917,6 +927,16 @@ export default function ProjectsPage() {
   }, [selectedProject]);
 
   useEffect(() => {
+    if (!showMaterialsToOrganize) return;
+    setActiveTab('materiais');
+    if (selectedProject || profiles.length === 0) return;
+    const firstPending = listProjectMaterialsToOrganize()
+      .find((item) => profiles.some((profile) => profile.name === item.projectName));
+    if (!firstPending?.projectName) return;
+    setSelectedProject(firstPending.projectName);
+  }, [profiles, selectedProject, showMaterialsToOrganize]);
+
+  useEffect(() => {
     if (!selectedProject) return;
     setProfileForm({
       name: selectedProfile?.name || selectedProject,
@@ -952,7 +972,7 @@ export default function ProjectsPage() {
     const existing = [...profiles];
     const cleanName = normalizeText(nextProfile.name);
     if (!cleanName) {
-      toast.error('Informe o nome do projeto.');
+      toast.error('Só preciso do nome do projeto para continuar.');
       return false;
     }
 
@@ -960,7 +980,7 @@ export default function ProjectsPage() {
       (item) => item.name.toLowerCase() === cleanName.toLowerCase() && item.name !== oldName
     );
     if (duplicate) {
-      toast.error('Ja existe um projeto com esse nome.');
+      toast.error('Já existe um projeto com esse nome. Escolha outro para continuar.');
       return false;
     }
 
@@ -984,12 +1004,13 @@ export default function ProjectsPage() {
         });
       }
     } catch (error) {
-      toast.error(error?.message || 'Nao foi possivel salvar o projeto no servidor.');
+      console.error(error);
+      toast.error('Não consegui guardar este projeto. Tente novamente.');
       return false;
     }
 
     if (!profilePayload?.name) {
-      toast.error('Nao foi possivel salvar o projeto.');
+      toast.error('Não consegui guardar este projeto. Tente novamente.');
       return false;
     }
 
@@ -1069,12 +1090,13 @@ export default function ProjectsPage() {
         connectionType: 'manual'
       };
     } catch (error) {
-      toast.error(error?.message || 'Nao foi possivel salvar a configuracao do Drive no servidor.');
+      console.error(error);
+      toast.error('Não consegui conectar esta pasta. Confira o link e tente novamente.');
       return false;
     }
 
     if (!saved?.driveFolderUrl) {
-      toast.error('Nao foi possivel salvar a configuracao do Drive.');
+      toast.error('Não consegui conectar esta pasta. Confira o link e tente novamente.');
       return false;
     }
 
@@ -1105,7 +1127,7 @@ export default function ProjectsPage() {
     if (!selectedProject || !projectDriveConfig || isDisconnectingProjectDrive) return;
 
     const confirmed = window.confirm(
-      'Deseja desconectar a pasta deste projeto? A conta Google continuara conectada e voce podera reconectar depois.'
+      'Desconectar a pasta deste projeto? A conta Google continuará conectada, e você poderá reconectar a pasta depois.'
     );
 
     if (!confirmed) return;
@@ -1123,9 +1145,10 @@ export default function ProjectsPage() {
       }));
 
       appendHistory(selectedProject, 'Google Drive desconectado', 'Vinculo da pasta do projeto removido.');
-      toast.success('Pasta do projeto desconectada com sucesso.');
+      toast.success('Pasta do projeto desconectada.');
     } catch (error) {
-      toast.error(error?.message || 'Nao foi possivel desconectar a pasta do projeto.');
+      console.error(error);
+      toast.error('Não consegui desconectar a pasta. Ela continua conectada; tente novamente.');
     } finally {
       setIsDisconnectingProjectDrive(false);
     }
@@ -1192,7 +1215,8 @@ export default function ProjectsPage() {
           }));
         }
       } catch (error) {
-        toast.error(error?.message || 'Nao foi possivel criar subpastas no Google Drive.');
+        console.error(error);
+        toast.error('Não consegui preparar as pastas no Google Drive. Tente novamente.');
       } finally {
         setIsBootstrappingDriveFolders(false);
       }
@@ -1222,7 +1246,8 @@ export default function ProjectsPage() {
           await syncFolderHierarchyWithDrive(folder, foldersToSync);
         }
       } catch (error) {
-        toast.error(error?.message || 'As pastas locais nao puderam ser vinculadas ao Google Drive.');
+        console.error(error);
+        toast.error('Algumas pastas não foram conectadas ao Google Drive. Elas continuam disponíveis no Clareia; tente novamente.');
       } finally {
         setIsBootstrappingDriveFolders(false);
       }
@@ -1253,13 +1278,14 @@ export default function ProjectsPage() {
       });
 
       if (!response?.authUrl) {
-        toast.error('Nao foi possivel iniciar a conexao com Google Drive.');
+        toast.error('Não consegui iniciar a conexão com o Google Drive. Tente novamente.');
         return;
       }
 
       window.location.href = response.authUrl;
     } catch (error) {
-      toast.error(error?.message || 'Falha ao iniciar a autenticacao no Google Drive.');
+      console.error(error);
+      toast.error('Não consegui iniciar a conexão com o Google Drive. Tente novamente.');
     } finally {
       setIsConnectingDrive(false);
     }
@@ -1321,7 +1347,7 @@ export default function ProjectsPage() {
     if (!selectedProject) return;
     const folder = createProjectFolder({ projectName: selectedProject, name: folderName, parentId: newFolderParentId });
     if (!folder) {
-      toast.error('Nao foi possivel criar pasta (nome vazio ou duplicado).');
+      toast.error('Não consegui criar a pasta. Informe um nome diferente e tente novamente.');
       return;
     }
 
@@ -1358,7 +1384,7 @@ export default function ProjectsPage() {
     const oldPath = beforePathMap[folderEditingId] || '';
     const updated = updateProjectFolder(folderEditingId, { name: folderEditingName });
     if (!updated) {
-      toast.error('Nao foi possivel atualizar a pasta.');
+      toast.error('Não consegui renomear a pasta. Use um nome diferente e tente novamente.');
       return;
     }
 
@@ -1407,6 +1433,12 @@ export default function ProjectsPage() {
   const openMaterialAddFlow = (type = 'choose') => {
     if (type === 'choose') {
       rememberMaterialDialogTrigger();
+      setQuickMaterialType('link');
+      setLinkForm({ title: '', url: '', type: 'outro', description: '', favorite: false, storageProvider: 'external_link', relatedTaskId: 'none', folder: currentFolderPath });
+      setNoteForm({ title: '', content: '', tags: '', relatedTaskId: 'none', folder: currentFolderPath, favorite: false });
+      setFileForm(createMaterialDraft({ materialType: 'arquivo', currentFolderPath, driveConnected: driveConnectionStatus?.connected }));
+      setSelectedMaterialFile(null);
+      setIsAdvancedDetailsOpen(false);
       setIsAddMaterialDialogOpen(true);
       return;
     }
@@ -1479,14 +1511,15 @@ export default function ProjectsPage() {
     }));
   };
 
-  const handleSaveMaterial = async () => {
+  const handleSaveMaterial = async (quickCapture = false) => {
     if (!selectedProject || isSyncingDriveMaterial || materialSaveLockRef.current) return;
 
     const topFolderSuggestion = folderSuggestions[0] || null;
     const autoSuggestionApplied = !fileForm.folder && Boolean(topFolderSuggestion?.folder);
     const relatedTaskId = fileForm.relatedTaskId && fileForm.relatedTaskId !== 'none' ? fileForm.relatedTaskId : '';
-    const inferredFolder = fileForm.folder || topFolderSuggestion?.folder || '';
-    const selectedFolderEntry = folders.find((folder) => folderPathMap[folder.id] === inferredFolder);
+    let inferredFolder = fileForm.folder || topFolderSuggestion?.folder || '';
+    let selectedFolderEntry = folders.find((folder) => folderPathMap[folder.id] === inferredFolder);
+    let foldersForSync = folders;
     const shouldSyncInDrive = fileForm.materialType === 'documento';
     const shouldUploadFile = fileForm.materialType === 'arquivo' && Boolean(selectedMaterialFile);
     const isNewFileWithoutUpload = fileForm.materialType === 'arquivo' && !editingMaterialId && !selectedMaterialFile;
@@ -1506,8 +1539,14 @@ export default function ProjectsPage() {
     }
 
     if (shouldUploadFile && !selectedFolderEntry) {
-      toast.error('Escolha uma pasta para enviar o arquivo ao Google Drive.');
-      return;
+      selectedFolderEntry = folders.find((folder) => !folder.parentId && folder.name.toLocaleLowerCase('pt-BR') === 'para organizar')
+        || createProjectFolder({ projectName: selectedProject, name: 'Para organizar' });
+      if (!selectedFolderEntry) {
+        toast.error('Não consegui preparar o destino do arquivo. Tente novamente ou guarde um link por enquanto.');
+        return;
+      }
+      inferredFolder = selectedFolderEntry.name;
+      foldersForSync = [...folders, selectedFolderEntry];
     }
 
     materialSaveLockRef.current = true;
@@ -1533,7 +1572,7 @@ export default function ProjectsPage() {
       }
 
       if (shouldUploadFile) {
-        await syncFolderHierarchyWithDrive(selectedFolderEntry);
+        await syncFolderHierarchyWithDrive(selectedFolderEntry, foldersForSync);
         driveSyncResult = await uploadGoogleDriveMaterial({
           projectId: selectedProject,
           projectName: selectedProject,
@@ -1562,7 +1601,8 @@ export default function ProjectsPage() {
         uploadReceiptId: driveSyncResult?.receiptId,
         uploadStatus: driveSyncResult?.receiptId ? 'pending_confirmation' : '',
         url: driveSyncResult?.webViewLink || fileForm.externalLink,
-        externalLink: driveSyncResult?.webViewLink || fileForm.externalLink
+        externalLink: driveSyncResult?.webViewLink || fileForm.externalLink,
+        organizationStatus: quickCapture ? 'para_organizar' : existingMaterial?.organizationStatus || 'organizado'
       };
 
       let created;
@@ -1585,7 +1625,7 @@ export default function ProjectsPage() {
 
       if (!created) {
         await rollbackPendingUpload();
-        toast.error('Nao foi possivel salvar o material (nome e projeto sao obrigatorios).');
+        toast.error('Não consegui guardar este material. Nada foi perdido; confira o nome e tente novamente.');
         return;
       }
 
@@ -1604,6 +1644,7 @@ export default function ProjectsPage() {
       setEditingDriveFileId('');
       setIsAdvancedDetailsOpen(false);
       setIsMaterialDialogOpen(false);
+      if (quickCapture) setIsAddMaterialDialogOpen(false);
       refreshWorkspaceData(selectedProject);
 
       const baseAction = editingMaterialId ? 'Material atualizado' : 'Material cadastrado';
@@ -1620,8 +1661,10 @@ export default function ProjectsPage() {
         historyDetails = `${created.name} | Pasta aplicada automaticamente: ${inferredFolder} | Confianca: ${confidenceLabel} | Motivo: ${topFolderSuggestion.reason}`;
       }
       appendHistory(selectedProject, baseAction, historyDetails);
+      if (quickCapture) toast.success('Material guardado. Você pode organizar depois.');
     } catch (error) {
-      toast.error(error?.message || 'Nao foi possivel salvar o material no Google Drive.');
+      console.error(error);
+      toast.error('Esse arquivo não pôde ser enviado. Tente outro arquivo ou guarde um link por enquanto.');
     } finally {
       materialSaveLockRef.current = false;
       setIsSyncingDriveMaterial(false);
@@ -1693,17 +1736,28 @@ export default function ProjectsPage() {
     });
   };
 
-  const handleCreateLink = () => {
+  const handleCreateLink = (quickCapture = false) => {
     if (!selectedProject) return;
+    const normalizedUrl = normalizeText(linkForm.url);
+    let normalizedLink;
+    try {
+      normalizedLink = new URL(/^https?:\/\//i.test(normalizedUrl) ? normalizedUrl : `https://${normalizedUrl}`);
+    } catch {
+      toast.error('Informe um link válido.');
+      return;
+    }
     const payload = {
       ...linkForm,
+      title: normalizeText(linkForm.title) || normalizedLink.hostname.replace(/^www\./, ''),
+      url: normalizedLink.toString(),
       projectName: selectedProject,
+      organizationStatus: quickCapture ? 'para_organizar' : editingLinkId ? 'organizado' : '',
       relatedTaskIds: linkForm.relatedTaskId && linkForm.relatedTaskId !== 'none' ? [linkForm.relatedTaskId] : []
     };
     const created = editingLinkId ? updateProjectLink(editingLinkId, payload) : createProjectLink(payload);
 
     if (!created) {
-      toast.error('Nao foi possivel salvar o link (titulo e URL sao obrigatorios).');
+      toast.error('Não consegui guardar este link. Confira o endereço e tente novamente.');
       return;
     }
 
@@ -1719,8 +1773,10 @@ export default function ProjectsPage() {
     });
     setEditingLinkId(null);
     setItemDialogType(null);
+    if (quickCapture) setIsAddMaterialDialogOpen(false);
     setLinks(listProjectLinks(selectedProject));
     appendHistory(selectedProject, editingLinkId ? 'Link atualizado' : 'Link cadastrado', created.title);
+    if (quickCapture) toast.success('Material guardado. Você pode organizar depois.');
   };
 
   const handleEditLink = (link) => {
@@ -1756,7 +1812,7 @@ export default function ProjectsPage() {
     const payload = { ...accessForm, projectName: selectedProject };
     const created = editingAccessId ? updateProjectAccess(editingAccessId, payload) : createProjectAccess(payload);
     if (!created) {
-      toast.error('Nao foi possivel salvar o acesso (titulo e projeto sao obrigatorios).');
+      toast.error('Só preciso de um título e do projeto para guardar este acesso.');
       return;
     }
 
@@ -1807,16 +1863,17 @@ export default function ProjectsPage() {
       toast.success('Tarefa criada no projeto.');
     } catch (error) {
       console.error(error);
-      toast.error('Nao foi possivel criar a tarefa neste projeto.');
+      toast.error('Não consegui criar a tarefa. O projeto continua como estava; tente novamente.');
     }
   };
 
-  const handleCreateOrUpdateNote = () => {
+  const handleCreateOrUpdateNote = (quickCapture = false) => {
     if (!selectedProject) return;
 
     const payload = {
       ...noteForm,
       projectName: selectedProject,
+      organizationStatus: quickCapture ? 'para_organizar' : editingNoteId ? 'organizado' : '',
       relatedTaskIds: noteForm.relatedTaskId && noteForm.relatedTaskId !== 'none' ? [noteForm.relatedTaskId] : []
     };
 
@@ -1828,7 +1885,7 @@ export default function ProjectsPage() {
     }
 
     if (!saved) {
-      toast.error('Nao foi possivel salvar a nota.');
+      toast.error('Não consegui guardar esta nota. O texto continua aqui para você tentar novamente.');
       return;
     }
 
@@ -1836,7 +1893,9 @@ export default function ProjectsPage() {
     setEditingNoteId(null);
     setNoteForm({ title: '', content: '', tags: '', relatedTaskId: 'none', folder: '', favorite: false });
     setItemDialogType(null);
+    if (quickCapture) setIsAddMaterialDialogOpen(false);
     setNotes(listProjectNotes(selectedProject));
+    if (quickCapture) toast.success('Material guardado. Você pode organizar depois.');
   };
 
   const handleEditNote = (note) => {
@@ -1935,7 +1994,7 @@ export default function ProjectsPage() {
     });
 
     if (!updated) {
-      toast.error('Nao foi possivel atualizar a sessao.');
+      toast.error('Não consegui guardar a sessão. Confira a duração e tente novamente.');
       return;
     }
 
@@ -2210,10 +2269,10 @@ export default function ProjectsPage() {
       appendHistory(nextName, 'Projeto renomeado', `Nome anterior: ${selectedProject}`);
       refreshWorkspaceData(nextName);
       setIsRenameDialogOpen(false);
-      toast.success('Projeto renomeado com sucesso.');
+      toast.success('Projeto renomeado.');
     } catch (error) {
       console.error(error);
-      toast.error('Nao foi possivel renomear o projeto.');
+      toast.error('Não consegui renomear este projeto. Tente novamente.');
     } finally {
       setIsRenamingProject(false);
     }
@@ -2264,10 +2323,10 @@ export default function ProjectsPage() {
       setNotes([]);
       setSearchTerm('');
       setIsDeleteDialogOpen(false);
-      toast.success('Projeto excluido com sucesso.');
+      toast.success('Projeto removido.');
     } catch (error) {
       console.error(error);
-      toast.error('Nao foi possivel excluir o projeto.');
+      toast.error('Não consegui remover este projeto. Nada foi alterado; tente novamente.');
     } finally {
       setIsDeletingProject(false);
     }
@@ -2288,10 +2347,10 @@ export default function ProjectsPage() {
                     <div>
                       <div className="flex items-center gap-3 mb-3">
                         <FolderKanban className="w-8 h-8 text-primary" />
-                        <h1 className="text-3xl font-medium text-foreground">Seus Projetos</h1>
+                        <h1 className="text-3xl font-medium text-foreground">Seus projetos</h1>
                       </div>
                       <p className="text-sm text-muted-foreground">
-                        Entre em cada projeto para abrir uma area de trabalho com materiais, acessos, notas e tarefas no mesmo lugar.
+                        Reúna tarefas, materiais e referências de trabalhos que você acompanha por mais tempo.
                       </p>
                     </div>
                     <Button onClick={() => setIsCreateProjectOpen(true)} className="shrink-0">
@@ -2344,8 +2403,8 @@ export default function ProjectsPage() {
                   ) : (
                     <div className="text-center py-16 bg-card border border-border rounded-xl shadow-sm">
                       <CheckCircle2 className="w-12 h-12 text-muted-foreground mx-auto mb-4 opacity-50" />
-                      <h2 className="text-xl font-medium text-foreground mb-2">Sem projetos ativos</h2>
-                      <p className="text-muted-foreground">Comece criando o primeiro projeto e organize a mesa de trabalho digital.</p>
+                      <h2 className="text-xl font-medium text-foreground mb-2">Seus projetos vão aparecer aqui.</h2>
+                      <p className="text-muted-foreground">Crie um quando tiver algo que queira acompanhar por mais tempo.</p>
                     </div>
                   )}
                 </>
@@ -2744,7 +2803,7 @@ export default function ProjectsPage() {
 
                     <TabsContent value="materiais">
                       <ProjectMaterialsWorkspace
-                        items={projectMaterialItems}
+                        items={visibleProjectMaterialItems}
                         folders={folders}
                         folderPathMap={folderPathMap}
                         folderItemCounters={folderItemCounters}
@@ -2754,6 +2813,8 @@ export default function ProjectsPage() {
                         foldersInCurrentLevel={foldersInCurrentLevel}
                         driveState={drivePresentationState}
                         driveFolder={projectDriveConfig}
+                        organizingOnly={showMaterialsToOrganize}
+                        onShowAll={() => navigate('/projects')}
                         onAdd={openMaterialAddFlow}
                         onOpenFolder={openFolder}
                         onBackFolder={goBackFolder}
@@ -3085,7 +3146,7 @@ export default function ProjectsPage() {
                               />
                               Marcar como favorito
                             </label>
-                            <Button onClick={handleCreateLink}>Salvar link</Button>
+                            <Button onClick={() => handleCreateLink(false)}>Salvar link</Button>
                           </CardContent>
                         </Card>
 
@@ -3193,7 +3254,7 @@ export default function ProjectsPage() {
                                 </SelectContent>
                               </Select>
                             </div>
-                            <Button onClick={handleCreateOrUpdateNote}>{editingNoteId ? 'Atualizar nota' : 'Salvar nota'}</Button>
+                            <Button onClick={() => handleCreateOrUpdateNote(false)}>{editingNoteId ? 'Atualizar nota' : 'Salvar nota'}</Button>
                           </CardContent>
                         </Card>
 
@@ -3259,31 +3320,160 @@ export default function ProjectsPage() {
           onSaved={() => refreshWorkspaceData(selectedProject)}
         />
 
-        <Dialog open={isAddMaterialDialogOpen} onOpenChange={setIsAddMaterialDialogOpen}>
-          <DialogContent className="max-w-lg [&>button]:h-11 [&>button]:w-11 [&>button]:flex [&>button]:items-center [&>button]:justify-center" onInteractOutside={(event) => event.preventDefault()} onCloseAutoFocus={restoreMaterialDialogFocus}>
+        <Dialog
+          open={isAddMaterialDialogOpen}
+          onOpenChange={(open) => {
+            setIsAddMaterialDialogOpen(open);
+            if (!open) {
+              setSelectedMaterialFile(null);
+              setIsAdvancedDetailsOpen(false);
+            }
+          }}
+        >
+          <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto [&>button]:h-11 [&>button]:w-11 [&>button]:flex [&>button]:items-center [&>button]:justify-center" onInteractOutside={(event) => event.preventDefault()} onCloseAutoFocus={restoreMaterialDialogFocus}>
             <DialogHeader>
-              <DialogTitle>O que você quer guardar?</DialogTitle>
-              <DialogDescription>Escolha o tipo de item para adicionar ao projeto.</DialogDescription>
+              <DialogTitle>Adicionar material</DialogTitle>
+              <DialogDescription>Cole um link, envie um arquivo ou escreva uma anotação. Projeto: {selectedProject}</DialogDescription>
             </DialogHeader>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+
+            <div className="grid grid-cols-3 gap-2" role="tablist" aria-label="Tipo de material">
               {[
-                { type: 'file', label: 'Arquivo', icon: FileText, description: 'Arquivo ou referência existente' },
-                { type: 'document', label: 'Documento', icon: FileText, description: 'Novo Google Docs no projeto' },
-                { type: 'link', label: 'Link', icon: Link2, description: 'Site, painel ou página útil' },
-                { type: 'note', label: 'Nota', icon: NotebookText, description: 'Decisão ou informação do projeto' },
+                { type: 'link', label: 'Link', icon: Link2 },
+                { type: 'file', label: 'Arquivo', icon: Upload },
+                { type: 'note', label: 'Nota', icon: NotebookText },
               ].map((option) => {
                 const OptionIcon = option.icon;
+                const selected = quickMaterialType === option.type;
                 return (
-                  <button key={option.type} type="button" onClick={() => openMaterialAddFlow(option.type)} className="rounded-lg border border-border p-4 text-left transition-colors hover:bg-muted/50">
-                    <OptionIcon className="mb-3 h-5 w-5 text-primary" />
-                    <span className="block text-sm font-medium">{option.label}</span>
-                    <span className="mt-1 block text-xs text-muted-foreground">{option.description}</span>
-                  </button>
+                  <Button
+                    key={option.type}
+                    type="button"
+                    variant={selected ? 'default' : 'outline'}
+                    className="h-12"
+                    onClick={() => {
+                      setQuickMaterialType(option.type);
+                      setIsAdvancedDetailsOpen(false);
+                    }}
+                    role="tab"
+                    aria-selected={selected}
+                  >
+                    <OptionIcon className="mr-2 h-4 w-4" /> {option.label}
+                  </Button>
                 );
               })}
             </div>
+
+            {quickMaterialType === 'link' && (
+              <div className="space-y-2">
+                <Label htmlFor="quick-material-link">Link ou URL</Label>
+                <Input id="quick-material-link" value={linkForm.url} onChange={(event) => setLinkForm((current) => ({ ...current, url: event.target.value }))} placeholder="https://..." autoFocus />
+              </div>
+            )}
+
+            {quickMaterialType === 'file' && (
+              <div className="space-y-3">
+                <Label htmlFor="quick-material-file">Arquivo</Label>
+                <div
+                  className="rounded-lg border border-dashed border-border bg-muted/20 p-4"
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    selectMaterialFile(event.dataTransfer.files?.[0]);
+                  }}
+                >
+                  <input id="quick-material-file" type="file" className="sr-only" accept={MATERIAL_UPLOAD_ACCEPT} onChange={(event) => selectMaterialFile(event.target.files?.[0])} />
+                  {selectedMaterialFile ? (
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">{selectedMaterialFile.name}</p>
+                        <p className="text-xs text-muted-foreground">{formatMaterialFileSize(selectedMaterialFile.size)}</p>
+                      </div>
+                      <Button type="button" size="icon" variant="ghost" onClick={() => setSelectedMaterialFile(null)} aria-label="Remover arquivo selecionado"><X className="h-4 w-4" /></Button>
+                    </div>
+                  ) : (
+                    <Label htmlFor="quick-material-file" className="flex cursor-pointer flex-col items-center gap-2 py-5 text-center">
+                      <Upload className="h-5 w-5 text-primary" />
+                      <span className="text-sm font-medium">Selecionar arquivo</span>
+                      <span className="text-xs text-muted-foreground">PDF, Office, texto, imagem ou ZIP · até 25 MB</span>
+                    </Label>
+                  )}
+                </div>
+                {!driveConnectionStatus?.connected && (
+                  <div className="flex items-center justify-between gap-3 rounded-lg border border-border p-3 text-sm">
+                    <span className="text-muted-foreground">Conecte o Google Drive para enviar arquivos.</span>
+                    <Button type="button" size="sm" variant="outline" onClick={handleConnectGoogleDriveAutomatic}>Conectar</Button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {quickMaterialType === 'note' && (
+              <div className="space-y-2">
+                <Label htmlFor="quick-material-note">Nota</Label>
+                <Textarea id="quick-material-note" value={noteForm.content} onChange={(event) => setNoteForm((current) => ({ ...current, content: event.target.value }))} className="min-h-32" placeholder="Escreva uma anotação curta..." autoFocus />
+              </div>
+            )}
+
+            <div className="space-y-3">
+              <Button type="button" variant="ghost" size="sm" onClick={() => setIsAdvancedDetailsOpen((current) => !current)}>
+                {isAdvancedDetailsOpen ? 'Ocultar opções' : 'Mais opções'}
+              </Button>
+              {isAdvancedDetailsOpen && (
+                <div className="space-y-4 rounded-lg border border-border p-4">
+                  <div className="space-y-2">
+                    <Label>Título <span className="text-muted-foreground">(opcional)</span></Label>
+                    <Input
+                      value={quickMaterialType === 'link' ? linkForm.title : quickMaterialType === 'note' ? noteForm.title : fileForm.name}
+                      onChange={(event) => {
+                        if (quickMaterialType === 'link') setLinkForm((current) => ({ ...current, title: event.target.value }));
+                        if (quickMaterialType === 'note') setNoteForm((current) => ({ ...current, title: event.target.value }));
+                        if (quickMaterialType === 'file') setFileForm((current) => ({ ...current, name: event.target.value }));
+                      }}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Pasta <span className="text-muted-foreground">(opcional)</span></Label>
+                    <Select
+                      value={(quickMaterialType === 'link' ? linkForm.folder : quickMaterialType === 'note' ? noteForm.folder : fileForm.folder) || 'none'}
+                      onValueChange={(value) => {
+                        const folder = value === 'none' ? '' : value;
+                        if (quickMaterialType === 'link') setLinkForm((current) => ({ ...current, folder }));
+                        if (quickMaterialType === 'note') setNoteForm((current) => ({ ...current, folder }));
+                        if (quickMaterialType === 'file') setFileForm((current) => ({ ...current, folder }));
+                      }}
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Organizar depois</SelectItem>
+                        {folders.map((folder) => <SelectItem key={folder.id} value={folderPathMap[folder.id]}>{folderPathMap[folder.id]}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex flex-wrap gap-2 border-t border-border pt-3">
+                    <Button type="button" size="sm" variant="outline" onClick={() => openMaterialAddFlow('document')}>Criar documento no Drive</Button>
+                    <Button type="button" size="sm" variant="outline" onClick={() => openMaterialAddFlow('access')}>Adicionar acesso</Button>
+                    <Button type="button" size="sm" variant="outline" onClick={() => openMaterialAddFlow('folder')}>Criar pasta</Button>
+                  </div>
+                </div>
+              )}
+            </div>
+
             <DialogFooter>
               <Button variant="outline" onClick={() => setIsAddMaterialDialogOpen(false)}>Cancelar</Button>
+              <Button
+                onClick={() => {
+                  if (quickMaterialType === 'link') handleCreateLink(true);
+                  if (quickMaterialType === 'note') handleCreateOrUpdateNote(true);
+                  if (quickMaterialType === 'file') handleSaveMaterial(true);
+                }}
+                disabled={
+                  (quickMaterialType === 'link' && !linkForm.url.trim())
+                  || (quickMaterialType === 'note' && !noteForm.content.trim())
+                  || (quickMaterialType === 'file' && (!selectedMaterialFile || !driveConnectionStatus?.connected || isSyncingDriveMaterial))
+                }
+              >
+                {isSyncingDriveMaterial && quickMaterialType === 'file' ? 'Enviando...' : 'Guardar'}
+              </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -3422,8 +3612,8 @@ export default function ProjectsPage() {
 
             <DialogFooter>
               <Button variant="outline" onClick={() => setItemDialogType(null)}>Cancelar</Button>
-              {itemDialogType === 'link' && <Button onClick={handleCreateLink}>{editingLinkId ? 'Salvar alterações' : 'Salvar link'}</Button>}
-              {itemDialogType === 'note' && <Button onClick={handleCreateOrUpdateNote}>{editingNoteId ? 'Salvar alterações' : 'Salvar nota'}</Button>}
+              {itemDialogType === 'link' && <Button onClick={() => handleCreateLink(false)}>{editingLinkId ? 'Salvar alterações' : 'Salvar link'}</Button>}
+              {itemDialogType === 'note' && <Button onClick={() => handleCreateOrUpdateNote(false)}>{editingNoteId ? 'Salvar alterações' : 'Salvar nota'}</Button>}
               {itemDialogType === 'access' && <Button onClick={handleCreateAccess}>{editingAccessId ? 'Salvar alterações' : 'Salvar acesso'}</Button>}
             </DialogFooter>
           </DialogContent>
@@ -3681,7 +3871,7 @@ export default function ProjectsPage() {
             <DialogFooter>
               <Button variant="outline" onClick={() => setIsMaterialDialogOpen(false)}>Cancelar</Button>
               <Button
-                onClick={handleSaveMaterial}
+                onClick={() => handleSaveMaterial(false)}
                 disabled={isSyncingDriveMaterial
                   || ((fileForm.materialType === 'documento' || fileForm.materialType === 'arquivo') && !driveConnectionStatus?.connected)
                   || (fileForm.materialType === 'arquivo' && !editingMaterialId && (!selectedMaterialFile || !fileForm.folder))}

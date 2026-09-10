@@ -11,7 +11,7 @@ import { listWaitingReturns, subscribeToWaitingReturns } from '@/services/waitin
 
 const navItems = [
   { icon: Home, label: 'Hoje', path: '/' },
-  { icon: Sparkles, label: 'Plano', path: '/plano-clareado' },
+  { icon: Sparkles, label: 'Descarregue a mente', path: '/plano-clareado' },
   { icon: FolderKanban, label: 'Projetos', path: '/projects' },
 ];
 

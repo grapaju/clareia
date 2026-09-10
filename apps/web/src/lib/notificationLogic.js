@@ -48,7 +48,7 @@ function formatAmount(value) {
     : '';
 }
 
-export function buildNotificationCenter({ waitingItems = [], savedCount = 0, referenceDate = new Date() } = {}) {
+export function buildNotificationCenter({ waitingItems = [], savedCount = 0, materialsToOrganizeCount = 0, referenceDate = new Date() } = {}) {
   const openItems = waitingItems.filter(isOpenWaitingReturn);
   const attention = [];
 
@@ -87,10 +87,22 @@ export function buildNotificationCenter({ waitingItems = [], savedCount = 0, ref
     }
   }
 
+  const organizing = [];
+  if (savedCount > 0) {
+    organizing.push({ id: 'saved-summary', title: `${savedCount} ${savedCount === 1 ? 'item guardado' : 'itens guardados'}`, href: '/guardados' });
+  }
+  if (materialsToOrganizeCount > 0) {
+    organizing.push({
+      id: 'materials-organizing-summary',
+      title: `${materialsToOrganizeCount} ${materialsToOrganizeCount === 1 ? 'material para organizar' : 'materiais para organizar'}`,
+      href: '/projects?materialStatus=para_organizar',
+    });
+  }
+
   return {
     attention,
     tracking: openItems.length > 0 ? [{ id: 'waiting-summary', title: `${openItems.length} ${openItems.length === 1 ? 'item aguardando retorno' : 'itens aguardando retorno'}`, href: '/aguardando-retorno' }] : [],
-    organizing: savedCount > 0 ? [{ id: 'saved-summary', title: `${savedCount} ${savedCount === 1 ? 'item guardado' : 'itens guardados'}`, href: '/guardados' }] : [],
+    organizing,
   };
 }
 

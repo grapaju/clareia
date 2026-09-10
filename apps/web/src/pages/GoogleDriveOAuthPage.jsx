@@ -101,7 +101,7 @@ export default function GoogleDriveOAuthPage() {
     const url = new URL(window.location.href);
     if (url.searchParams.get('driveConnected') !== '1') return;
 
-    toast.success('Google Drive conectado com sucesso.');
+    toast.success('Google Drive conectado.');
     url.searchParams.delete('driveConnected');
     url.searchParams.delete('driveProject');
     window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
@@ -118,13 +118,14 @@ export default function GoogleDriveOAuthPage() {
       });
 
       if (!response?.authUrl) {
-        toast.error('Nao foi possivel iniciar a autenticacao com o Google Drive.');
+        toast.error('Não consegui iniciar a autenticação com o Google Drive. Tente novamente.');
         return;
       }
 
       window.location.href = response.authUrl;
     } catch (error) {
-      toast.error(error?.message || 'Falha ao iniciar conexao com Google Drive.');
+      console.error(error);
+      toast.error('Não consegui iniciar a conexão com o Google Drive. Tente novamente.');
     } finally {
       setIsConnecting(false);
     }
@@ -134,12 +135,13 @@ export default function GoogleDriveOAuthPage() {
     try {
       setIsDisconnecting(true);
       await disconnectGoogleDrive();
-      toast.success('Conexao com Google Drive removida.');
+      toast.success('Conexão com o Google Drive removida.');
       await loadStatus();
       await loadChecklist();
       await loadSetupStatus();
     } catch (error) {
-      toast.error(error?.message || 'Nao foi possivel desconectar o Google Drive.');
+      console.error(error);
+      toast.error('Não consegui desconectar o Google Drive. A conexão continua ativa; tente novamente.');
     } finally {
       setIsDisconnecting(false);
     }
@@ -157,7 +159,8 @@ export default function GoogleDriveOAuthPage() {
       setTestResult(result);
       toast.success('Teste executado. Arquivo de verificação criado no Google Drive.');
     } catch (error) {
-      toast.error(error?.message || 'Nao foi possivel testar a conexao com Google Drive.');
+      console.error(error);
+      toast.error('Não consegui testar a conexão. Confira a configuração e tente novamente.');
     } finally {
       setIsTestingConnection(false);
     }
@@ -165,17 +168,18 @@ export default function GoogleDriveOAuthPage() {
 
   const handleSaveOAuthConfig = async () => {
     if (!oauthConfigForm.clientId || !oauthConfigForm.clientSecret || !oauthConfigForm.redirectUri) {
-      toast.error('Preencha Client ID, Client Secret e Redirect URI.');
+      toast.error('Informe Client ID, Client Secret e Redirect URI para guardar a configuração.');
       return;
     }
 
     try {
       setIsSavingOAuthConfig(true);
       await saveGoogleDriveOAuthUserConfig(oauthConfigForm);
-      toast.success('Configuracao OAuth salva na API com sucesso.');
+      toast.success('Configuração OAuth guardada.');
       await Promise.all([loadSetupStatus(), loadChecklist()]);
     } catch (error) {
-      toast.error(error?.message || 'Nao foi possivel salvar a configuracao OAuth.');
+      console.error(error);
+      toast.error('Não consegui guardar a configuração OAuth. Revise os dados e tente novamente.');
     } finally {
       setIsSavingOAuthConfig(false);
     }
@@ -188,15 +192,15 @@ export default function GoogleDriveOAuthPage() {
   const handleCopyRedirectUri = async () => {
     const target = oauthConfigForm.redirectUri || suggestedRedirectUri;
     if (!target) {
-      toast.error('Nao foi possivel identificar a Redirect URI automaticamente.');
+      toast.error('Não consegui identificar a Redirect URI. Informe o endereço antes de copiar.');
       return;
     }
 
     try {
       await navigator.clipboard.writeText(target);
-      toast.success('Redirect URI copiada para a area de transferencia.');
+      toast.success('Redirect URI copiada.');
     } catch {
-      toast.error('Nao foi possivel copiar a Redirect URI.');
+      toast.error('Não consegui copiar a Redirect URI. Selecione o endereço e copie manualmente.');
     }
   };
 
@@ -354,14 +358,14 @@ export default function GoogleDriveOAuthPage() {
 
                   <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
                     {setupStatus?.configured
-                      ? 'Configuracao OAuth detectada na API.'
-                      : 'Configuracao OAuth ainda nao completa na API.'}
+                      ? 'Configuração OAuth detectada na API.'
+                      : 'A configuração OAuth ainda não está completa na API.'}
                     {setupStatus?.envPath ? ` Arquivo alvo: ${setupStatus.envPath}` : ''}
                   </div>
 
                   <div className="rounded-lg border border-border bg-muted/20 p-3 text-xs text-muted-foreground space-y-2">
                     <p className="text-foreground font-medium">Redirect URI sugerida para este ambiente</p>
-                    <p className="break-all">{suggestedRedirectUri || 'Nao disponivel'}</p>
+                    <p className="break-all">{suggestedRedirectUri || 'Não disponível'}</p>
                     <div className="flex flex-wrap gap-2">
                       <Button type="button" variant="outline" onClick={handleCopyRedirectUri}>
                         Copiar Redirect URI
@@ -543,18 +547,18 @@ export default function GoogleDriveOAuthPage() {
                   </div>
 
                   <ol className="list-decimal pl-5 space-y-2 text-sm text-foreground">
-                    <li>Confirme com o time tecnico que a API possui as variaveis de OAuth do Google configuradas.</li>
+                    <li>Confirme com o time técnico que a API possui as variáveis de OAuth do Google configuradas.</li>
                     <li>Clique em Conectar com Google nesta tela.</li>
-                    <li>Escolha sua conta Google e aceite as permissoes solicitadas.</li>
+                    <li>Escolha sua conta Google e aceite as permissões solicitadas.</li>
                     <li>Ao retornar ao Clareia, verifique se o status aparece como conectado.</li>
-                    <li>No modulo de Projetos, use o modal de Drive para criar subpastas e ativar sincronizacao automatica dos materiais.</li>
+                    <li>No módulo de Projetos, use a configuração do Drive para criar subpastas e ativar a sincronização automática dos materiais.</li>
                   </ol>
 
                   <div className="rounded-lg border border-border bg-muted/30 p-4 text-sm text-muted-foreground space-y-2">
                     <p className="font-medium text-foreground">Dicas importantes</p>
                     <p>Use uma conta Google corporativa para evitar perda de acesso.</p>
                     <p>Se aparecer Estado OAuth expirado, reinicie o processo clicando em Conectar com Google novamente.</p>
-                    <p>Se a conexao nao concluir, valide URL de callback e escopos no backend.</p>
+                    <p>Se a conexão não concluir, valide a URL de callback e os escopos configurados na API.</p>
                   </div>
                 </CardContent>
               </Card>
@@ -563,16 +567,16 @@ export default function GoogleDriveOAuthPage() {
                 <CardContent className="p-6 space-y-3">
                   <div className="flex flex-wrap gap-2">
                     <Button variant="outline" onClick={() => navigate('/projects')}>Voltar para Projetos</Button>
-                    <Button variant="outline" onClick={() => navigate('/configuracoes')}>Ir para Configuracoes</Button>
+                    <Button variant="outline" onClick={() => navigate('/configuracoes')}>Ir para Configurações</Button>
                     <Button onClick={handleConnect} disabled={isConnecting}>{isConnecting ? 'Conectando...' : 'Iniciar OAuth agora'}</Button>
                     <Button variant="outline" onClick={handleTestConnection} disabled={isTestingConnection || !status.connected}>
-                      {isTestingConnection ? 'Testando...' : 'Testar conexao (criar arquivo)'}
+                      {isTestingConnection ? 'Testando...' : 'Testar conexão (criar arquivo)'}
                     </Button>
                   </div>
 
                   {testResult?.webViewLink && (
                     <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm text-muted-foreground">
-                      <p className="text-foreground font-medium">Teste concluido com sucesso</p>
+                      <p className="text-foreground font-medium">Teste concluído</p>
                       <p>Arquivo: {testResult.fileName}</p>
                       <a
                         href={testResult.webViewLink}

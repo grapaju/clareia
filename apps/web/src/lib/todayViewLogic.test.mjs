@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildTodayGroups, filterTodayGroups, getOpenPlannedMinutes, getTaskNextActionPresentation, getTodayCapacityState, getTodayHighlight, getTodayPresentation, getTodaySummary, getTodayTaskSituation, getVisibleTodayTasks } from './todayViewLogic.js';
+import { buildTodayGroups, filterTodayGroups, getDayPanelState, getOpenPlannedMinutes, getProgressState, getTaskNextActionPresentation, getTodayCapacityState, getTodayHighlight, getTodayPresentation, getTodaySummary, getTodayTaskSituation, getVisibleTodayTasks } from './todayViewLogic.js';
 
 const referenceDate = new Date(2026, 8, 1, 12);
 
@@ -277,4 +277,51 @@ test('retomada não repete onde parou quando o texto já é o próximo passo', (
 
   assert.equal(repeated.pauseNote, '');
   assert.equal(distinct.pauseNote, 'A planilha está aberta na segunda aba');
+});
+
+test('painel do dia descreve dados completos sem combinar energia e mente em uma nota', () => {
+  assert.deepEqual(getDayPanelState({ energia: 'alta', mente: 'tranquila' }, 105), {
+    label: 'Energia alta',
+    rhythm: 'Com ritmo',
+    meterValue: 78,
+    mindLabel: 'Mente tranquila',
+    availableMinutes: 105,
+    isComplete: true,
+    accessibleLabel: 'Energia alta — ritmo com ritmo',
+  });
+});
+
+test('painel do dia mantém dados incompletos explícitos', () => {
+  const panel = getDayPanelState({}, 0);
+  assert.equal(panel.isComplete, false);
+  assert.equal(panel.label, 'Energia não informada');
+  assert.equal(panel.mindLabel, 'Mente não informada');
+  assert.equal(panel.availableMinutes, 0);
+});
+
+test('progresso da jornada limita percentual e não divide por zero', () => {
+  assert.deepEqual(getProgressState(72, 120), {
+    valueMinutes: 72,
+    targetMinutes: 120,
+    remainingMinutes: 48,
+    percent: 60,
+    hasTarget: true,
+  });
+  assert.equal(getProgressState(30, 0).percent, null);
+  assert.equal(getProgressState(30, 0).hasTarget, false);
+  assert.equal(getProgressState(180, 120).percent, 100);
+  assert.equal(getProgressState(120, 480).percent, 25);
+  assert.equal(getProgressState(240, 480).percent, 50);
+  assert.equal(getProgressState(360, 480).percent, 75);
+  assert.equal(getProgressState(480, 480).percent, 100);
+  assert.equal(getProgressState(600, 480).percent, 100);
+});
+
+test('progresso profissional usa a meta sem depender da disponibilidade do check-in', () => {
+  const dailyTargetMinutes = 480;
+  const periodAvailableMinutes = 120;
+  const progress = getProgressState(120, dailyTargetMinutes);
+  assert.equal(progress.percent, 25);
+  assert.equal(periodAvailableMinutes, 120);
+  assert.equal(progress.targetMinutes, 480);
 });

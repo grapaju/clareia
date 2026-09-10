@@ -18,6 +18,7 @@ import { buildNotificationCenter, countUnreadAttention } from '@/lib/notificatio
 import { countPendingUnsortedNotes, subscribeToUnsortedNotes, syncUnsortedNotesFromApi } from '@/lib/unsortedNotesStorage.js';
 import { listWaitingReturns, subscribeToWaitingReturns, syncWaitingReturnsWithCloud } from '@/services/waitingReturnService.js';
 import { listReadNotificationIds, markNotificationRead, retainActiveNotificationReads } from '@/services/notificationStateService.js';
+import { countProjectMaterialsToOrganize, subscribeToProjectMaterials } from '@/services/projectMaterialOrganizationService.js';
 
 export default function Header() {
   const { currentUser, isAuthenticated, logout } = useAuth();
@@ -26,6 +27,7 @@ export default function Header() {
   const [modeAnnouncement, setModeAnnouncement] = useState('');
   const [waitingItems, setWaitingItems] = useState([]);
   const [savedCount, setSavedCount] = useState(0);
+  const [materialsToOrganizeCount, setMaterialsToOrganizeCount] = useState(0);
   const [readIds, setReadIds] = useState([]);
   const [loadedNotificationUserId, setLoadedNotificationUserId] = useState('');
   const userId = currentUser?.id || '';
@@ -38,6 +40,7 @@ export default function Header() {
     ]);
     setWaitingItems(listWaitingReturns());
     setSavedCount(countPendingUnsortedNotes(userId));
+    setMaterialsToOrganizeCount(countProjectMaterialsToOrganize());
     setLoadedNotificationUserId(userId);
   }, [userId]);
 
@@ -45,25 +48,29 @@ export default function Header() {
     if (!userId) return undefined;
     setWaitingItems([]);
     setSavedCount(0);
+    setMaterialsToOrganizeCount(0);
     setReadIds(listReadNotificationIds(userId));
     refreshNotifications();
     const refreshLocal = () => {
       setWaitingItems(listWaitingReturns());
       setSavedCount(countPendingUnsortedNotes(userId));
+      setMaterialsToOrganizeCount(countProjectMaterialsToOrganize());
     };
     const unsubscribeWaiting = subscribeToWaitingReturns(refreshLocal);
     const unsubscribeSaved = subscribeToUnsortedNotes(refreshLocal);
+    const unsubscribeMaterials = subscribeToProjectMaterials(refreshLocal);
     window.addEventListener('focus', refreshNotifications);
     return () => {
       unsubscribeWaiting();
       unsubscribeSaved();
+      unsubscribeMaterials();
       window.removeEventListener('focus', refreshNotifications);
     };
   }, [refreshNotifications, userId]);
 
   const notificationCenter = useMemo(
-    () => buildNotificationCenter({ waitingItems, savedCount }),
-    [savedCount, waitingItems]
+    () => buildNotificationCenter({ waitingItems, savedCount, materialsToOrganizeCount }),
+    [materialsToOrganizeCount, savedCount, waitingItems]
   );
   const notificationCount = countUnreadAttention(notificationCenter, readIds);
 

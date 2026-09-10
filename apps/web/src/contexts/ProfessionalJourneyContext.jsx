@@ -3,7 +3,6 @@ import { useAuth } from '@/contexts/AuthContext.jsx';
 import { listProjectProfilesApi } from '@/services/projectProfilesApiService.js';
 import {
   closeProfessionalJourney,
-  createProfessionalActivity,
   getCurrentProfessionalJourney,
   pauseProfessionalJourney,
   resumeProfessionalJourney,
@@ -15,16 +14,16 @@ const ProfessionalJourneyContext = createContext(null);
 
 export function ProfessionalJourneyProvider({ children }) {
   const { currentUser } = useAuth();
-  const [current, setCurrent] = useState({ item: null, pauses: [], activities: [] });
+  const [current, setCurrent] = useState({ item: null, pauses: [] });
   const [professionalProjects, setProfessionalProjects] = useState([]);
-  const [professionalHistory, setProfessionalHistory] = useState({ journeys: [], activities: [], edits: [] });
+  const [professionalHistory, setProfessionalHistory] = useState({ journeys: [], pauses: [] });
   const [isLoading, setIsLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     if (!currentUser?.id) {
-      setCurrent({ item: null, pauses: [], activities: [] });
+      setCurrent({ item: null, pauses: [] });
       setProfessionalProjects([]);
-      setProfessionalHistory({ journeys: [], activities: [], edits: [] });
+      setProfessionalHistory({ journeys: [], pauses: [] });
       setIsLoading(false);
       return;
     }
@@ -35,9 +34,9 @@ export function ProfessionalJourneyProvider({ children }) {
         listProjectProfilesApi(),
         listProfessionalJourneys(),
       ]);
-      setCurrent(journey || { item: null, pauses: [], activities: [] });
+      setCurrent({ item: journey?.item || null, pauses: journey?.pauses || [] });
       setProfessionalProjects(profiles.filter((profile) => profile.professionalTrackingEnabled));
-      setProfessionalHistory(history || { journeys: [], activities: [], edits: [] });
+      setProfessionalHistory({ journeys: history?.journeys || [], pauses: history?.pauses || [] });
     } finally {
       setIsLoading(false);
     }
@@ -52,7 +51,7 @@ export function ProfessionalJourneyProvider({ children }) {
     const response = await startProfessionalJourney({
       projectName,
       timezone: profile?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
-      idempotencyKey: `work-${currentUser.id}-${projectName}-${new Date().toISOString().slice(0, 10)}`,
+      idempotencyKey: `work-${currentUser.id}-${projectName}-${Date.now()}`,
     });
     await refresh();
     return response?.item || null;
@@ -72,20 +71,9 @@ export function ProfessionalJourneyProvider({ children }) {
 
   const closeWork = async (closingNote = '', endedAt) => {
     if (!current.item?.id) return;
-    await closeProfessionalJourney(current.item.id, { closingNote, ...(endedAt ? { endedAt } : {}) });
-    await refresh();
-  };
-
-  const startActivity = async ({ title, taskId, category, source = taskId ? 'task' : 'quick', notes = '', journeyId = '' }) => {
-    const targetJourneyId = journeyId || current.item?.id;
-    if (!targetJourneyId || (!journeyId && current.item.status !== 'active')) return null;
-    const active = current.activities.find((item) => !item.endedAt);
-    if (active && ((taskId && active.taskId === taskId) || (!taskId && active.title === title))) return active;
-    const response = await createProfessionalActivity(targetJourneyId, {
-      title, taskId, category, source, notes,
-      idempotencyKey: `activity-${targetJourneyId}-${taskId || title}-${Date.now()}`,
-    });
-    await refresh();
+    const response = await closeProfessionalJourney(current.item.id, { closingNote, ...(endedAt ? { endedAt } : {}) });
+    setCurrent({ item: null, pauses: [] });
+    await refresh().catch(() => {});
     return response?.item || null;
   };
 
@@ -93,7 +81,6 @@ export function ProfessionalJourneyProvider({ children }) {
     <ProfessionalJourneyContext.Provider value={{
       currentJourney: current.item,
       journeyPauses: current.pauses,
-      journeyActivities: current.activities,
       professionalProjects,
       professionalHistory,
       isLoading,
@@ -102,7 +89,6 @@ export function ProfessionalJourneyProvider({ children }) {
       pauseWork,
       resumeWork,
       closeWork,
-      startActivity,
     }}>
       {children}
     </ProfessionalJourneyContext.Provider>

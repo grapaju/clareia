@@ -113,7 +113,7 @@ export default function EditTaskModal({ task, isOpen, onClose }) {
     if (!formData.title?.trim()) errors.push('O que precisa ser feito');
 
     if (errors.length > 0) {
-      toast.error(`Preencha os campos obrigatórios: ${errors.join(', ')}`);
+      toast.error(`Só preciso desta informação para continuar: ${errors.join(', ')}.`);
       return false;
     }
     return true;
@@ -130,10 +130,11 @@ export default function EditTaskModal({ task, isOpen, onClose }) {
       };
       await updateTask(task.id, payload);
       await refreshTasks();
-      toast.success('Tarefa atualizada com sucesso!');
+      toast.success('Tarefa atualizada.');
       onClose();
     } catch (err) {
       console.error(err);
+      toast.error('Não consegui guardar as alterações. Tente novamente.');
     }
   };
 
@@ -141,10 +142,11 @@ export default function EditTaskModal({ task, isOpen, onClose }) {
     try {
       await updateTask(task.id, { status: 'arquivada' });
       await refreshTasks();
-      toast.success('Tarefa arquivada no backlog.');
+      toast.success('Tarefa arquivada.');
       onClose();
     } catch (err) {
       console.error(err);
+      toast.error('Não consegui arquivar esta tarefa. Tente novamente.');
     }
   };
 
@@ -165,6 +167,7 @@ export default function EditTaskModal({ task, isOpen, onClose }) {
       onClose();
     } catch (err) {
       console.error(err);
+      toast.error('Não consegui remover esta tarefa. Tente novamente.');
     }
   };
 
@@ -352,10 +355,10 @@ export default function EditTaskModal({ task, isOpen, onClose }) {
               Arquivar tarefa
             </Button>
             <Button variant="destructive" onClick={() => setShowDeleteAlert(true)}>
-              Deletar tarefa
+              Remover tarefa
             </Button>
             <Button variant="outline" onClick={handleAttemptClose}>
-              Cancelar
+              Agora não
             </Button>
             <Button onClick={handleSave}>
               Salvar alterações
@@ -369,7 +372,7 @@ export default function EditTaskModal({ task, isOpen, onClose }) {
           <AlertDialogHeader>
             <AlertDialogTitle>Descartar alterações?</AlertDialogTitle>
             <AlertDialogDescription>
-              Você fez alterações que não foram salvas. Tem certeza que deseja sair?
+              As alterações feitas nesta edição não serão guardadas.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -384,15 +387,15 @@ export default function EditTaskModal({ task, isOpen, onClose }) {
       <AlertDialog open={showDeleteAlert} onOpenChange={setShowDeleteAlert}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Tem certeza que deseja excluir esta tarefa?</AlertDialogTitle>
+            <AlertDialogTitle>Remover “{task?.title}”?</AlertDialogTitle>
             <AlertDialogDescription>
-              Essa ação não pode ser desfeita. A tarefa será removida permanentemente.
+              A tarefa será removida para sempre e não poderá ser recuperada.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogCancel>Agora não</AlertDialogCancel>
             <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-              Excluir tarefa
+              Remover tarefa
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

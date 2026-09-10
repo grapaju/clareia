@@ -84,3 +84,13 @@ test('acompanhamento concluído remove qualquer aviso ativo', () => {
   assert.equal(center.attention.length, 0);
   assert.equal(center.tracking.length, 0);
 });
+
+test('materiais para organizar aparecem somente na seção de organização', () => {
+  const center = buildNotificationCenter({ materialsToOrganizeCount: 3, referenceDate });
+  assert.deepEqual(center.organizing, [{
+    id: 'materials-organizing-summary',
+    title: '3 materiais para organizar',
+    href: '/projects?materialStatus=para_organizar',
+  }]);
+  assert.equal(countUnreadAttention(center), 0);
+});

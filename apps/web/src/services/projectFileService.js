@@ -1,6 +1,7 @@
 const STORAGE_KEY = 'clareia_project_files_v1';
 import { appendProjectHistory } from './projectHistoryService.js';
 import { readUserScopedJson, writeUserScopedJson } from '../lib/userScopedStorage.js';
+import { notifyProjectMaterialsUpdated } from './projectMaterialOrganizationService.js';
 
 function readAll() {
   const items = readUserScopedJson(STORAGE_KEY, []);
@@ -9,6 +10,7 @@ function readAll() {
 
 function writeAll(items) {
   writeUserScopedJson(STORAGE_KEY, items);
+  notifyProjectMaterialsUpdated();
 }
 
 function uid(prefix = 'file') {
@@ -61,6 +63,7 @@ export function createProjectFile(payload) {
     storageProvider: payload.storageProvider || 'local',
     relatedTaskId: String(payload.relatedTaskId || '').trim(),
     relatedTaskIds: toArray(payload.relatedTaskIds),
+    organizationStatus: String(payload.organizationStatus || '').trim(),
     createdAt: now,
     updatedAt: now
   };

@@ -226,8 +226,8 @@ export async function syncWaitingReturnsWithCloud() {
 
     const byLocalId = new Map(localItems.map((item) => [item.id, item]));
     const byCloudId = new Map(localItems.map((item) => [item.cloudId, item]));
-
     const merged = [...localItems];
+    const pendingUploads = new Set(localItems.filter((item) => !item.cloudId).map((item) => item.id));
 
     for (const remote of remoteItems) {
       const remoteNormalized = fromRemote(remote);
@@ -239,14 +239,19 @@ export async function syncWaitingReturnsWithCloud() {
 
       const index = merged.findIndex((item) => item.id === existing.id);
       if (index >= 0) {
-        merged[index] = {
-          ...existing,
-          ...remoteNormalized
-        };
+        const localUpdatedAt = new Date(existing.updatedAt || existing.createdAt || 0).getTime();
+        const remoteUpdatedAt = new Date(remoteNormalized.updatedAt || remoteNormalized.createdAt || 0).getTime();
+        if (localUpdatedAt > remoteUpdatedAt) {
+          merged[index] = { ...existing, cloudId: remoteNormalized.cloudId };
+          pendingUploads.add(existing.id);
+        } else {
+          merged[index] = { ...existing, ...remoteNormalized };
+          pendingUploads.delete(existing.id);
+        }
       }
     }
 
-    for (const item of merged) {
+    for (const item of merged.filter((candidate) => pendingUploads.has(candidate.id))) {
       const payload = toRemote(item, userId);
       if (item.cloudId) {
         try {

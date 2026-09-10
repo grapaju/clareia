@@ -5,6 +5,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { useTaskContext } from '@/hooks/useTaskContext.js';
 import { cn } from '@/lib/utils';
+import TodayDayPanel from '@/components/TodayDayPanel.jsx';
 
 const CAPACITY_OPTIONS = [
   { value: 'baixa', label: 'Energia baixa' },
@@ -19,7 +20,7 @@ const TIME_OPTIONS = [
   { value: '2h', label: '2h ou mais' },
 ];
 
-export default function CheckInCard({ compact = false }) {
+export default function CheckInCard({ compact = false, availableMinutes = 0 }) {
   const { checkIn, setCheckIn, hasTodayCheckIn, isCheckInEditing, openCheckInEditor } = useTaskContext();
   const [energia, setEnergia] = useState(checkIn?.energia || 'média');
   const [tempo, setTempo] = useState(checkIn?.tempo || '2h');
@@ -37,6 +38,9 @@ export default function CheckInCard({ compact = false }) {
   if (hasTodayCheckIn && !isCheckInEditing) {
     const capacityLabel = CAPACITY_OPTIONS.find((option) => option.value === checkIn?.energia)?.label || 'Energia média';
     const timeLabel = TIME_OPTIONS.find((option) => option.value === checkIn?.tempo)?.label || checkIn?.tempo || '2h';
+    if (!compact) {
+      return <TodayDayPanel checkIn={checkIn} availableMinutes={availableMinutes} onAdjust={openCheckInEditor} />;
+    }
     return (
       <div className={cn('mb-8 flex min-h-11 flex-wrap items-center justify-between gap-3 border-b border-border py-3', compact && 'mx-auto max-w-2xl')}>
         <p className="text-sm font-medium text-foreground">{capacityLabel} · {timeLabel} disponíveis</p>
@@ -73,7 +77,7 @@ export default function CheckInCard({ compact = false }) {
         )}
 
         <div className="flex justify-end">
-          <Button onClick={() => setCheckIn({ energia, mente, tempo, prioridadePrincipal })}>Encontrar meu próximo passo</Button>
+          <Button className="press-feedback" onClick={() => setCheckIn({ energia, mente, tempo, prioridadePrincipal })}>Encontrar meu próximo passo</Button>
         </div>
       </CardContent>
     </Card>
@@ -89,7 +93,7 @@ function SelectionGroup({ icon: Icon, options, selected, onSelect }) {
           type="button"
           onClick={() => onSelect(option.value)}
           aria-pressed={selected === option.value}
-          className={cn('min-h-11 rounded-md border px-4 py-2 text-sm transition-colors', selected === option.value ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background hover:bg-muted')}
+          className={cn('min-h-11 rounded-md border px-4 py-2 text-sm transition-colors press-feedback', selected === option.value ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background hover:bg-muted')}
         >
           {Icon && <Icon className="mr-2 inline h-4 w-4" aria-hidden="true" />}{option.label}
         </button>

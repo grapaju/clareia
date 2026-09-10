@@ -28,7 +28,6 @@ import TaskPendingMicrotasksDialog from '@/components/TaskPendingMicrotasksDialo
 import TaskPauseDialog from '@/components/TaskPauseDialog.jsx';
 import { getActiveWorkSession } from '@/services/workSessionService.js';
 import { getTaskNextActionPresentation } from '@/lib/todayViewLogic.js';
-import { useProfessionalJourney } from '@/contexts/ProfessionalJourneyContext.jsx';
 
 export default function FocusPage() {
   const navigate = useNavigate();
@@ -47,7 +46,6 @@ export default function FocusPage() {
     resumeTask
   } = useTaskContext();
   const { lowStimulationMode } = useTheme();
-  const { currentJourney, startActivity } = useProfessionalJourney();
   
   const [phase, setPhase] = useState(selectedTask ? 'setup' : 'none');
   const [objective, setObjective] = useState('');
@@ -140,9 +138,6 @@ export default function FocusPage() {
         if (updatedTask) {
           setSelectedTask(updatedTask);
           setActiveMicrotasks(updatedTask.microtarefas || []);
-        }
-        if (currentJourney?.status === 'active' && currentJourney.projectName === (selectedTask.project || 'Pessoal')) {
-          await startActivity({ title: selectedTask.title, taskId: selectedTask.id, source: 'task' });
         }
       } catch (error) {
         console.error('Erro ao iniciar sessão de trabalho:', error);
@@ -372,9 +367,6 @@ export default function FocusPage() {
                   <div className="mb-8">
                     <h1 className="text-3xl font-medium text-foreground mb-2">Preparando o foco</h1>
                     {!lowStimulationMode && <p className="text-muted-foreground">O que você fará nos próximos {focusBlockMinutes} minutos.</p>}
-                    {currentJourney?.projectName === (selectedTask.project || 'Pessoal') && (
-                      <p className="mt-2 text-sm text-muted-foreground">{currentJourney.projectName} · jornada {currentJourney.status === 'paused' ? 'pausada' : 'em andamento'}</p>
-                    )}
                   </div>
 
                   <div className="bg-secondary/30 p-6 rounded-2xl mb-8 border border-border">
@@ -431,9 +423,6 @@ export default function FocusPage() {
                       </Button>
                     </div>
                     <p className="text-primary uppercase tracking-widest text-xs font-bold mb-4 flex items-center"><span className="w-2 h-2 rounded-full bg-primary animate-pulse mr-2" /> Foco Ativo</p>
-                    {currentJourney?.projectName === (selectedTask.project || 'Pessoal') && (
-                      <p className="mb-2 text-sm text-muted-foreground">{currentJourney.projectName} · jornada {currentJourney.status === 'paused' ? 'pausada' : 'em andamento'}</p>
-                    )}
                     <h1 className="text-2xl md:text-3xl font-medium text-foreground leading-tight mb-6 pr-12">{selectedTask.title}</h1>
                     
                     {!hasCompletedAllSteps && (

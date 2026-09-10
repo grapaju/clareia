@@ -525,7 +525,7 @@ export default function ClearPlanPage() {
   const handleCreateTasks = async () => {
     if (!plan || confirmationInFlightRef.current) return;
     if (getPlanStatus(plan) !== 'pending') {
-      toast.info('Este plano já foi processado.');
+      toast.info('Este conteúdo já foi processado.');
       setPlanData(null);
       return;
     }
@@ -584,7 +584,7 @@ export default function ClearPlanPage() {
 
       setPlanData(null);
       const count = result?.createdCount ?? result?.items?.length ?? preparedTasks.length;
-      toast.success(result?.reused ? 'Este plano já havia sido criado.' : `${count} tarefas criadas com sucesso.`);
+      toast.success(result?.reused ? 'Estas tarefas já haviam sido criadas.' : `${count} tarefas criadas.`);
       navigate('/');
     } catch (err) {
       console.error(err);
@@ -607,11 +607,11 @@ export default function ClearPlanPage() {
           meta: { ...(plan?.meta || {}), status: 'pending', savedAt: new Date().toISOString() }
         }
       }, { $autoCancel: false });
-      toast.success('Plano salvo. Você pode continuar depois.');
+      toast.success('Revisão salva. Você pode continuar depois.');
       navigate('/');
     } catch (error) {
       console.error(error);
-      toast.error('Não foi possível salvar agora. Suas alterações continuam na tela.');
+      toast.error('Não consegui guardar agora. Suas alterações continuam na tela; tente novamente.');
     } finally {
       setIsProcessing(false);
     }
@@ -628,7 +628,7 @@ export default function ClearPlanPage() {
       toast.info('Revisão cancelada. Nenhuma tarefa ou projeto foi criado.');
     } catch (error) {
       console.error(error);
-      toast.error('Não foi possível cancelar agora. Nenhum item foi criado.');
+      toast.error('Não consegui cancelar agora. Nenhum item foi criado; tente novamente.');
     } finally {
       setIsProcessing(false);
     }
@@ -645,7 +645,7 @@ export default function ClearPlanPage() {
         <div className="flex">
           <Sidebar />
           <main className="min-w-0 flex-1 p-10 text-center">
-            <p className="text-muted-foreground">Buscando plano pendente...</p>
+            <p className="text-muted-foreground">Buscando itens para revisar...</p>
           </main>
         </div>
         <MobileNav />
@@ -660,8 +660,8 @@ export default function ClearPlanPage() {
         <div className="flex">
           <Sidebar />
           <main className="min-w-0 flex-1 p-10 text-center">
-            <p className="text-muted-foreground mb-4">Nenhum plano pendente para criar tarefas.</p>
-            <Button onClick={() => navigate('/criar-plano')}>Criar novo plano</Button>
+            <p className="text-muted-foreground mb-4">Nenhum conteúdo pendente para organizar.</p>
+            <Button onClick={() => navigate('/criar-plano')}>Descarregar a mente</Button>
           </main>
         </div>
         <MobileNav />
@@ -673,7 +673,7 @@ export default function ClearPlanPage() {
     const taskCount = getAllPlanTasks(plan).length;
     return (
       <>
-        <Helmet><title>Plano Clareado - Clareia</title></Helmet>
+        <Helmet><title>Descarregue a mente - Clareia</title></Helmet>
         <div className="min-h-screen bg-background">
           <Header />
           <div className="flex">
@@ -682,16 +682,16 @@ export default function ClearPlanPage() {
               <div className="page-container section-spacing max-w-3xl">
                 <Card className="bg-card border-border shadow-sm">
                   <CardContent className="p-8 space-y-4">
-                    <h1 className="text-2xl font-medium text-foreground">Plano pendente encontrado</h1>
+                    <h1 className="text-2xl font-medium text-foreground">Conteúdo pendente encontrado</h1>
                     <p className="text-sm text-muted-foreground">
-                      Há um plano aguardando revisão com {taskCount} tarefas sugeridas.
+                      Há um conteúdo aguardando revisão com {taskCount} tarefas sugeridas.
                     </p>
                     <div className="flex flex-wrap gap-3">
                       <Button onClick={() => setShowPendingEntry(false)}>
                         Continuar revisão
                       </Button>
                       <Button variant="outline" onClick={() => navigate('/criar-plano')}>
-                        Criar novo plano
+                        Descarregar mais ideias
                       </Button>
                     </div>
                   </CardContent>
@@ -1008,7 +1008,7 @@ export default function ClearPlanPage() {
       <AlertDialog open={deleteDialog.open} onOpenChange={(open) => setDeleteDialog((prev) => ({ ...prev, open }))}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Remover esta tarefa do plano?</AlertDialogTitle>
+            <AlertDialogTitle>Remover esta tarefa da revisão?</AlertDialogTitle>
             <AlertDialogDescription>
               A tarefa será removida apenas desta revisão e não será criada no final.
             </AlertDialogDescription>

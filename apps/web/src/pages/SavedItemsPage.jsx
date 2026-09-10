@@ -24,6 +24,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/contexts/AuthContext.jsx';
 import apiClient, { getCurrentAccountId } from '@/lib/apiClient.js';
+import { UI_COPY } from '@/lib/uiCopy.js';
 import {
   formatSavedWaitingTime,
   listUnsortedNotes,
@@ -134,7 +135,7 @@ export default function SavedItemsPage() {
       toast.success(item.project ? `Nota adicionada ao projeto ${item.project}.` : 'Nota salva em Notas e ideias.');
     } catch (error) {
       console.error(error);
-      toast.error('Não foi possível transformar este guardado em nota.');
+      toast.error('Não consegui transformar este guardado em nota. Ele continua salvo para você tentar novamente.');
     }
   };
 
@@ -159,7 +160,7 @@ export default function SavedItemsPage() {
                   <Bookmark className="h-7 w-7 text-primary" aria-hidden="true" />
                   <h1 className="text-3xl">Guardados</h1>
                 </div>
-                <p className="text-muted-foreground">Capturas que você deixou para organizar com calma.</p>
+                <p className="text-muted-foreground">{UI_COPY.saved.intro}</p>
               </div>
 
               <div className="mb-5 flex items-center gap-2 rounded-md border border-border bg-card px-3">
@@ -195,10 +196,8 @@ export default function SavedItemsPage() {
 
               {filteredItems.length === 0 ? (
                 <div className="rounded-md border border-dashed border-border px-6 py-12 text-center">
-                  <p className="font-medium">Nada aqui por enquanto.</p>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    O que você guardar em Tirar da cabeça aparecerá nesta área.
-                  </p>
+                  <p className="font-medium">{UI_COPY.saved.empty}</p>
+                  <p className="mt-1 text-sm text-muted-foreground">{UI_COPY.saved.emptyHelp}</p>
                 </div>
               ) : (
                 <ul className="space-y-3">
@@ -221,8 +220,8 @@ export default function SavedItemsPage() {
                         <div className="mt-4 flex flex-wrap gap-2">
                           {isEditing ? (
                             <>
-                              <Button size="sm" variant="outline" onClick={() => saveEdit(item)}>Salvar edição</Button>
-                              <Button size="sm" variant="ghost" onClick={() => setEditingId('')}>Cancelar</Button>
+                              <Button size="sm" variant="outline" onClick={() => saveEdit(item)}>Guardar alteração</Button>
+                              <Button size="sm" variant="ghost" onClick={() => setEditingId('')}>Agora não</Button>
                             </>
                           ) : (
                             <>
@@ -267,12 +266,12 @@ export default function SavedItemsPage() {
       <AlertDialog open={Boolean(deleteId)} onOpenChange={(open) => !open && setDeleteId('')}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Excluir guardado?</AlertDialogTitle>
-            <AlertDialogDescription>Esta ação não pode ser desfeita.</AlertDialogDescription>
+            <AlertDialogTitle>Remover este guardado?</AlertDialogTitle>
+            <AlertDialogDescription>Ele deixará de aparecer aqui e não poderá ser recuperado.</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancelar</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Excluir</AlertDialogAction>
+            <AlertDialogCancel>Agora não</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Remover</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

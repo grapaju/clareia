@@ -29,7 +29,7 @@ export default function ProjectSelect({ value = '', onChange, disabled = false }
       setProjects(Array.isArray(items) ? items : []);
       setError('');
     } catch {
-      setError('Não foi possível carregar os projetos.');
+      setError('Não consegui carregar os projetos. Feche a lista e tente novamente.');
     }
   };
 
@@ -56,7 +56,7 @@ export default function ProjectSelect({ value = '', onChange, disabled = false }
         setProjects((current) => [...current, created]);
       } catch (requestError) {
         if (requestError?.status !== 409) {
-          setError('Não foi possível preparar o projeto Pessoal.');
+          setError('Não consegui preparar o projeto Pessoal. Tente novamente.');
           return;
         }
       }
@@ -77,7 +77,7 @@ export default function ProjectSelect({ value = '', onChange, disabled = false }
     } catch (requestError) {
       setError(requestError?.status === 409
         ? 'Já existe um projeto com esse nome. Selecione-o na lista.'
-        : 'Não foi possível criar o projeto.');
+        : 'Não consegui criar o projeto. Tente novamente.');
       await loadProjects();
     } finally {
       setIsSaving(false);

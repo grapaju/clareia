@@ -80,11 +80,11 @@ export default function TaskPendingMicrotasksDialog({
           <AlertDialogHeader>
             <AlertDialogTitle>Confirmar conclusão manual</AlertDialogTitle>
             <AlertDialogDescription>
-              Essa tarefa ainda tem microtarefas pendentes. Tem certeza que deseja concluir?
+              Algumas microtarefas continuarão pendentes mesmo com a tarefa marcada como concluída.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogCancel>Agora não</AlertDialogCancel>
             <AlertDialogAction
               onClick={async () => {
                 await onForceComplete?.();

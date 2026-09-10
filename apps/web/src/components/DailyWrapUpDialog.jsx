@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -12,132 +12,86 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
-import { useTaskContext } from '@/hooks/useTaskContext.js';
 import { useAuth } from '@/contexts/AuthContext.jsx';
-import { normalizeTaskStatus, TASK_STATUS } from '@/lib/taskExecution.js';
-import { saveDailyWrapUp } from '@/services/dailyWrapUpService.js';
-import { addManualWorkSession } from '@/services/workSessionService.js';
-import { saveImprovementForLater } from '@/lib/improvementCapture.js';
+import {
+  buildProfessionalJourneyClosingNote,
+  buildProfessionalJourneyWrapUp,
+  resolveProfessionalJourneyEndAt
+} from '@/lib/professionalJourneyWrapUpLogic.js';
+import { listDailyWrapUps, replaceDailyWrapUps, saveDailyWrapUp } from '@/services/dailyWrapUpService.js';
 import { useProfessionalJourney } from '@/contexts/ProfessionalJourneyContext.jsx';
-import { isForgottenJourney } from '@/lib/professionalJourneyLogic.js';
+import { isAnomalousJourney } from '@/lib/professionalJourneyLogic.js';
 
 function todayIso() {
-  return new Date().toISOString().split('T')[0];
+  return localDateTimeValue().slice(0, 10);
+}
+
+function localDateTimeValue(date = new Date()) {
+  const local = new Date(date);
+  local.setMinutes(local.getMinutes() - local.getTimezoneOffset());
+  return local.toISOString().slice(0, 16);
 }
 
 export default function DailyWrapUpDialog({ open, onOpenChange }) {
   const { currentUser } = useAuth();
-  const {
-    tasks,
-    addTask,
-    pauseTask
-  } = useTaskContext();
   const { currentJourney, closeWork } = useProfessionalJourney();
 
   const [isSaving, setIsSaving] = useState(false);
   const [concluded, setConcluded] = useState('');
-  const [paused, setPaused] = useState('');
-  const [needsHourLog, setNeedsHourLog] = useState(false);
-  const [loggedHours, setLoggedHours] = useState('');
-  const [waitingReturn, setWaitingReturn] = useState('');
-  const [improvementIdea, setImprovementIdea] = useState('');
+  const [continueContext, setContinueContext] = useState('');
+  const [waitingExternal, setWaitingExternal] = useState('');
+  const [isCorrectingEndAt, setIsCorrectingEndAt] = useState(false);
   const [correctedEndAt, setCorrectedEndAt] = useState('');
+  const anomalous = Boolean(currentJourney && isAnomalousJourney(currentJourney));
 
   useEffect(() => {
     if (!open) return;
-    const now = new Date();
-    now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
-    setCorrectedEndAt(now.toISOString().slice(0, 16));
+    setConcluded('');
+    setContinueContext('');
+    setWaitingExternal('');
+    setIsCorrectingEndAt(false);
+    setCorrectedEndAt(localDateTimeValue());
   }, [open]);
 
-  const inProgressTasks = useMemo(() => {
-    return tasks.filter((task) => normalizeTaskStatus(task.status) === TASK_STATUS.EM_ANDAMENTO);
-  }, [tasks]);
-
-  const resetForm = () => {
-    setConcluded('');
-    setPaused('');
-    setNeedsHourLog(false);
-    setLoggedHours('');
-    setWaitingReturn('');
-    setImprovementIdea('');
-  };
-
   const handleSave = async () => {
+    if (!currentJourney?.id) {
+      toast.error('Não há uma jornada aberta para encerrar.');
+      return;
+    }
+
+    const previousWrapUps = listDailyWrapUps(currentUser?.id);
+    let contextSaved = false;
     setIsSaving(true);
 
     try {
-      for (const task of inProgressTasks) {
-        await pauseTask(task.id, {
-          note: paused || 'Pausada no fechamento do dia.'
-        });
-      }
-
-      let hoursValue = Number(loggedHours || 0);
-      if (!Number.isFinite(hoursValue) || hoursValue < 0) {
-        hoursValue = 0;
-      }
-
-      if (needsHourLog && hoursValue > 0) {
-        addManualWorkSession({
-          projectId: 'Pessoal',
-          title: 'Fechamento do dia',
-          durationMinutes: Math.round(hoursValue * 60),
-          notes: concluded || 'Horas registradas no encerramento do dia.'
-        });
-      }
-
-      if (String(waitingReturn || '').trim()) {
-        await addTask({
-          title: `Aguardando retorno: ${String(waitingReturn).trim()}`,
-          project: 'Pessoal',
-          taskType: 'Atendimento',
-          status: TASK_STATUS.AGUARDANDO_RETORNO,
-          importance: 'Média',
-          urgency: 'Baixa',
-          description: 'Registrado durante o encerramento do dia.',
-          scheduledDate: todayIso(),
-          dataSugeridaExecucao: todayIso(),
-          timeEstimate: 15,
-          energiaNecessaria: 'Baixa'
-        });
-      }
-
-      if (String(improvementIdea || '').trim()) {
-        await saveImprovementForLater({
-          addTask,
-          title: String(improvementIdea).trim(),
-          relatedScreen: 'Fechamento do dia',
-          description: 'Ideia registrada no encerramento do dia.',
-          priority: 'baixa',
-          reviewWhen: 'algum_dia',
-          includeInToday: false
-        });
-      }
-
-      if (currentJourney?.id) {
-        await closeWork(
-          paused || concluded,
-          isForgottenJourney(currentJourney) && correctedEndAt ? new Date(correctedEndAt).toISOString() : undefined
-        );
-      }
+      const context = buildProfessionalJourneyWrapUp({ concluded, continueContext, waitingExternal });
+      const closingNote = buildProfessionalJourneyClosingNote(context);
+      const endedAt = resolveProfessionalJourneyEndAt({
+        anomalous,
+        correctionEnabled: isCorrectingEndAt,
+        correctedEndAt,
+        now: new Date()
+      });
 
       saveDailyWrapUp(currentUser?.id, {
         date: todayIso(),
-        concluded,
-        paused,
-        waitingReturn,
-        needsHourLog,
-        loggedHours: needsHourLog ? Number(loggedHours || 0) : 0,
-        improvementIdea
+        concluded: context.concluded,
+        continueContext: context.continueContext,
+        waitingExternal: context.waitingExternal,
+        endedAt,
+        journeyId: currentJourney.id,
+        journeyProjectName: currentJourney.projectName
       });
+      contextSaved = true;
 
-      toast.success('Dia encerrado. Resumo salvo com sucesso.');
-      resetForm();
+      await closeWork(closingNote, endedAt);
+
+      toast.success('Dia encerrado. O contexto ficou guardado para a próxima retomada.');
       onOpenChange(false);
     } catch (error) {
+      if (contextSaved) replaceDailyWrapUps(currentUser?.id, previousWrapUps);
       console.error(error);
-      toast.error('Não foi possível encerrar o dia agora.');
+      toast.error('Não consegui encerrar o dia. Nenhuma alteração foi mantida; suas respostas continuam aqui.');
     } finally {
       setIsSaving(false);
     }
@@ -145,76 +99,59 @@ export default function DailyWrapUpDialog({ open, onOpenChange }) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Encerrar dia</DialogTitle>
           <DialogDescription>
-            Feche o dia com um resumo executivo para manter continuidade amanhã.
+            Registre o essencial da sua jornada para retomar depois com clareza.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
-          {!currentJourney && <div className="space-y-2">
-            <Label htmlFor="wrapup-concluded">O que foi concluído hoje?</Label>
-            <Textarea id="wrapup-concluded" value={concluded} onChange={(event) => setConcluded(event.target.value)} placeholder="Principais entregas e avanços do dia." rows={3} />
-          </div>}
-
+        <div className="space-y-5">
           <div className="space-y-2">
-            <Label htmlFor="wrapup-paused">O que ficou pausado?</Label>
-            <Textarea id="wrapup-paused" value={paused} onChange={(event) => setPaused(event.target.value)} placeholder="Registre onde você parou para retomar com clareza." rows={3} />
+            <Label htmlFor="wrapup-concluded">O que você concluiu hoje?</Label>
+            <Textarea
+              id="wrapup-concluded"
+              value={concluded}
+              onChange={(event) => setConcluded(event.target.value)}
+              placeholder={'Ex.:\nAtualização da página de Transparência\nRevisão dos documentos da licitação'}
+              rows={3}
+            />
+            <p className="text-xs text-muted-foreground">Registre as atividades que ficaram concluídas nesta jornada.</p>
           </div>
 
-          {currentJourney && isForgottenJourney(currentJourney) && (
-            <div className="space-y-2 rounded-md border border-amber-300/60 bg-amber-50 p-3">
-              <Label htmlFor="journey-real-end">Horário real de encerramento</Label>
-              <Input id="journey-real-end" type="datetime-local" value={correctedEndAt} onChange={(event) => setCorrectedEndAt(event.target.value)} />
-              <p className="text-sm text-amber-800">A jornada está aberta há mais tempo que o habitual. Confirme quando o trabalho realmente terminou.</p>
+          <div className="space-y-2">
+            <Label htmlFor="wrapup-continue">O que ficou para continuar?</Label>
+            <Textarea id="wrapup-continue" value={continueContext} onChange={(event) => setContinueContext(event.target.value)} placeholder="Ex.: continuar revisão do módulo de contratos." rows={3} />
+            <p className="text-xs text-muted-foreground">Anote o que precisa ser retomado na próxima jornada.</p>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="wrapup-waiting">Ficou algo aguardando retorno externo?</Label>
+            <Textarea id="wrapup-waiting" value={waitingExternal} onChange={(event) => setWaitingExternal(event.target.value)} placeholder="Ex.: aguardando documento do setor financeiro." rows={3} />
+            <p className="text-xs text-muted-foreground">Registre somente o que depende de outra pessoa ou setor para continuar.</p>
+          </div>
+
+          {anomalous && (
+            <div className="space-y-2 rounded-md border border-amber-300/60 bg-amber-50 p-3 dark:bg-amber-950/30">
+              <p className="text-sm text-amber-800 dark:text-amber-200">Essa jornada ficou aberta por mais tempo que o habitual.</p>
+              {!isCorrectingEndAt ? (
+                <Button type="button" variant="outline" size="sm" onClick={() => setIsCorrectingEndAt(true)}>Corrigir horário de encerramento</Button>
+              ) : (
+                <div className="space-y-2">
+                  <Label htmlFor="journey-real-end">Horário corrigido</Label>
+                  <Input id="journey-real-end" type="datetime-local" value={correctedEndAt} onChange={(event) => setCorrectedEndAt(event.target.value)} />
+                </div>
+              )}
             </div>
           )}
-
-          <div className="space-y-2">
-            <Label htmlFor="wrapup-hours">Precisa registrar horas?</Label>
-            <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-              <Button type="button" variant={needsHourLog ? 'default' : 'outline'} onClick={() => setNeedsHourLog((prev) => !prev)}>
-                {needsHourLog ? 'Registro ativo' : 'Ativar registro'}
-              </Button>
-              <Input
-                id="wrapup-hours"
-                type="number"
-                min="0"
-                step="0.5"
-                value={loggedHours}
-                onChange={(event) => setLoggedHours(event.target.value)}
-                placeholder="Ex.: 2.5"
-                disabled={!needsHourLog}
-              />
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="wrapup-waiting">Alguma tarefa virou aguardando retorno?</Label>
-            <Input
-              id="wrapup-waiting"
-              value={waitingReturn}
-              onChange={(event) => setWaitingReturn(event.target.value)}
-              placeholder="Ex.: Confirmação de proposta com cliente X"
-            />
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="wrapup-improvement">Alguma melhoria do Clareia deve ser guardada para depois?</Label>
-            <Input
-              id="wrapup-improvement"
-              value={improvementIdea}
-              onChange={(event) => setImprovementIdea(event.target.value)}
-              placeholder="Ex.: Simplificar card de projeto"
-            />
-          </div>
         </div>
 
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isSaving}>Cancelar</Button>
-          <Button type="button" onClick={handleSave} disabled={isSaving}>{isSaving ? 'Salvando...' : 'Salvar e encerrar dia'}</Button>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isSaving}>Agora não</Button>
+          <Button type="button" onClick={handleSave} disabled={isSaving || !currentJourney?.id || (anomalous && isCorrectingEndAt && !correctedEndAt)}>
+            {isSaving ? 'Guardando...' : 'Guardar e encerrar o dia'}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

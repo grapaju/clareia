@@ -16,6 +16,7 @@ const files = await import('./projectFileService.js');
 const links = await import('./projectLinkService.js');
 const notes = await import('./projectNoteService.js');
 const accesses = await import('./projectAccessService.js');
+const organization = await import('./projectMaterialOrganizationService.js');
 
 function useUser(userId) {
   localStorage.setItem('clareia_auth_user', JSON.stringify({ id: userId }));
@@ -145,4 +146,16 @@ test('persiste MIME e tamanho do arquivo retornados pelo Drive', () => {
 
   assert.equal(file.mimeType, 'application/pdf');
   assert.equal(file.size, 2048);
+});
+
+test('salva somente link, somente arquivo e somente nota para organizar', () => {
+  resetStorage();
+  const file = files.createProjectFile({ projectName: 'Clareia', name: 'Briefing.pdf', organizationStatus: 'para_organizar' });
+  const link = links.createProjectLink({ projectName: 'Clareia', url: 'https://example.com', organizationStatus: 'para_organizar' });
+  const note = notes.createProjectNote({ projectName: 'Clareia', content: 'Nota rápida', organizationStatus: 'para_organizar' });
+
+  assert.equal(file.folder, '');
+  assert.equal(link.title, '');
+  assert.equal(note.title, '');
+  assert.equal(organization.countProjectMaterialsToOrganize(), 3);
 });

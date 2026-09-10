@@ -1,6 +1,7 @@
 import { getScheduledLabelForTask } from '@/lib/schedulingRules.js';
 import { parseLocalDate } from '@/lib/localDate.js';
 import { normalizeTaskStatus, TASK_STATUS } from '@/lib/taskExecution.js';
+import { getCheckInAvailableMinutes } from './reportFormatting.js';
 
 function stripAccents(value = '') {
   return value
@@ -15,16 +16,6 @@ function normalizeEnergy(value = '') {
   if (text.includes('alta')) return 'alta';
   if (text.includes('baixa')) return 'baixa';
   return 'média';
-}
-
-function minutesFromCheckInTempo(checkInTempo = '') {
-  const tempo = checkInTempo.toString().trim().toLowerCase();
-  if (tempo === '30 min' || tempo === '30min') return 30;
-  if (tempo === '1h') return 60;
-  if (tempo === '2h') return 120;
-  if (tempo === '4h') return 240;
-  if (tempo === 'dia inteiro') return 480;
-  return 120;
 }
 
 function parseDate(value) {
@@ -299,7 +290,7 @@ export function reorganizeTasksByEnergy(tasks, checkIn) {
 
   const checkInEnergy = normalizeEnergy(checkIn?.energia || 'média');
   const checkInMind = stripAccents(checkIn?.mente || 'normal');
-  const availableMinutes = Math.max(20, Math.round(minutesFromCheckInTempo(checkIn?.tempo || '2h') * 0.85));
+  const availableMinutes = Math.max(20, Math.round(getCheckInAvailableMinutes(checkIn?.tempo || '2h') * 0.85));
 
   const activeTasks = tasks.filter((task) => {
     const status = normalizeTaskStatus(task.status);
@@ -372,7 +363,7 @@ export function reorganizeTasksByEnergy(tasks, checkIn) {
 }
 
 export function getTodayCapacity(tasks, checkIn) {
-  const availableMinutes = Math.max(20, Math.round(minutesFromCheckInTempo(checkIn?.tempo || '2h') * 0.85));
+  const availableMinutes = Math.max(20, Math.round(getCheckInAvailableMinutes(checkIn?.tempo || '2h') * 0.85));
   const today = new Date();
   const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
 

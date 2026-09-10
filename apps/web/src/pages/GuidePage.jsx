@@ -34,7 +34,7 @@ const STEPS = [
     description: 'Na tela Tirar da cabeça, escreva tudo que lembrar. Depois escolha organizar agora ou guardar para revisar depois.'
   },
   {
-    title: '3) Revise o Plano Clareado antes de criar',
+    title: '3) Revise os passos antes de criar',
     description: 'Edite, divida ou exclua itens. Essa etapa evita tarefas confusas e deixa tudo executável.'
   },
   {
@@ -47,7 +47,7 @@ const FEATURES = [
   {
     icon: NotebookPen,
     title: 'Tirar da cabeça',
-    howTo: 'Escreva como vier, sem filtro. No fim, use o botão de organizar para transformar em plano.'
+    howTo: 'Escreva como vier, sem filtro. No fim, organize o conteúdo em passos práticos.'
   },
   {
     icon: Bookmark,
@@ -56,8 +56,8 @@ const FEATURES = [
   },
   {
     icon: Sparkles,
-    title: 'Plano Clareado',
-    howTo: 'Revise os cards sugeridos e confirme para criar tarefas com prioridade e próximos passos.'
+    title: 'Descarregue a mente',
+    howTo: 'Escreva sem organizar, revise os passos sugeridos e confirme para criar as tarefas.'
   },
   {
     icon: Clock3,
@@ -97,7 +97,8 @@ export default function GuidePage() {
       setSuggestion({ title: '', message: '' });
       toast.success('Sugestão enviada. Obrigado por ajudar o Clareia a melhorar.');
     } catch (error) {
-      toast.error(error?.message || 'Não foi possível enviar sua sugestão. O texto foi preservado.');
+      console.error(error);
+      toast.error('Não consegui enviar sua sugestão. O texto continua aqui para você tentar novamente.');
     } finally {
       setIsSending(false);
     }
@@ -170,7 +171,7 @@ export default function GuidePage() {
                     </div>
                     <div className="rounded-lg border border-border p-3 bg-muted/20">
                       <p className="text-sm font-medium text-foreground mb-1">Quero transformar ideias em tarefas</p>
-                      <p className="text-sm text-muted-foreground">Tirar da cabeça → Plano Clareado → criar tarefas.</p>
+                      <p className="text-sm text-muted-foreground">Descarregue a mente → revise os passos → crie as tarefas.</p>
                     </div>
                     <div className="rounded-lg border border-border p-3 bg-muted/20">
                       <p className="text-sm font-medium text-foreground mb-1">Quero acompanhar pendências de terceiros</p>
@@ -189,7 +190,7 @@ export default function GuidePage() {
                   <h2 className="text-xl font-medium text-foreground">Rotina sugerida para teste (7 dias)</h2>
                   <p className="text-sm text-muted-foreground">Use este roteiro para validar o Clareia sem sobrecarga.</p>
                   <div className="space-y-2">
-                    <p className="text-sm text-foreground"><strong>Dias 1 e 2:</strong> focar em check-in + Tirar da cabeça + criar plano.</p>
+                    <p className="text-sm text-foreground"><strong>Dias 1 e 2:</strong> focar em check-in + Descarregue a mente + criar tarefas.</p>
                     <p className="text-sm text-foreground"><strong>Dias 3 e 4:</strong> executar tarefas na tela Hoje e registrar pausas/retomadas.</p>
                     <p className="text-sm text-foreground"><strong>Dias 5 e 6:</strong> organizar um projeto com arquivos, links e notas.</p>
                     <p className="text-sm text-foreground"><strong>Dia 7:</strong> revisar Relatórios e Encerramento do dia para avaliar ganhos.</p>

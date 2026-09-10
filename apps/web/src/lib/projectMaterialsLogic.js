@@ -1,3 +1,5 @@
+import { UI_COPY } from './uiCopy.js';
+
 const TYPE_LABELS = {
   file: 'Arquivo',
   link: 'Link',
@@ -132,6 +134,7 @@ function commonItem(item, kind, entity, overrides = {}) {
     mimeType: normalizeText(item.mimeType),
     size: Number(item.size) || 0,
     favorite: Boolean(item.favorite),
+    organizationStatus: normalizeText(item.organizationStatus),
     createdAt: item.createdAt || '',
     updatedAt: item.updatedAt || item.createdAt || '',
     searchText: searchableText(overrides.searchValues || [
@@ -218,23 +221,23 @@ export function getDrivePresentationState({ connected, projectFolder, loadError 
 export function getMaterialsEmptyState({ folderCount = 0, currentFolder = null, hasAnyContent = false } = {}) {
   if (!folderCount) {
     return {
-      title: 'Organize os materiais deste projeto',
-      description: 'Crie uma pasta para definir onde arquivos e documentos serão guardados.',
-      action: 'Criar primeira pasta',
-      actionType: 'folder',
+      title: UI_COPY.materials.empty,
+      description: UI_COPY.materials.emptyHelp,
+      action: 'Adicionar material',
+      actionType: 'choose',
     };
   }
   if (currentFolder) {
     return {
-      title: 'Esta pasta ainda está vazia.',
-      description: 'Adicione o primeiro material para começar a organizar esta pasta.',
+      title: 'Nada guardado nesta pasta ainda.',
+      description: 'Você pode adicionar um material agora ou voltar quando fizer sentido.',
       action: 'Adicionar primeiro material',
       actionType: 'choose',
     };
   }
   return {
-    title: hasAnyContent ? 'Nenhum material neste recorte' : 'Nenhum material cadastrado',
-    description: 'Abra uma pasta ou adicione um material para começar.',
+    title: hasAnyContent ? 'Nada aparece neste recorte.' : UI_COPY.materials.empty,
+    description: hasAnyContent ? 'Tente outra pasta ou ajuste o filtro.' : UI_COPY.materials.emptyHelp,
     action: 'Adicionar material',
     actionType: 'choose',
   };

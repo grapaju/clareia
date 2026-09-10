@@ -91,7 +91,7 @@ export default function SettingsPage() {
       })
       .catch(() => {
         setFinanceError(true);
-        setFinanceStatus('Não foi possível carregar a integração financeira.');
+        setFinanceStatus('Não consegui carregar a integração financeira. Atualize a página para tentar novamente.');
       });
   }, [currentUser?.id]);
 
@@ -120,7 +120,7 @@ export default function SettingsPage() {
           ? 'Ainda não encontramos eventos dessa conta no Clareia.'
           : error.status === 409
             ? 'Esta conta já está conectada.'
-            : 'Não foi possível concluir a conexão agora.');
+            : 'Não consegui concluir a conexão agora. Confira o código e tente novamente.');
     } finally {
       setFinanceSaving(false);
     }
@@ -140,7 +140,8 @@ export default function SettingsPage() {
         : 'Cliente vinculado ao projeto.');
     } catch (error) {
       setFinanceError(true);
-      setFinanceStatus(error.message || 'Não foi possível vincular o cliente.');
+      console.error(error);
+      setFinanceStatus('Não consegui vincular este cliente. A configuração anterior foi mantida; tente novamente.');
     } finally {
       setFinanceSaving(false);
     }

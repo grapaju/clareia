@@ -497,7 +497,7 @@ export default function CalendarPage() {
     });
 
     if (!suggestion?.date) {
-      toast.error('Não foi possível sugerir um encaixe no calendário.');
+      toast.error('Não encontrei um horário adequado agora. Você pode escolher um dia manualmente.');
       return;
     }
 
@@ -531,7 +531,7 @@ export default function CalendarPage() {
     });
 
     if (!created) {
-      toast.error('Preencha título, data e horário do compromisso.');
+      toast.error('Só preciso do título, da data e do horário para guardar este compromisso.');
       return;
     }
 
@@ -584,7 +584,7 @@ export default function CalendarPage() {
   const handleReorganizeHeavyDay = async (dateIso) => {
     const dayTasks = tasks.filter((task) => toIsoDate(task.scheduledDate || task.dataSugeridaExecucao) === dateIso);
     if (dayTasks.length === 0) {
-      toast.message('Sem tarefas flexíveis para reorganizar neste dia.');
+      toast.message('Não há tarefas que possam ser movidas neste dia. Você pode manter tudo como está.');
       return;
     }
 
@@ -632,7 +632,7 @@ export default function CalendarPage() {
     }
 
     if (movedCount === 0) {
-      toast.message('Não foi possível redistribuir tarefas automaticamente.');
+      toast.message('Não encontrei outro encaixe para essas tarefas. Nada foi alterado.');
       return;
     }
 
@@ -697,7 +697,7 @@ export default function CalendarPage() {
     }
 
     if (moved === 0) {
-      toast.message('Não foi possível redistribuir automaticamente nesta semana.');
+      toast.message('Não encontrei outro encaixe nesta semana. Nada foi alterado.');
       return;
     }
 
@@ -729,7 +729,7 @@ export default function CalendarPage() {
       });
 
     if (candidates.length === 0) {
-      toast.message('Sem tarefa elegível para encaixar neste dia.');
+      toast.message('Não há uma tarefa que faça sentido encaixar neste dia.');
       return;
     }
 
@@ -763,7 +763,7 @@ export default function CalendarPage() {
       const dropDateIso = event.currentTarget?.dataset?.droppableId || fallbackDateIso;
       if (!dropDateIso) return;
       if (dropDateIso < toIsoDate(new Date())) {
-        toast.error('Não é possível planejar uma tarefa em um dia anterior.');
+        toast.error('Esse dia já passou. Escolha hoje ou uma data futura.');
         return;
       }
 
@@ -781,7 +781,7 @@ export default function CalendarPage() {
       });
       toast.success('Tarefa movida no calendário.');
     } catch {
-      toast.error('Não foi possível mover essa tarefa.');
+      toast.error('Não consegui mover esta tarefa. Ela continua na data anterior; tente novamente.');
     } finally {
       setDraggedTaskId('');
     }
@@ -953,7 +953,7 @@ export default function CalendarPage() {
                           <div><h3 className="text-base">{day.date.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: '2-digit' })}</h3><p className="text-sm text-muted-foreground">{formatMinutesLabel(day.plannedMinutes)} planejados · {day.load}</p></div>
                           <Button size="sm" variant="outline" onClick={() => handleFitTaskOnDate(day.iso)}>+ Planejar aqui</Button>
                         </div>
-                        {day.items.length === 0 ? <p className="text-sm text-muted-foreground">Sem itens planejados.</p> : <div className="space-y-2">{day.items.map((item) => <button key={item.id} className="flex min-h-11 w-full items-center justify-between gap-3 rounded-md border border-border p-3 text-left" onClick={() => handleSelectItem(item)}><span className="min-w-0"><span className="block font-medium">{item.title}</span><span className="block text-sm text-muted-foreground">{buildItemMetaLine(item)}</span></span><span className="shrink-0 text-xs text-muted-foreground">{renderItemBadge(item.type)}</span></button>)}</div>}
+                        {day.items.length === 0 ? <p className="text-sm text-muted-foreground">Nada planejado para este dia.</p> : <div className="space-y-2">{day.items.map((item) => <button key={item.id} className="flex min-h-11 w-full items-center justify-between gap-3 rounded-md border border-border p-3 text-left" onClick={() => handleSelectItem(item)}><span className="min-w-0"><span className="block font-medium">{item.title}</span><span className="block text-sm text-muted-foreground">{buildItemMetaLine(item)}</span></span><span className="shrink-0 text-xs text-muted-foreground">{renderItemBadge(item.type)}</span></button>)}</div>}
                       </section>
                     ))}
                   </div>
@@ -1230,7 +1230,7 @@ export default function CalendarPage() {
 
           <div className="space-y-2 max-h-[60vh] overflow-y-auto pr-1">
             {!selectedDayData || selectedDayData.items.length === 0 ? (
-              <p className="text-sm text-muted-foreground">Sem itens neste dia.</p>
+              <p className="text-sm text-muted-foreground">Nada planejado para este dia.</p>
             ) : (
               selectedDayData.items.map((item) => {
                 const itemVisual = getItemVisual(item.type);

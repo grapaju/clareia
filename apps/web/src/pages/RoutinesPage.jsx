@@ -88,7 +88,7 @@ export default function RoutinesPage() {
       toast.success('Rotina enviada para Hoje.');
     } catch (error) {
       console.error(error);
-      toast.error('Não foi possível executar agora.');
+      toast.error('Não consegui levar esta rotina para Hoje. Ela continua como estava; tente novamente.');
     }
   };
 
@@ -96,7 +96,7 @@ export default function RoutinesPage() {
     try {
       const nextDate = getNextRecurringDate(task);
       if (!nextDate) {
-        toast.error('Não foi possível calcular a próxima data.');
+        toast.error('Não encontrei uma próxima data para esta rotina. Revise a recorrência antes de continuar.');
         return;
       }
 
@@ -106,10 +106,10 @@ export default function RoutinesPage() {
         status: getStatusForScheduledDate(nextDate),
         recurrenceAnchorDate: nextDate
       });
-      toast.success('Rotina adiada com sucesso.');
+      toast.success('Rotina adiada.');
     } catch (error) {
       console.error(error);
-      toast.error('Não foi possível adiar a rotina.');
+      toast.error('Não consegui adiar esta rotina. A data não mudou; tente novamente.');
     }
   };
 
@@ -122,7 +122,7 @@ export default function RoutinesPage() {
       toast.success('Recorrência pausada.');
     } catch (error) {
       console.error(error);
-      toast.error('Não foi possível pausar a recorrência.');
+      toast.error('Não consegui pausar esta recorrência. Ela continua ativa; tente novamente.');
     }
   };
 
@@ -130,11 +130,11 @@ export default function RoutinesPage() {
     if (!deleteTarget?.id) return;
     try {
       await deleteTask(deleteTarget.id);
-      toast.success('Rotina excluída.');
+      toast.success('Rotina removida.');
       setDeleteTarget(null);
     } catch (error) {
       console.error(error);
-      toast.error('Não foi possível excluir a rotina.');
+      toast.error('Não consegui remover esta rotina. Nada foi alterado; tente novamente.');
     }
   };
 

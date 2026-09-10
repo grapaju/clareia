@@ -153,7 +153,7 @@ export default function TaskCard({ task, minimal }) {
       });
 
       if (!suggestion?.date) {
-        toast.error('Não foi possível sugerir encaixe no calendário.');
+        toast.error('Não encontrei um horário adequado agora. Você pode escolher um dia manualmente.');
         return;
       }
 
@@ -319,15 +319,15 @@ export default function TaskCard({ task, minimal }) {
       <AlertDialog open={isDeleteOpen} onOpenChange={setIsDeleteOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Tem certeza que deseja excluir esta tarefa?</AlertDialogTitle>
+            <AlertDialogTitle>Remover “{task.title}”?</AlertDialogTitle>
             <AlertDialogDescription>
-              Esta ação remove a tarefa da agenda atual.
+              A tarefa será removida para sempre e não poderá ser recuperada.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogCancel>Agora não</AlertDialogCancel>
             <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-              Excluir tarefa
+              Remover tarefa
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

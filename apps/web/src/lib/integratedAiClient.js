@@ -22,7 +22,7 @@ const integratedAiClient = {
 			let message;
 			try {
 				const parsed = JSON.parse(errorBody);
-				message = parsed?.error?.message || parsed?.message;
+				message = parsed?.error?.message || parsed?.message || parsed?.error;
 			} catch {
 				message = errorBody;
 			}
@@ -64,7 +64,7 @@ const integratedAiClient = {
 			let message;
 			try {
 				const parsed = JSON.parse(errorBody);
-				message = parsed?.error?.message || parsed?.message;
+				message = parsed?.error?.message || parsed?.message || parsed?.error;
 			} catch {
 				message = errorBody;
 			}

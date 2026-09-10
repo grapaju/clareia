@@ -59,7 +59,7 @@ export default function TaskActivityPanel({ taskId }) {
       toast.success('Nota de trabalho salva.');
     } catch (error) {
       console.error('Erro ao salvar nota:', error);
-      toast.error('Não foi possível salvar a nota.');
+      toast.error('Não consegui guardar a nota. Seu texto continua aqui; tente novamente.');
     } finally {
       setIsSaving(false);
     }

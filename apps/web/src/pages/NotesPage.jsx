@@ -64,7 +64,7 @@ export default function NotesPage() {
       setNotes(records);
     } catch (error) {
       console.error('Erro ao carregar notas:', error);
-      toast.error('Não foi possível carregar suas notas.');
+      toast.error('Não consegui carregar suas notas. Atualize a página para tentar novamente.');
     } finally {
       setIsLoading(false);
     }
@@ -143,7 +143,7 @@ export default function NotesPage() {
       toast.success(selectedNote ? 'Nota atualizada.' : 'Nota salva na biblioteca.');
     } catch (error) {
       console.error('Erro ao salvar nota:', error);
-      toast.error('Não foi possível salvar a nota.');
+      toast.error('Não consegui guardar a nota. Seu texto continua aqui; tente novamente.');
     } finally {
       setIsSaving(false);
     }
@@ -176,7 +176,7 @@ export default function NotesPage() {
       toast.success('Anotação capturada. Organize quando fizer sentido.');
     } catch (error) {
       console.error('Erro ao capturar anotação:', error);
-      toast.error('Não foi possível salvar a anotação.');
+      toast.error('Não consegui guardar a anotação. Seu texto continua aqui; tente novamente.');
     } finally {
       setIsSaving(false);
     }
@@ -210,7 +210,7 @@ export default function NotesPage() {
       navigate('/plano-clareado', { state: { planRecord: record } });
     } catch (error) {
       console.error('Erro ao organizar captura:', error);
-      toast.error('Não foi possível organizar a captura em um plano.');
+      toast.error('Não consegui organizar esse conteúdo agora. O texto continua aqui; tente novamente.');
     } finally {
       setIsSaving(false);
     }
@@ -247,7 +247,7 @@ export default function NotesPage() {
       toast.success(`${importedNotes.length} rascunho(s) movido(s) para Anotações.`);
     } catch (error) {
       console.error('Erro ao importar rascunhos:', error);
-      toast.error('Não foi possível importar todos os rascunhos.');
+      toast.error('Alguns rascunhos não foram importados. Eles continuam guardados para você tentar novamente.');
     } finally {
       setIsSaving(false);
     }
@@ -265,10 +265,10 @@ export default function NotesPage() {
       setNotes((currentNotes) => currentNotes.filter((note) => note.id !== selectedNote.id));
       resetEditor();
       setIsDeleteDialogOpen(false);
-      toast.success('Nota excluída.');
+      toast.success('Nota removida.');
     } catch (error) {
       console.error('Erro ao excluir nota:', error);
-      toast.error('Não foi possível excluir a nota.');
+      toast.error('Não consegui remover a nota. Nada foi alterado; tente novamente.');
     }
   };
 

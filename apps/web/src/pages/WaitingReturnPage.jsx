@@ -31,6 +31,7 @@ import {
   isFinanceWaitingReturn,
 } from '@/lib/waitingReturnLogic.js';
 import { getFinanceDuePresentation } from '@/lib/notificationLogic.js';
+import { UI_COPY } from '@/lib/uiCopy.js';
 import {
   createWaitingReturn,
   deleteWaitingReturnEverywhere,
@@ -106,7 +107,7 @@ export default function WaitingReturnPage() {
     setShowAdvanced(false);
     refresh();
     syncWaitingReturnsWithCloud();
-    toast.success('Item em aguardando retorno criado.');
+    toast.success('Acompanhamento guardado.');
   };
 
   const handleToggleDone = async (item) => {
@@ -117,7 +118,7 @@ export default function WaitingReturnPage() {
       refresh();
     } catch (error) {
       console.error(error);
-      toast.error('Não foi possível atualizar o acompanhamento.');
+      toast.error('Não consegui atualizar este acompanhamento. Tente novamente.');
     }
   };
 
@@ -134,7 +135,7 @@ export default function WaitingReturnPage() {
       toast.success('Acompanhamento removido.');
     } catch (error) {
       console.error(error);
-      toast.error('Não foi possível remover o acompanhamento.');
+      toast.error('Não consegui remover este acompanhamento. Tente novamente.');
     }
   };
 
@@ -152,7 +153,7 @@ export default function WaitingReturnPage() {
                   <Clock3 className="w-7 h-7 text-primary" />
                   <h1 className="text-3xl font-medium text-foreground">Aguardando retorno</h1>
                 </div>
-                <p className="text-muted-foreground">Separar dependências externas reduz ansiedade de execução e melhora retomada.</p>
+                <p className="text-muted-foreground">{UI_COPY.waitingReturn.intro}</p>
               </div>
 
               <Card className="bg-card border-border shadow-sm mb-6">
@@ -164,7 +165,7 @@ export default function WaitingReturnPage() {
                   </div>
 
                   <div className="flex flex-wrap gap-2">
-                    <Button onClick={handleCreate}><Plus className="w-4 h-4 mr-2" /> Salvar acompanhamento</Button>
+                    <Button onClick={handleCreate}><Plus className="w-4 h-4 mr-2" /> Guardar acompanhamento</Button>
                     <Button variant="ghost" onClick={() => setShowAdvanced((prev) => !prev)}>
                       {showAdvanced ? 'Ocultar detalhes' : 'Adicionar detalhes'}
                     </Button>
@@ -187,7 +188,10 @@ export default function WaitingReturnPage() {
                 <CardContent className="p-6 space-y-4">
                   <h2 className="text-lg font-medium">Acompanhamentos ({openCount} abertos)</h2>
                   {items.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">Nenhum item em aguardando retorno.</p>
+                    <div className="text-sm text-muted-foreground">
+                      <p>{UI_COPY.waitingReturn.empty}</p>
+                      <p className="mt-1">{UI_COPY.waitingReturn.emptyHelp}</p>
+                    </div>
                   ) : (
                     <ul className="space-y-3">
                       {items.map((item) => {
@@ -249,15 +253,15 @@ export default function WaitingReturnPage() {
         <AlertDialog open={Boolean(itemToDelete)} onOpenChange={(open) => !open && setItemToDelete(null)}>
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Excluir acompanhamento</AlertDialogTitle>
+              <AlertDialogTitle>Remover este acompanhamento?</AlertDialogTitle>
               <AlertDialogDescription>
-                Esta ação remove o item de aguardando retorno permanentemente.
+                Ele deixará de aparecer em Aguardando retorno e não poderá ser recuperado.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-              <AlertDialogCancel>Cancelar</AlertDialogCancel>
+              <AlertDialogCancel>Agora não</AlertDialogCancel>
               <AlertDialogAction onClick={confirmDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-                Excluir
+                Remover
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

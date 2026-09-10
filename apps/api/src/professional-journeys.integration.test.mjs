@@ -97,15 +97,10 @@ test('Jornada Profissional persiste o dia do inPACTA com isolamento e auditoria'
     assert.match(parallel.payload.message, /Encerre a jornada de inPACTA/);
   });
 
-  let taskId;
+  const projectTaskIds = [];
   await context.test('registra atividades e troca mantendo apenas uma ativa', async () => {
-    const task = await api(baseUrl, '/tasks', {
-      token: userA.token, method: 'POST',
-      body: { title: 'Ajustar módulo', project: 'inPACTA', status: 'pendente' },
-    });
-    taskId = task.payload.item.id;
     const entries = [
-      ['2026-08-31T11:05:00.000Z', 'Ajustar módulo', 'task', taskId],
+      ['2026-08-31T11:05:00.000Z', 'Ajustar módulo', 'quick', null],
       ['2026-08-31T12:30:00.000Z', 'Reunião de alinhamento', 'quick', null],
       ['2026-08-31T13:15:00.000Z', 'Corrigir cadastro', 'quick', null],
     ];
@@ -129,7 +124,7 @@ test('Jornada Profissional persiste o dia do inPACTA com isolamento e auditoria'
     const refreshed = await api(baseUrl, '/professional-journeys/current?projectName=inPACTA', { token: userA.token });
     assert.equal(refreshed.payload.item.id, journeyId);
     assert.equal(refreshed.payload.item.status, 'paused');
-    assert.equal(refreshed.payload.activities.filter((item) => !item.endedAt).length, 0);
+    assert.equal(refreshed.payload.activities.filter((item) => !item.endedAt).length, 1);
 
     const resumed = await api(baseUrl, `/professional-journeys/${journeyId}/resume`, {
       token: userA.token, method: 'POST', body: { resumedAt: '2026-08-31T16:00:00.000Z' },
@@ -137,35 +132,78 @@ test('Jornada Profissional persiste o dia do inPACTA com isolamento e auditoria'
     assert.equal(resumed.payload.item.status, 'active');
   });
 
-  await context.test('atividade rapida e retorno a tarefa nao pausam a jornada', async () => {
+  await context.test('atividades legadas não pausam a jornada', async () => {
     const quick = await api(baseUrl, `/professional-journeys/${journeyId}/activities`, {
       token: userA.token, method: 'POST',
       body: { title: 'Responder demanda urgente', source: 'quick', startedAt: '2026-08-31T16:05:00.000Z' },
     });
     assert.equal(quick.payload.item.source, 'quick');
-    const resumedTask = await api(baseUrl, `/professional-journeys/${journeyId}/activities`, {
+    const resumedActivity = await api(baseUrl, `/professional-journeys/${journeyId}/activities`, {
       token: userA.token, method: 'POST',
-      body: { title: 'Ajustar módulo', source: 'task', taskId, startedAt: '2026-08-31T17:00:00.000Z' },
+      body: { title: 'Ajustar módulo', source: 'quick', startedAt: '2026-08-31T17:00:00.000Z' },
     });
-    assert.equal(resumedTask.payload.item.taskId, taskId);
+    assert.equal('taskId' in resumedActivity.payload.item, false);
     const current = await api(baseUrl, '/professional-journeys/current', { token: userA.token });
     assert.equal(current.payload.item.status, 'active');
   });
 
-  await context.test('encerramento calcula 8 horas liquidas e preserva onde parou', async () => {
+  await context.test('encerramento preserva tarefas de IDT-PR, Corcril e Pessoal', async () => {
+    for (const project of ['IDT-PR', 'Corcril', 'Pessoal']) {
+      const task = await api(baseUrl, '/tasks', {
+        token: userA.token, method: 'POST',
+        body: { title: `Tarefa ${project}`, project, status: 'pendente' },
+      });
+      projectTaskIds.push(task.payload.item.id);
+    }
+
     const closed = await api(baseUrl, `/professional-journeys/${journeyId}/close`, {
       token: userA.token, method: 'POST',
-      body: { endedAt: '2026-08-31T20:00:00.000Z', closingNote: 'Retomar validação do cadastro' },
+      body: {
+        endedAt: '2026-08-31T20:00:00.000Z',
+        closingNote: [
+          'Concluído:',
+          'Atualização da página de Transparência',
+          '',
+          'Para continuar:',
+          'Retomar validação do cadastro',
+          '',
+          'Aguardando retorno externo:',
+          'Documento do setor financeiro',
+        ].join('\n'),
+      },
     });
     assert.equal(closed.payload.item.status, 'closed');
+    const tasks = await api(baseUrl, '/tasks', { token: userA.token });
+    assert.deepEqual(
+      tasks.payload.items.filter((task) => projectTaskIds.includes(task.id)).map((task) => task.status),
+      ['pendente', 'pendente', 'pendente']
+    );
 
     const report = await api(baseUrl, '/professional-journeys?projectName=inPACTA&startDate=2026-08-31&endDate=2026-08-31', { token: userA.token });
     assert.equal(report.payload.journeys[0].grossMinutes, 540);
     assert.equal(report.payload.journeys[0].pauseMinutes, 60);
     assert.equal(report.payload.journeys[0].netMinutes, 480);
-    assert.equal(report.payload.journeys[0].activityMinutes, 470);
-    assert.equal(report.payload.journeys[0].unclassifiedMinutes, 10);
-    assert.equal(report.payload.journeys[0].closingNote, 'Retomar validação do cadastro');
+    assert.equal('activityMinutes' in report.payload.journeys[0], false);
+    assert.equal('unclassifiedMinutes' in report.payload.journeys[0], false);
+    assert.match(report.payload.journeys[0].closingNote, /Concluído:\nAtualização da página de Transparência/);
+    assert.match(report.payload.journeys[0].closingNote, /Para continuar:\nRetomar validação do cadastro/);
+    assert.match(report.payload.journeys[0].closingNote, /Aguardando retorno externo:\nDocumento do setor financeiro/);
+    assert.equal(report.payload.pauses.length, 1);
+    assert.equal(report.payload.pauses[0].journeyId, journeyId);
+    assert.equal(report.payload.activities.filter((item) => !item.endedAt).length, 1);
+  });
+
+  await context.test('encerra jornada sem qualquer estrutura própria de tarefas', async () => {
+    const started = await api(baseUrl, '/professional-journeys', {
+      token: userA.token, method: 'POST',
+      body: { projectName: 'inPACTA', startedAt: '2026-09-02T11:00:00.000Z' },
+    });
+    const closed = await api(baseUrl, `/professional-journeys/${started.payload.item.id}/close`, {
+      token: userA.token, method: 'POST',
+      body: { endedAt: '2026-09-02T19:00:00.000Z', closingNote: '' },
+    });
+    assert.equal(closed.status, 200);
+    assert.equal(closed.payload.item.status, 'closed');
   });
 
   let manualActivityId;

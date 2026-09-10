@@ -151,14 +151,14 @@ test('payload do documento envia folderId interno sem driveFolderId', () => {
   assert.equal(Object.hasOwn(payload, 'driveFolderId'), false);
 });
 
-test('estado inicial conduz primeiro à criação de pasta', () => {
+test('estado inicial permite guardar antes de criar pasta', () => {
   const empty = getMaterialsEmptyState({ folderCount: 0 });
-  assert.equal(empty.title, 'Organize os materiais deste projeto');
-  assert.equal(empty.actionType, 'folder');
+  assert.equal(empty.title, 'Ainda não tem nada guardado neste projeto.');
+  assert.equal(empty.actionType, 'choose');
 });
 
 test('pasta vazia conduz ao primeiro material', () => {
   const empty = getMaterialsEmptyState({ folderCount: 2, currentFolder: { id: 'docs' } });
-  assert.equal(empty.title, 'Esta pasta ainda está vazia.');
+  assert.equal(empty.title, 'Nada guardado nesta pasta ainda.');
   assert.equal(empty.action, 'Adicionar primeiro material');
 });

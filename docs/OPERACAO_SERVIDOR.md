@@ -57,7 +57,7 @@ Regras:
 - CLAREIA_FINANCE_WEBHOOK_SECRET autentica eventos enviados pelo Fluxo de Caixa.
   Use exatamente o mesmo valor em `CLAREIA_WEBHOOK_SECRET` no servidor do
   Fluxo de Caixa. Gere o valor com
-  `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`.
+  node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))".
 - GOOGLE_DRIVE_TOKEN_ENCRYPTION_KEY e obrigatoria para usar a integracao com
   Google Drive (criptografa os tokens salvos em `google_drive_connections`).
   Nao e configuravel pela tela de integracao — precisa ser adicionada
@@ -68,6 +68,8 @@ Regras:
 - Os campos `GOOGLE_OAUTH_CLIENT_ID`/`CLIENT_SECRET`/`REDIRECT_URI`/`SCOPES`
   podem ser configurados pela propria tela de integracao
   (`/integracoes/google-drive-oauth`), que grava direto no `.env` da API.
+
+
 
 ### apps/web
 

@@ -169,7 +169,7 @@ export default function UnloadMindPage() {
         });
         
         if (!customText) {
-          toast.success('Plano gerado com sucesso!');
+          toast.success('Conteúdo organizado.');
         }
 
         [...new Set(relatedProjects)].forEach((projectName) => {
@@ -191,7 +191,7 @@ export default function UnloadMindPage() {
       }
     } catch (err) {
       console.error(err);
-      toast.error('Erro ao processar o plano.');
+      toast.error('Não consegui organizar esse conteúdo agora. Seu texto continua aqui; tente novamente.');
     } finally {
       setIsProcessing(false);
     }
@@ -300,7 +300,7 @@ export default function UnloadMindPage() {
       toast.success('Pensamento enviado como tarefa.');
     } catch (error) {
       console.error(error);
-      toast.error('Não foi possível criar tarefa.');
+      toast.error('Não consegui criar a tarefa. O conteúdo continua aqui; tente novamente.');
     } finally {
       setIsProcessing(false);
     }
@@ -322,7 +322,7 @@ export default function UnloadMindPage() {
     });
 
     if (!saved) {
-      toast.error('Não foi possível enviar para notas do projeto.');
+      toast.error('Não consegui adicionar isso às notas do projeto. O conteúdo continua aqui; tente novamente.');
       return;
     }
 
@@ -371,7 +371,7 @@ export default function UnloadMindPage() {
       toast.success('Pendência atualizada.');
       cancelEdit();
     } else {
-      toast.error('Não foi possível atualizar a pendência.');
+      toast.error('Não consegui guardar esta alteração. A pendência continua como estava; tente novamente.');
     }
   };
 
@@ -389,7 +389,7 @@ export default function UnloadMindPage() {
       }
       setPendingDeleteNoteId(null);
     } else {
-      toast.error('Não foi possível excluir a pendência.');
+      toast.error('Não consegui remover esta pendência. Nada foi alterado; tente novamente.');
     }
   };
 
@@ -426,7 +426,7 @@ export default function UnloadMindPage() {
 
   return (
     <>
-      <Helmet><title>{isCreatePlanView ? 'Criar plano - Clareia' : 'Descarregar mente - Clareia'}</title></Helmet>
+      <Helmet><title>Descarregue a mente - Clareia</title></Helmet>
       <div className="min-h-screen bg-background flex flex-col">
         <Header />
         <div className="flex flex-1">
@@ -438,10 +438,10 @@ export default function UnloadMindPage() {
                 <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-primary/10 text-primary mb-6 shadow-sm">
                   <Brain className="w-8 h-8" />
                 </div>
-                <h1 className="text-3xl md:text-4xl font-medium text-foreground mb-4">{isCreatePlanView ? 'Criar plano' : 'Descarregar mente'}</h1>
+                <h1 className="text-3xl md:text-4xl font-medium text-foreground mb-4">Descarregue a mente</h1>
                 {isCreatePlanView ? (
                   <p className="text-lg text-muted-foreground max-w-xl mx-auto leading-relaxed">
-                    Escreva tudo do seu jeito. Pode misturar clientes, compromissos e assuntos pessoais. O Clareia separa para você.
+                    Coloque aqui tudo o que está na sua cabeça. Você não precisa organizar agora.
                   </p>
                 ) : (
                   <p className="text-lg text-muted-foreground max-w-xl mx-auto leading-relaxed">
@@ -499,7 +499,7 @@ export default function UnloadMindPage() {
                               ))}
                             </ul>
                             <Button onClick={handleUseSavedPendings} disabled={selectedPendingIds.length === 0 || isProcessing}>
-                              Gerar plano com selecionadas
+                              Organizar selecionadas
                             </Button>
                           </>
                         )}
@@ -535,7 +535,7 @@ export default function UnloadMindPage() {
                     className="bg-primary hover:bg-primary/90 text-primary-foreground h-14 px-8 text-base rounded-2xl shadow-sm"
                   >
                     <Sparkles className="w-5 h-5 mr-2" />
-                    Clarear minhas tarefas
+                    Organizar isso
                   </Button>
                 )}
                 {!isCreatePlanView && (
@@ -693,7 +693,7 @@ export default function UnloadMindPage() {
               <AlertDialogTitle>Remover pendência da lista</AlertDialogTitle>
               <AlertDialogDescription>
                 {postActionDialog.mode === 'plan'
-                  ? 'Pendência enviada para o plano. Deseja remover da lista de pendências?'
+                  ? 'Pendência enviada para organização. Deseja remover da lista de pendências?'
                   : 'Pendência transformada em tarefa. Deseja remover da lista de pendências?'}
               </AlertDialogDescription>
             </AlertDialogHeader>

@@ -67,7 +67,7 @@ export default function InboxPage() {
       toast.success('Anotação atualizada.');
       cancelEdit();
     } else {
-      toast.error('Não foi possível atualizar a anotação.');
+      toast.error('Não consegui guardar a alteração. Seu texto continua aqui; tente novamente.');
     }
   };
 
@@ -79,13 +79,13 @@ export default function InboxPage() {
     if (!noteToDelete) return;
     const removed = removeUnsortedNote(noteToDelete, currentUser?.id);
     if (removed) {
-      toast.success('Anotação excluída.');
+      toast.success('Anotação removida.');
       if (editingNoteId === noteToDelete) {
         cancelEdit();
       }
       setNoteToDelete(null);
     } else {
-      toast.error('Não foi possível excluir a anotação.');
+      toast.error('Não consegui remover a anotação. Nada foi alterado; tente novamente.');
     }
   };
 

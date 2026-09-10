@@ -29,12 +29,12 @@ export default function AccountPage() {
     event.preventDefault();
 
     if (!form.currentPassword || !form.newPassword || !form.newPasswordConfirm) {
-      toast.error('Preencha todos os campos de senha.');
+      toast.error('Só preciso da senha atual e da nova senha para continuar.');
       return;
     }
 
     if (form.newPassword !== form.newPasswordConfirm) {
-      toast.error('A nova senha e a confirmacao precisam ser iguais.');
+      toast.error('A nova senha e a confirmação precisam ser iguais.');
       return;
     }
 
@@ -48,9 +48,9 @@ export default function AccountPage() {
 
     if (result.success) {
       setForm({ currentPassword: '', newPassword: '', newPasswordConfirm: '' });
-      toast.success('Senha alterada com sucesso.');
+      toast.success('Senha alterada.');
     } else {
-      toast.error(result.error || 'Nao foi possivel alterar a senha.');
+      toast.error(result.error || 'Não consegui alterar a senha. Confira os dados e tente novamente.');
     }
 
     setIsSaving(false);

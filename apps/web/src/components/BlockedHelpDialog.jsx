@@ -11,7 +11,7 @@ import { getTaskNextActionPresentation } from '@/lib/todayViewLogic.js';
 const BLOCK_REASONS = [
   {
     id: 'nao-sei-comecar',
-    label: 'Nao sei começar',
+    label: 'Não sei por onde começar',
     recommendation: 'Execute apenas a primeira ação por 5 minutos.',
     apply: async ({ task, updateTask }) => {
       const firstAction = getTaskNextActionPresentation(task).action || 'Abrir a tarefa e escrever o primeiro passo';
@@ -44,7 +44,7 @@ const BLOCK_REASONS = [
   },
   {
     id: 'sem-energia',
-    label: 'Estou sem energia',
+    label: 'Sem energia agora',
     recommendation: 'Reagendar para outro período e escolher uma tarefa leve.',
     apply: async ({ task, updateTask }) => {
       await updateTask(task.id, { status: 'Esta semana', scheduledPeriod: 'tarde', energiaNecessaria: 'Baixa' });
@@ -52,7 +52,7 @@ const BLOCK_REASONS = [
   },
   {
     id: 'medo-errar',
-    label: 'Estou com medo de errar',
+    label: 'Receio de errar',
     recommendation: 'Criar um rascunho ou versão preliminar antes da versão final.',
     apply: async ({ task, updateTask }) => {
       const current = String(task?.nextAction || '').trim();
@@ -134,11 +134,11 @@ export default function BlockedHelpDialog({ task, isOpen, onOpenChange, onReques
     if (!task?.id || !selectedReason) return;
     const requiresDependencyDetails = selectedReason.id === 'falta-informacao' || selectedReason.id === 'depende-de-alguem';
     if (requiresDependencyDetails && (!dependencyContact.trim() || !followUpDate)) {
-      toast.error('Informe a pessoa e a data para acompanhar o retorno.');
+      toast.error('Só preciso da pessoa e da data para acompanhar esse retorno.');
       return;
     }
     if (selectedReason.id === 'nao-prioridade' && noPriorityDestination === 'reagendar' && !followUpDate) {
-      toast.error('Escolha a nova data da tarefa.');
+      toast.error('Só preciso de uma nova data para reorganizar esta tarefa.');
       return;
     }
 
@@ -207,7 +207,7 @@ export default function BlockedHelpDialog({ task, isOpen, onOpenChange, onReques
       onOpenChange(false);
     } catch (error) {
       console.error(error);
-      toast.error('Não foi possível aplicar a sugestão agora.');
+      toast.error('Não consegui aplicar esse ajuste agora. A tarefa continua como estava; tente novamente.');
     } finally {
       setIsApplying(false);
     }

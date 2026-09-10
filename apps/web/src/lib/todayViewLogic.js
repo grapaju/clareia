@@ -108,6 +108,44 @@ function energyLevel(value) {
   return 2;
 }
 
+export function getDayPanelState(checkIn = {}, availableMinutes = 0) {
+  const energy = normalized(checkIn?.energia);
+  const mind = normalized(checkIn?.mente);
+  const energyState = energy.includes('baixa')
+    ? { label: 'Energia baixa', rhythm: 'Devagar hoje', meterValue: 28 }
+    : energy.includes('alta')
+      ? { label: 'Energia alta', rhythm: 'Com ritmo', meterValue: 78 }
+      : { label: energy ? 'Energia média' : 'Energia não informada', rhythm: 'Leve', meterValue: 52 };
+  const mindLabel = mind.includes('sobrecarregada')
+    ? 'Mente sobrecarregada'
+    : mind.includes('tranquila')
+      ? 'Mente tranquila'
+      : mind ? 'Mente estável' : 'Mente não informada';
+
+  return {
+    ...energyState,
+    mindLabel,
+    availableMinutes: Math.max(0, Number(availableMinutes || 0)),
+    isComplete: Boolean(energy && mind && Number(availableMinutes) > 0),
+    accessibleLabel: `${energyState.label} — ritmo ${energyState.rhythm.toLocaleLowerCase('pt-BR')}`,
+  };
+}
+
+export function getProgressState(valueMinutes = 0, targetMinutes = 0) {
+  const value = Math.max(0, Number(valueMinutes || 0));
+  const target = Math.max(0, Number(targetMinutes || 0));
+  if (!target) {
+    return { valueMinutes: value, targetMinutes: 0, remainingMinutes: 0, percent: null, hasTarget: false };
+  }
+  return {
+    valueMinutes: value,
+    targetMinutes: target,
+    remainingMinutes: Math.max(0, target - value),
+    percent: Math.min(100, Math.round((value / target) * 100)),
+    hasTarget: true,
+  };
+}
+
 function hasSignificantEnergyGap(task, checkIn) {
   return energyLevel(checkIn?.energia) === 1
     && energyLevel(task?.energiaNecessaria || task?.energyLevel || task?.energyNeeded) === 3;
