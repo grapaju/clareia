@@ -15,6 +15,29 @@ export const TASK_STATUS = {
   ARQUIVADA: 'arquivada'
 };
 
+export function isTaskDeleted(task) {
+  if (!task || typeof task !== 'object') return false;
+  const status = stripAccents(task.status);
+  return Boolean(task.deletedAt || task.deleted_at || task.isDeleted === true)
+    || status === 'excluida'
+    || status === 'deleted';
+}
+
+export function isTaskOperational(task) {
+  return Boolean(task)
+    && !isTaskDeleted(task)
+    && normalizeTaskStatus(task.status) !== TASK_STATUS.ARQUIVADA;
+}
+
+export function filterOperationalTaskReferences(records = [], tasks = []) {
+  const operationalTaskIds = new Set(tasks.filter(isTaskOperational).map((task) => String(task.id)));
+  return records.filter((record) => !record?.taskId || operationalTaskIds.has(String(record.taskId)));
+}
+
+export function removeTaskFromOperationalState(tasks = [], taskId = '') {
+  return tasks.filter((task) => String(task?.id) !== String(taskId));
+}
+
 export function normalizeTaskStatus(status) {
   const text = stripAccents(status);
 

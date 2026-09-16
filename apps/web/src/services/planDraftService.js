@@ -1,15 +1,19 @@
 import apiClient from '@/lib/apiClient.js';
 import { applyPlanningPreferences, parseUnloadMindToPlan } from '@/lib/unloadMindLogic.js';
+import { getPlanProjectContext } from '@/services/plansApiService.js';
 
 function normalizeText(value) {
   return String(value || '').trim().toLocaleLowerCase('pt-BR').replace(/\s+/g, ' ');
 }
 
-export async function createOrReusePlanDraft({ text, userId, accountId = '', origin = 'plano-clareado', preferences = {} }) {
+export async function createOrReusePlanDraft({ text, userId, accountId = '', origin = 'plano-clareado', preferences = {}, projectContext = {} }) {
   const content = String(text || '').trim();
   if (!content || !userId) throw new Error('Texto e usuário são obrigatórios.');
 
-  const plan = applyPlanningPreferences(parseUnloadMindToPlan(content), preferences);
+  const semanticContext = Array.isArray(projectContext?.projects) && projectContext.projects.length > 0
+    ? projectContext
+    : await getPlanProjectContext().catch(() => projectContext);
+  const plan = applyPlanningPreferences(parseUnloadMindToPlan(content, semanticContext), preferences);
   if (!plan) throw new Error('Não foi possível identificar tarefas.');
 
   const pendingPlans = await apiClient.collection('planosClareados').getFullList({ sort: '-created' });

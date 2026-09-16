@@ -67,7 +67,7 @@ export default function EditTaskModal({ task, isOpen, onClose }) {
     if (task && isOpen) {
       const scheduledDate = (task.scheduledDate || task.dataSugeridaExecucao)
         ? (task.scheduledDate || task.dataSugeridaExecucao).split('T')[0]
-        : getTodayIso();
+        : '';
 
       setFormData({
         title: task.title || '',
@@ -126,6 +126,7 @@ export default function EditTaskModal({ task, isOpen, onClose }) {
         ...formData,
         scheduledDate: formData.dataSugeridaExecucao,
         scheduledPeriod: formData.periodoSugerido,
+        manualSchedule: Boolean(formData.dataSugeridaExecucao),
         timeEstimate: parseInt(formData.timeEstimate) || 0
       };
       await updateTask(task.id, payload);

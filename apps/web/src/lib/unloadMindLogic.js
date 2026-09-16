@@ -1,6 +1,8 @@
 
 import { suggestTaskSchedule } from './schedulingRules.js';
 import { toIsoDate } from './localDate.js';
+import { generateTaskBreakdown } from './taskBreakdown.js';
+import { parseMindDump } from './mindDumpParser.js';
 
 const ACTION_VERBS = [
   'lançar',
@@ -137,6 +139,13 @@ function inferProjectByRules(text, taskType, lastExplicitProject) {
   }
 
   return { project: '', explicit: false };
+}
+
+function findProjectProfile(projectName, context = {}) {
+  const key = normalizeForSignature(projectName || '');
+  if (!key) return null;
+  const profiles = context.projectProfiles || context.projects || [];
+  return profiles.find((profile) => normalizeForSignature(profile?.name || '') === key) || null;
 }
 
 function detectType(text, action = '') {
@@ -828,8 +837,96 @@ export function normalizeTaskTypeForTaskCollection(taskType) {
   return 'Administrativo';
 }
 
-export function parseBrainDumpToTasks(inputText) {
+function canonicalTaskToLegacy(task, context = {}, rawText = '') {
+  const projectName = task.project?.name || '';
+  const fallbackProject = inferProjectByRules(task.title, '', null).project;
+  const project = projectName || fallbackProject;
+  const projectProfile = findProjectProfile(project, context);
+  const breakdown = generateTaskBreakdown({
+    title: task.title,
+    description: task.notes,
+    originalText: task.title,
+  }, { projectName: project, projectProfile });
+  const action = detectAction(task.title);
+  const taskType = ['debugging', 'technical', 'backend', 'integration'].includes(breakdown.suggestedDomain)
+    ? 'sistema/CRM'
+    : detectType(task.title, action);
+  const estimatedMinutes = task.durationMinutes || estimateMinutes(taskType, task.title);
+  const { priority, priorityGroup, priorityReason } = task.priority
+    ? { priority: task.priority, priorityGroup: classifyPriority(task.title, taskType).priorityGroup, priorityReason: 'Prioridade informada pelo usuário.' }
+    : classifyPriority(task.title, taskType);
+  const explicitSteps = task.microtasks?.filter((item) => item.source === 'explicit') || [];
+  const generatedSteps = breakdown.generationSource === 'fallback'
+    ? generateTypedSubtasks(taskType, task.title)
+    : breakdown.steps;
+  const stepTitles = explicitSteps.length ? explicitSteps.map((item) => item.text) : generatedSteps;
+  const subtasks = createSubtasks(stepTitles, estimatedMinutes).map((subtask) => ({
+    ...subtask,
+    source: explicitSteps.length ? 'explicit' : 'suggested',
+  }));
+  const inferredSchedule = suggestTaskSchedule({
+    taskText: task.title,
+    taskType,
+    project,
+    estimatedMinutes,
+    energyRequired: task.energy || inferEnergy(estimatedMinutes, priorityGroup),
+    isFollowUp: priorityGroup === 'acompanharDepois',
+    priority: priorityGroup === 'maxima' ? 'alta' : (priorityGroup === 'podeEsperar' ? 'baixa' : 'média'),
+  });
+
+  return {
+    title: task.title,
+    originalText: rawText || task.title,
+    sourceType: detectSource(rawText || task.title),
+    project,
+    projectStatus: task.project?.status || (project ? 'undecided' : 'none'),
+    projectConfidence: task.project?.confidence,
+    type: taskType,
+    objective: breakdown.expectedOutcome,
+    priority,
+    priorityGroup,
+    priorityReason,
+    estimatedMinutes,
+    durationSource: task.durationSource || 'suggested',
+    dueDate: task.deadline?.date || inferredSchedule.dueDate,
+    deadlineTime: task.deadline?.time,
+    reminderDate: task.reminder?.date,
+    reminderTime: task.reminder?.time,
+    recurrenceFrequency: task.recurrence?.frequency || 'Nenhuma',
+    recurrenceRule: task.recurrence?.raw,
+    scheduledDate: task.date || '',
+    scheduledPeriod: task.time ? '' : inferredSchedule.scheduledPeriod,
+    scheduledLabel: task.date ? null : undefined,
+    startTime: task.time,
+    fixedTime: Boolean(task.time),
+    manualSchedule: Boolean(task.date || task.time),
+    dateSource: task.dateSource,
+    timeSource: task.timeSource,
+    isBusinessTask: inferredSchedule.isBusinessTask,
+    isClientTask: inferredSchedule.isClientTask,
+    suggestedExecutionDate: task.date || '',
+    suggestedPeriod: task.time ? '' : inferredSchedule.scheduledPeriod,
+    firstStep: subtasks[0]?.title || task.title,
+    subtasks,
+    notes: task.notes || '',
+    constraints: task.constraints || [],
+    generationSource: explicitSteps.length ? 'explicit' : breakdown.generationSource,
+    semanticDomain: breakdown.suggestedDomain,
+    generationConfidence: breakdown.confidence,
+    warning: null,
+    dependencyLabel: null,
+  };
+}
+
+export function parseBrainDumpToTasks(inputText, context = {}) {
   if (!inputText || !inputText.trim()) return [];
+
+  const canonical = parseMindDump(inputText, context);
+  if (canonical.tasks.length > 0) {
+    const canonicalTasks = canonical.tasks.map((task) => canonicalTaskToLegacy(task, context, inputText));
+    canonicalTasks.parseWarnings = canonical.warnings || [];
+    return canonicalTasks;
+  }
 
   const clauses = splitByPunctuation(inputText);
   const actionChunks = clauses.flatMap(splitClauseByActions).filter(Boolean);
@@ -845,7 +942,17 @@ export function parseBrainDumpToTasks(inputText) {
     expandedChunks.forEach((entry) => {
       const rawChunk = entry.text;
       const action = detectAction(rawChunk);
-      const taskType = entry.forcedType || detectType(rawChunk, action);
+      const preliminaryProject = inferProjectByRules(rawChunk, '', lastExplicitProject);
+      const projectProfile = findProjectProfile(preliminaryProject.project, context);
+      const breakdown = generateTaskBreakdown({
+        title: entry.forcedTitle || toDisplayTitle(rawChunk),
+        originalText: rawChunk,
+      }, {
+        projectName: preliminaryProject.project,
+        projectProfile,
+      });
+      const taskType = entry.forcedType
+        || (['debugging', 'technical', 'backend', 'integration'].includes(breakdown.suggestedDomain) ? 'sistema/CRM' : detectType(rawChunk, action));
       const projectResult = inferProjectByRules(rawChunk, taskType, lastExplicitProject);
     const inferredProject = projectResult.project;
     if (projectResult.explicit) {
@@ -854,7 +961,10 @@ export function parseBrainDumpToTasks(inputText) {
 
     const estimatedMinutes = estimateMinutes(taskType, rawChunk);
     const { priority, priorityGroup, priorityReason } = classifyPriority(rawChunk, taskType);
-    const subtasks = createSubtasks(generateTypedSubtasks(taskType, rawChunk), estimatedMinutes);
+    const generatedSteps = breakdown.generationSource === 'fallback'
+      ? generateTypedSubtasks(taskType, rawChunk)
+      : breakdown.steps;
+    const subtasks = createSubtasks(generatedSteps, estimatedMinutes);
     const schedule = suggestTaskSchedule({
       taskText: rawChunk,
       taskType,
@@ -865,16 +975,7 @@ export function parseBrainDumpToTasks(inputText) {
       priority: priorityGroup === 'maxima' ? 'alta' : (priorityGroup === 'podeEsperar' ? 'baixa' : 'média')
     });
 
-    let firstStep = subtasks[0]?.title || 'Definir o primeiro passo prático';
-    if (taskType === 'contato comercial') {
-      firstStep = /\bcrm\b|\bsite\b/i.test(rawChunk)
-        ? 'Escrever uma mensagem objetiva para perguntar sobre interesse em um site integrado ao CRM.'
-        : 'Escrever uma mensagem objetiva para iniciar a conversa';
-    }
-
-    if (taskType === 'acesso sensível') {
-      firstStep = 'Confirmar com Dorval onde está o acesso ou se será necessário recuperar';
-    }
+    const firstStep = subtasks[0]?.title || 'Definir o primeiro passo prático';
 
     parsed.push({
       title: entry.forcedTitle || toDisplayTitle(rawChunk),
@@ -882,21 +983,24 @@ export function parseBrainDumpToTasks(inputText) {
       sourceType: detectSource(rawChunk),
       project: inferredProject || '',
       type: taskType,
-      objective: `Concluir "${entry.forcedTitle || toDisplayTitle(rawChunk)}" com clareza e registro dos próximos passos.`,
+      objective: breakdown.expectedOutcome,
       priority,
       priorityGroup,
       priorityReason,
       estimatedMinutes,
       dueDate: schedule.dueDate,
-      scheduledDate: schedule.scheduledDate,
+      scheduledDate: '',
       scheduledPeriod: schedule.scheduledPeriod,
-      scheduledLabel: schedule.scheduledLabel,
+      scheduledLabel: null,
       isBusinessTask: schedule.isBusinessTask,
       isClientTask: schedule.isClientTask,
-      suggestedExecutionDate: schedule.scheduledDate,
+      suggestedExecutionDate: '',
       suggestedPeriod: schedule.scheduledPeriod,
       firstStep,
       subtasks,
+      generationSource: breakdown.generationSource,
+      semanticDomain: breakdown.suggestedDomain,
+      generationConfidence: breakdown.confidence,
       warning: taskType === 'acesso sensível' ? SENSITIVE_ACCESS_WARNING : null,
       dependencyLabel: entry.dependencyLabel || null
     });
@@ -948,8 +1052,8 @@ export function hasActionableCapture(inputText) {
     .some((chunk) => Boolean(detectAction(chunk)));
 }
 
-export function parseUnloadMindToPlan(rawText) {
-  const parsedTasks = parseBrainDumpToTasks(rawText);
+export function parseUnloadMindToPlan(rawText, context = {}) {
+  const parsedTasks = parseBrainDumpToTasks(rawText, context);
   if (!parsedTasks || parsedTasks.length === 0) return null;
 
   const plan = {
@@ -970,14 +1074,18 @@ export function parseUnloadMindToPlan(rawText) {
       sourceType: task.sourceType || detectSource(rawText),
       taskType: task.type,
       project: task.project,
+      projectStatus: task.projectStatus || (task.project ? 'undecided' : 'none'),
+      projectConfidence: task.projectConfidence,
       timeEstimate: task.estimatedMinutes,
+      durationSource: task.durationSource,
       motivo: task.priorityReason,
       objetivo: task.objective,
       microtarefas: task.subtasks.map((subtask) => ({
         id: uid('micro'),
         descricao: subtask.title,
         status: subtask.completed ? 'concluída' : 'não iniciada',
-        estimatedMinutes: subtask.estimatedMinutes
+        estimatedMinutes: subtask.estimatedMinutes,
+        source: subtask.source || 'suggested'
       })),
       quandoFazer: task.scheduledLabel || humanWhen(priorityGroup),
       dataSugeridaExecucao: task.suggestedExecutionDate || '',
@@ -985,12 +1093,26 @@ export function parseUnloadMindToPlan(rawText) {
       scheduledDate: task.scheduledDate || task.suggestedExecutionDate || '',
       scheduledPeriod: task.scheduledPeriod || task.suggestedPeriod || 'tarde',
       scheduledLabel: task.scheduledLabel || humanWhen(priorityGroup),
+      startTime: task.startTime,
+      fixedTime: Boolean(task.fixedTime),
+      manualSchedule: Boolean(task.manualSchedule),
       energiaNecessaria: inferEnergy(task.estimatedMinutes, priorityGroup),
-      observacoes: task.warning || task.dependencyLabel || 'Gerado automaticamente do seu descarregamento.',
+      description: task.notes || '',
+      notes: task.notes || '',
+      constraints: task.constraints || [],
+      observacoes: [task.notes, ...(task.constraints || [])].filter(Boolean).join('\n') || task.warning || task.dependencyLabel || 'Gerado automaticamente do seu descarregamento.',
       priorityGroup,
       priority: task.priority,
       dueDate: task.dueDate,
+      deadlineTime: task.deadlineTime,
+      reminderDate: task.reminderDate,
+      reminderTime: task.reminderTime,
+      recurrenceFrequency: task.recurrenceFrequency || 'Nenhuma',
+      recurrenceRule: task.recurrenceRule,
       firstStep: task.firstStep,
+      generationSource: task.generationSource,
+      semanticDomain: task.semanticDomain,
+      generationConfidence: task.generationConfidence,
       isBusinessTask: Boolean(task.isBusinessTask),
       isClientTask: Boolean(task.isClientTask)
     };
@@ -1004,6 +1126,7 @@ export function parseUnloadMindToPlan(rawText) {
 
   // Backward compatibility with existing screens that still expect "baixa"
   plan.baixa = [...plan.podeEsperar];
+  plan.meta = { ...(plan.meta || {}), parseWarnings: parsedTasks.parseWarnings || [] };
 
   return plan;
 }
@@ -1041,7 +1164,9 @@ export function applyPlanningPreferences(plan, preferences = {}) {
         scheduledPeriod,
         periodoSugerido: scheduledPeriod,
         focusBlockMinutes: Math.min(Number(task.timeEstimate || comfortableDuration), comfortableDuration),
-        microtarefas: (task.microtarefas || []).slice(0, detailLimit),
+        microtarefas: (task.microtarefas || []).some((item) => item.source === 'explicit')
+          ? (task.microtarefas || [])
+          : (task.microtarefas || []).slice(0, detailLimit),
       };
     });
   });

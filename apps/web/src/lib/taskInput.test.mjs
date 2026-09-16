@@ -7,7 +7,7 @@ test('valida somente o titulo no cadastro rapido', () => {
   assert.equal(validateTaskInput({ title: 'Enviar proposta' }).valid, true);
 });
 
-test('aplica defaults seguros e preserva metadados existentes', () => {
+test('aplica defaults seguros sem usar a criacao como data de execucao', () => {
   const result = normalizeTaskInput(
     { title: '  Enviar proposta  ', legacyField: 'preservado' },
     { now: new Date(2026, 7, 23, 14, 0, 0) },
@@ -16,6 +16,6 @@ test('aplica defaults seguros e preserva metadados existentes', () => {
   assert.equal(result.title, 'Enviar proposta');
   assert.equal(result.timeEstimate, 30);
   assert.equal(result.importance, 'Média');
-  assert.equal(result.scheduledDate, '2026-08-23');
+  assert.equal(result.scheduledDate, '');
   assert.equal(result.legacyField, 'preservado');
 });

@@ -1,7 +1,8 @@
 import { listCalendarCommitments } from './calendarCommitmentService.js';
 import { getCalendarPreferences, isAllowedDayForTask } from './calendarPreferencesService.js';
-import { isTaskArchivedStatus, isTaskCompletedStatus } from '../lib/taskExecution.js';
+import { isTaskActionableStatus, isTaskOperational } from '../lib/taskExecution.js';
 import { toIsoDate } from '../lib/localDate.js';
+import { calculateDailyCapacity } from '../lib/planningEngine.js';
 
 function stripAccents(value = '') {
   return value
@@ -18,12 +19,13 @@ function isBusinessTask(task = {}) {
 
 export function availableMinutesFromCheckIn(checkIn) {
   const tempo = String(checkIn?.tempo || '').trim().toLowerCase();
-  if (tempo === '30 min' || tempo === '30min') return 30;
-  if (tempo === '1h') return 60;
-  if (tempo === '2h') return 120;
-  if (tempo === '4h') return 240;
-  if (tempo === 'dia inteiro') return 480;
-  return 240;
+  let availableMinutes = 240;
+  if (tempo === '30 min' || tempo === '30min') availableMinutes = 30;
+  else if (tempo === '1h') availableMinutes = 60;
+  else if (tempo === '2h') availableMinutes = 120;
+  else if (tempo === '4h') availableMinutes = 240;
+  else if (tempo === 'dia inteiro') availableMinutes = 480;
+  return calculateDailyCapacity({ availableMinutes }).capacityMinutes;
 }
 
 export function classifyDayLoad(plannedMinutes, availableMinutes) {
@@ -37,8 +39,8 @@ export function classifyDayLoad(plannedMinutes, availableMinutes) {
 export function plannedMinutesForDate({ dateIso, tasks = [], followups = [] }) {
   const taskMinutes = tasks
     .filter((task) => (
-      !isTaskCompletedStatus(task.status)
-      && !isTaskArchivedStatus(task.status)
+      isTaskOperational(task)
+      && isTaskActionableStatus(task.status)
       && toIsoDate(task.scheduledDate || task.dataSugeridaExecucao) === dateIso
     ))
     .reduce((sum, task) => sum + Number(task.timeEstimate || task.estimatedMinutes || 30), 0);
@@ -72,8 +74,6 @@ export function suggestCalendarSlotForTask(task, context = {}) {
   const dueDateIso = toIsoDate(task?.dueDate || task?.dataLimite);
   const startDate = context.startDate ? new Date(context.startDate) : new Date();
   const maxDaysToScan = 14;
-
-  let suggested = null;
 
   for (let offset = 0; offset <= maxDaysToScan; offset += 1) {
     const day = new Date(startDate);
@@ -109,7 +109,7 @@ export function suggestCalendarSlotForTask(task, context = {}) {
     if (hasMorningCommitment && !hasAfternoonCommitment) period = 'tarde';
     if (hasMorningCommitment && hasAfternoonCommitment) period = 'noite';
 
-    suggested = {
+    const suggested = {
       date: dateIso,
       period,
       estimatedMinutes: estimate,
@@ -119,8 +119,8 @@ export function suggestCalendarSlotForTask(task, context = {}) {
       isOverloaded: total > availablePerDay
     };
 
-    if (!suggested.isOverloaded) break;
+    if (!suggested.isOverloaded) return suggested;
   }
 
-  return suggested;
+  return null;
 }

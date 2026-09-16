@@ -1,3 +1,22 @@
+import { generateTaskBreakdown } from './taskBreakdown.js';
+
+const DOMAIN_TASK_TYPES = {
+  debugging: 'Desenvolvimento',
+  technical: 'Desenvolvimento',
+  backend: 'Desenvolvimento',
+  integration: 'Desenvolvimento',
+  frontend: 'Site',
+  reporting: 'Administrativo',
+  analytics: 'Google Ads',
+  ads: 'Google Ads',
+  finance: 'Cobrança',
+  documentation: 'Administrativo',
+  communication: 'Atendimento',
+  file_organization: 'Administrativo',
+  delivery: 'Administrativo',
+  meeting: 'Reunião',
+};
+
 
 export function suggestTaskType(taskText) {
   const text = taskText.toLowerCase();
@@ -133,13 +152,23 @@ export function suggestSubtasks(taskTitle, timeEstimate) {
   ];
 }
 
-export function autoSuggestAll(taskText, dueDate = null) {
-  const timeEstimate = suggestTimeEstimate(taskText);
+export function autoSuggestAll(taskText, dueDate = null, context = {}) {
+  const breakdown = generateTaskBreakdown({
+    title: taskText,
+    description: context.description,
+  }, context);
+  const timeEstimate = breakdown.generationSource === 'fallback'
+    ? suggestTimeEstimate(taskText)
+    : breakdown.suggestedTimeEstimate;
   return {
-    taskType: suggestTaskType(taskText),
+    taskType: DOMAIN_TASK_TYPES[breakdown.suggestedDomain] || suggestTaskType(taskText),
     project: suggestProject(taskText),
     timeEstimate,
-    nextAction: suggestNextAction(taskText),
+    nextAction: breakdown.generationSource === 'fallback' ? suggestNextAction(taskText) : breakdown.firstAction,
+    energy: breakdown.suggestedEnergy,
+    generationSource: breakdown.generationSource,
+    semanticDomain: breakdown.suggestedDomain,
+    expectedOutcome: breakdown.expectedOutcome,
     shouldBreakDown: shouldBreakDown(timeEstimate),
     priority: suggestPriority(taskText, dueDate, null, null),
     subtasks: suggestSubtasks(taskText, timeEstimate)

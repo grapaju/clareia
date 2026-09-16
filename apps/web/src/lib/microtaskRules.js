@@ -1,5 +1,7 @@
 
-export function generateMicrotasks(taskType, taskTitle = '', timeEstimate = 30) {
+import { generateTaskBreakdown } from './taskBreakdown.js';
+
+export function generateMicrotasks(taskType, taskTitle = '', timeEstimate = 30, context = {}) {
   const type = taskType?.toLowerCase() || 'outro';
   const title = taskTitle.toLowerCase();
   
@@ -15,6 +17,16 @@ export function generateMicrotasks(taskType, taskTitle = '', timeEstimate = 30) 
     descricao: desc,
     status: 'não iniciada'
   }));
+
+  const semantic = generateTaskBreakdown({
+    title: taskTitle,
+    description: context.description,
+    taskType,
+    timeEstimate,
+  }, context, { timeEstimate });
+  if (semantic.generationSource !== 'fallback') {
+    return createTasks(semantic.steps);
+  }
 
   if (type === 'reunião' || title.includes('reunião')) {
     return createTasks([
@@ -101,7 +113,11 @@ export function suggestSmallerSteps(task = {}) {
     return [String(pendingMicrotask.title || pendingMicrotask.descricao).trim()];
   }
 
-  const generated = generateMicrotasks(safeTask.taskType, safeTask.title, safeTask.timeEstimate)
+  const generated = generateMicrotasks(safeTask.taskType, safeTask.title, safeTask.timeEstimate, {
+    description: safeTask.description,
+    projectProfile: safeTask.projectProfile,
+    projectName: safeTask.project,
+  })
     .map((item) => item.title)
     .filter(Boolean);
   if (generated.length > 0 && safeTask.taskType && safeTask.taskType !== 'Outro') {

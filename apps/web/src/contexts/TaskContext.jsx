@@ -21,11 +21,18 @@ import {
   completeAllMicrotasks,
   getTaskMicrotaskProgress,
   isTaskCompletedStatus,
+  isTaskDeleted,
   normalizeMicrotasks,
   normalizeTaskStatus,
+  removeTaskFromOperationalState,
   TASK_STATUS
 } from '@/lib/taskExecution.js';
 import { normalizeTaskInput } from '@/lib/taskInput.js';
+import { replanOverdueScheduledTasks, schedulePendingTasks } from '@/lib/planningEngine.js';
+import { getCheckInAvailableMinutes } from '@/lib/reportFormatting.js';
+import { listCalendarCommitments } from '@/services/calendarCommitmentService.js';
+import { getCalendarPreferences } from '@/services/calendarPreferencesService.js';
+import { readUserPreferences } from '@/services/userPreferencesService.js';
 
 export const TaskContext = createContext();
 
@@ -73,6 +80,7 @@ export function TaskProvider({ children }) {
   const [selectedTask, setSelectedTask] = useState(null);
   const completionPromisesRef = useRef(new Map());
   const fetchSequenceRef = useRef(0);
+  const planningRunRef = useRef('');
   const currentUserIdRef = useRef(currentUser?.id || '');
   currentUserIdRef.current = currentUser?.id || '';
   
@@ -116,7 +124,7 @@ export function TaskProvider({ children }) {
     try {
       const records = await listTasksFromApi();
       if (fetchSequence !== fetchSequenceRef.current || currentUserIdRef.current !== requestedUserId) return;
-      setTasks(records.map((record) => normalizeTaskRecord(record)));
+      setTasks(records.filter((record) => !isTaskDeleted(record)).map((record) => normalizeTaskRecord(record)));
       setTasksOwnerId(requestedUserId);
     } catch (error) {
       console.error("Erro ao buscar tarefas:", error);
@@ -226,16 +234,64 @@ export function TaskProvider({ children }) {
 
   const hasTodayCheckIn = !!(checkIn?.date && checkIn.date === getTodayIso());
 
+  const getPlanningOptions = () => {
+    const preferences = readUserPreferences(currentUser?.id);
+    return {
+      availableMinutes: getCheckInAvailableMinutes(checkIn?.tempo || preferences.availableTime || '2h'),
+      commitments: listCalendarCommitments(),
+      preferences: getCalendarPreferences(),
+    };
+  };
+
+  useEffect(() => {
+    if (!currentUser?.id || isLoading || tasksOwnerId !== currentUser.id) return;
+    const runKey = `${currentUser.id}:${getTodayIso()}:${checkIn?.updatedAt || 'preferences'}`;
+    if (planningRunRef.current === runKey) return;
+    planningRunRef.current = runKey;
+
+    const overdueBeforePlanning = new Set(tasks
+      .filter((task) => {
+        const scheduledDate = String(task.scheduledDate || task.dataSugeridaExecucao || '').slice(0, 10);
+        return scheduledDate && scheduledDate < getTodayIso() && task.manualSchedule !== true;
+      })
+      .map((task) => task.id));
+    const result = replanOverdueScheduledTasks(tasks, getPlanningOptions());
+    if (result.updatedTasks.length === 0) return;
+
+    let active = true;
+    Promise.all(result.updatedTasks.map((task) => updateTaskInApi(task.id, task)))
+      .then((records) => {
+        if (!active) return;
+        const normalizedRecords = records.map(normalizeTaskRecord);
+        const byId = new Map(normalizedRecords.map((task) => [task.id, task]));
+        setTasks((current) => current.map((task) => byId.get(task.id) || task));
+        const replannedCount = normalizedRecords.filter((task) => overdueBeforePlanning.has(task.id) && task.scheduledDate).length;
+        if (replannedCount > 0) {
+          toast.info(replannedCount === 1
+            ? 'Uma tarefa ficou pendente. Reorganizei o restante da semana.'
+            : `${replannedCount} tarefas ficaram pendentes. Reorganizei o restante da semana.`);
+        }
+        if (result.deadlineRisks.length > 0) toast.warning(result.deadlineRisks[0].deadlineRiskMessage);
+      })
+      .catch((error) => console.error('Erro ao aplicar planejamento automatico:', error));
+
+    return () => { active = false; };
+  }, [checkIn?.updatedAt, currentUser?.id, isLoading, tasksOwnerId]);
+
   const addTask = async (taskData) => {
     try {
       const accountId = currentUser?.currentAccountId || '';
-      const payload = normalizeTaskPayload(normalizeTaskInput({
+      const normalizedInput = normalizeTaskPayload(normalizeTaskInput({
         ...taskData,
         status: taskData?.status || TASK_STATUS.PENDENTE,
         userId: currentUser?.id,
         ...(accountId ? { accountId } : {})
       }));
+      const temporaryId = `new-task-${Date.now()}`;
+      const planned = schedulePendingTasks([...tasks, { ...normalizedInput, id: temporaryId }], getPlanningOptions());
+      const payload = planned.tasks.find((task) => task.id === temporaryId) || normalizedInput;
       const record = await createTaskInApi(payload);
+      if (isTaskDeleted(record)) return null;
       const normalized = normalizeTaskRecord(record);
       setTasks(prev => [normalized, ...prev]);
       if (record?.project) {
@@ -259,6 +315,11 @@ export function TaskProvider({ children }) {
     try {
       const payload = normalizeTaskPayload(updates, id);
       const record = await updateTaskInApi(id, payload);
+      if (isTaskDeleted(record)) {
+        setTasks((current) => removeTaskFromOperationalState(current, id));
+        setSelectedTask((current) => current?.id === id ? null : current);
+        return null;
+      }
       const normalized = normalizeTaskRecord(record);
       setTasks(prev => prev.map(t => t.id === id ? normalized : t));
       if (Object.keys(updates || {}).length > 0) {
@@ -278,10 +339,23 @@ export function TaskProvider({ children }) {
   };
 
   const deleteTask = async (id) => {
+    const removedTask = tasks.find((task) => task.id === id) || null;
+    setTasks((current) => removeTaskFromOperationalState(current, id));
+    setSelectedTask((current) => current?.id === id ? null : current);
     try {
       await deleteTaskInApi(id);
-      setTasks(prev => prev.filter(t => t.id !== id));
+      if (removedTask) {
+        addTaskHistoryEvent({
+          taskId: id,
+          projectId: removedTask.project || 'Pessoal',
+          type: 'task_deleted',
+          message: `Tarefa excluída: ${removedTask.title || 'Tarefa sem título'}`,
+        });
+      }
     } catch (error) {
+      if (removedTask) {
+        setTasks((current) => current.some((task) => task.id === id) ? current : [removedTask, ...current]);
+      }
       console.error(error);
       toast.error('Erro ao excluir tarefa.');
       throw error;

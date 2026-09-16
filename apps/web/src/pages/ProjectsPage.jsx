@@ -528,7 +528,7 @@ export default function ProjectsPage() {
   }, [selectedProject, driveReloadKey]);
 
   const projectTasks = useMemo(
-    () => tasks.filter((item) => item.project === selectedProject && !isTaskCompletedStatus(item.status)),
+    () => tasks.filter((item) => item.project === selectedProject && isTaskOpenStatus(item.status)),
     [tasks, selectedProject]
   );
   const projectTasksOpen = useMemo(() => tasks.filter((item) => item.project === selectedProject && isTaskOpenStatus(item.status)), [tasks, selectedProject]);
@@ -3633,6 +3633,7 @@ export default function ProjectsPage() {
                 taskType: 'Desenvolvimento',
                 energiaNecessaria: 'Média'
               }}
+              projectContext={selectedProfile}
               onSubmit={handleCreateTaskForProject}
               onCancel={() => setIsCreateTaskDialogOpen(false)}
             />

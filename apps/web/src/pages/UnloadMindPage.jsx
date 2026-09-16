@@ -25,6 +25,7 @@ import {
 import apiClient from '@/lib/apiClient.js';
 import { useAuth } from '@/contexts/AuthContext.jsx';
 import { normalizeTaskTypeForTaskCollection, parseUnloadMindToPlan } from '@/lib/unloadMindLogic.js';
+import { MIND_DUMP_TEMPLATE } from '@/lib/mindDumpParser.js';
 import { toast } from 'sonner';
 import { getCurrentAccountId } from '@/lib/apiClient.js';
 import { readUserScopedJson } from '@/lib/userScopedStorage.js';
@@ -32,7 +33,12 @@ import { useTaskContext } from '@/hooks/useTaskContext.js';
 import { createProjectNote } from '@/services/projectNoteService.js';
 import { appendProjectHistory } from '@/services/projectHistoryService.js';
 import { createOrReusePlanDraft } from '@/services/planDraftService.js';
+import { getPlanProjectContext } from '@/services/plansApiService.js';
 import { readUserPreferences } from '@/services/userPreferencesService.js';
+import { schedulePendingTasks } from '@/lib/planningEngine.js';
+import { getCheckInAvailableMinutes } from '@/lib/reportFormatting.js';
+import { listCalendarCommitments } from '@/services/calendarCommitmentService.js';
+import { getCalendarPreferences } from '@/services/calendarPreferencesService.js';
 import {
   createUnsortedNote,
   formatNoteDateTime,
@@ -46,7 +52,7 @@ export default function UnloadMindPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { currentUser } = useAuth();
-  const { addTask } = useTaskContext();
+  const { tasks, addTask, checkIn, refreshTasks } = useTaskContext();
   const userId = currentUser?.id || apiClient.authStore?.model?.id || '';
   const accountId = currentUser?.currentAccountId || getCurrentAccountId();
   const draftKey = `clareia_plan_draft_${userId || 'anonymous'}`;
@@ -57,6 +63,7 @@ export default function UnloadMindPage() {
   const [editingNoteId, setEditingNoteId] = useState(null);
   const [editingContent, setEditingContent] = useState('');
   const [projectOptions, setProjectOptions] = useState([]);
+  const [projectContext, setProjectContext] = useState({ projects: [], aliases: [] });
   const [selectedProject, setSelectedProject] = useState('none');
   const [selectedPendingIds, setSelectedPendingIds] = useState([]);
   const [showPendingSelector, setShowPendingSelector] = useState(false);
@@ -116,12 +123,20 @@ export default function UnloadMindPage() {
   }, [draftKey, text]);
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const parsed = readUserScopedJson('clareia_project_profiles_v1', [], userId);
-    const projects = Array.isArray(parsed)
-      ? parsed.map((item) => String(item?.name || '').trim()).filter(Boolean)
-      : [];
-    setProjectOptions([...new Set(projects)].sort((a, b) => a.localeCompare(b, 'pt-BR')));
+    let active = true;
+    const legacyProfiles = readUserScopedJson('clareia_project_profiles_v1', [], userId);
+
+    getPlanProjectContext()
+      .catch(() => ({ projects: legacyProfiles, aliases: [] }))
+      .then((context) => {
+        if (!active) return;
+        const profiles = Array.isArray(context?.projects) ? context.projects : [];
+        setProjectContext({ projects: profiles, aliases: context?.aliases || [] });
+        setProjectOptions([...new Set(profiles.map((item) => String(item?.name || '').trim()).filter(Boolean))]
+          .sort((a, b) => a.localeCompare(b, 'pt-BR')));
+      });
+
+    return () => { active = false; };
   }, [userId]);
 
   const getStatusFromScheduledDate = (scheduledDate) => {
@@ -148,7 +163,10 @@ export default function UnloadMindPage() {
     setIsProcessing(true);
     
     try {
-      const plan = parseUnloadMindToPlan(content);
+      const semanticContext = projectContext.projects.length > 0
+        ? projectContext
+        : await getPlanProjectContext().catch(() => projectContext);
+      const plan = parseUnloadMindToPlan(content, semanticContext);
       if (plan) {
         const relatedProjects = [
           ...(plan.maxima || []),
@@ -166,6 +184,7 @@ export default function UnloadMindPage() {
           accountId,
           origin: 'plano-clareado',
           preferences: readUserPreferences(userId),
+          projectContext: semanticContext,
         });
         
         if (!customText) {
@@ -188,6 +207,13 @@ export default function UnloadMindPage() {
         setText('');
         window.localStorage.removeItem(draftKey);
         navigate('/plano-clareado', { state: { planRecord: record } });
+      } else {
+        const saved = createUnsortedNote({ content: originalContent, userId, source: 'descarregar-mente' });
+        if (saved) {
+          setText('');
+          window.localStorage.removeItem(draftKey);
+          toast.info('Não consegui organizar tudo automaticamente. Guardei este conteúdo para você revisar depois.');
+        }
       }
     } catch (err) {
       console.error(err);
@@ -206,7 +232,10 @@ export default function UnloadMindPage() {
     }
     setIsProcessing(true);
     try {
-      const plan = parseUnloadMindToPlan(content);
+      const semanticContext = projectContext.projects.length > 0
+        ? projectContext
+        : await getPlanProjectContext().catch(() => projectContext);
+      const plan = parseUnloadMindToPlan(content, semanticContext);
       let count = 0;
       const allTasks = [
         ...(plan.maxima || []),
@@ -216,10 +245,11 @@ export default function UnloadMindPage() {
         ...(plan.acompanharDepois || [])
       ];
       
-      for (const t of allTasks) {
-        const scheduledDate = t.scheduledDate || t.dataSugeridaExecucao || new Date().toISOString().split('T')[0];
+      const rawTasks = allTasks.map((t) => {
+        const scheduledDate = t.scheduledDate || t.dataSugeridaExecucao || '';
         const scheduledPeriod = t.scheduledPeriod || t.periodoSugerido || 'tarde';
-        await apiClient.collection('tasks').create({
+        return {
+          ...t,
           userId,
           ...(accountId ? { accountId } : {}),
           title: t.title,
@@ -236,14 +266,31 @@ export default function UnloadMindPage() {
           isBusinessTask: Boolean(t.isBusinessTask),
           isClientTask: Boolean(t.isClientTask),
           microtarefas: t.microtarefas,
-          status: getStatusFromScheduledDate(scheduledDate)
+          status: 'pendente'
+        };
+      });
+      const preferences = readUserPreferences(userId);
+      const planning = schedulePendingTasks([...tasks, ...rawTasks], {
+        availableMinutes: getCheckInAvailableMinutes(checkIn?.tempo || preferences.availableTime || '2h'),
+        commitments: listCalendarCommitments(),
+        preferences: getCalendarPreferences(),
+      });
+      const newTaskIds = new Set(rawTasks.map((task) => task.id));
+      const preparedTasks = planning.tasks.filter((task) => newTaskIds.has(task.id));
+
+      for (const plannedTask of preparedTasks) {
+        await apiClient.collection('tasks').create({
+          ...plannedTask,
+          status: getStatusFromScheduledDate(plannedTask.scheduledDate),
         }, { $autoCancel: false });
-        if (t.project) {
-          appendProjectHistory(t.project, 'Tarefa criada', t.title || 'Nova tarefa do plano');
+        if (plannedTask.project) {
+          appendProjectHistory(plannedTask.project, 'Tarefa criada', plannedTask.title || 'Nova tarefa do plano');
         }
         count++;
       }
-      toast.success(`${count} tarefas criadas diretamente!`);
+      await refreshTasks();
+      toast.success(`Organizei ${count} tarefas em ${planning.summary.distributedDayCount} dias do planejamento.`);
+      if (planning.deadlineRisks.length > 0) toast.warning(planning.deadlineRisks[0].deadlineRiskMessage);
 
       if (!customText) {
         setText('');
@@ -445,7 +492,7 @@ export default function UnloadMindPage() {
                   </p>
                 ) : (
                   <p className="text-lg text-muted-foreground max-w-xl mx-auto leading-relaxed">
-                    Use para capturar pensamentos soltos, lembretes e pendências rápidas. Você pode organizar depois.
+                    Descarregue tudo aqui do seu jeito.
                   </p>
                 )}
               </div>
@@ -460,6 +507,14 @@ export default function UnloadMindPage() {
                   onChange={e => setText(e.target.value)}
                 />
               </div>
+
+              {isCreatePlanView && (
+                <div className="-mt-5 mb-6 flex justify-end">
+                  <Button type="button" size="sm" variant="ghost" onClick={() => setText((current) => current.trim() ? `${current}\n\n${MIND_DUMP_TEMPLATE}` : MIND_DUMP_TEMPLATE)}>
+                    Usar modelo
+                  </Button>
+                </div>
+              )}
 
               {isCreatePlanView && !text.trim() && (
                 <Card className="bg-card border-border shadow-sm mb-6">

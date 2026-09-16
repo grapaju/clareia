@@ -80,12 +80,21 @@ test('isola dados, materiais e Google Drive entre usuários A e B', async (conte
   assert.equal((await api(baseUrl, `/tasks/${taskA.id}`, { token: userB.token, method: 'PATCH', body: { title: 'Alterada por B' } })).status, 404);
   assert.equal((await api(baseUrl, `/tasks/${taskA.id}`, { token: userB.token, method: 'DELETE' })).status, 404);
 
+  assert.equal((await api(baseUrl, `/tasks/${taskA.id}`, { token: userA.token, method: 'DELETE' })).status, 204);
+  assert.deepEqual((await api(baseUrl, '/tasks', { token: userA.token })).payload.items, []);
+  assert.equal((await api(baseUrl, `/tasks/${taskA.id}/focus-sessions`, { token: userA.token })).status, 404);
+  const preservedHistory = await runQuery(
+    `SELECT
+       (SELECT COUNT(*)::int FROM task_notes WHERE task_id = $1 AND user_id = $2) AS note_count,
+       (SELECT COUNT(*)::int FROM focus_sessions WHERE task_id = $1 AND user_id = $2) AS session_count`,
+    [taskA.id, userA.user.id]
+  );
+  assert.deepEqual(preservedHistory.rows[0], { note_count: 1, session_count: 1 });
+
   const taskB = await api(baseUrl, '/tasks', { token: userB.token, method: 'POST', body: { title: 'Tarefa privada B', status: 'pendente' } });
   assert.equal(taskB.status, 201);
   const tasksForAAgain = await api(baseUrl, '/tasks', { token: userA.token });
-  assert.deepEqual(tasksForAAgain.payload.items.map((item) => item.id), [taskA.id]);
-  assert.equal((await api(baseUrl, `/tasks/${taskA.id}/notes`, { token: userA.token })).payload.items.length, 1);
-  assert.equal((await api(baseUrl, `/tasks/${taskA.id}/focus-sessions`, { token: userA.token })).payload.items.length, 1);
+  assert.deepEqual(tasksForAAgain.payload.items, []);
 
   const syntheticEncryptedToken = 'iv.auth-tag.encrypted-refresh-token';
   await runQuery(

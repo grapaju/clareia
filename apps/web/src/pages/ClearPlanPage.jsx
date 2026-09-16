@@ -39,6 +39,11 @@ import { appendProjectHistory } from '@/services/projectHistoryService.js';
 import { getProjectStatusLabel, resolvePlanProjectAssociations } from '@/lib/projectAssociationLogic.js';
 import { confirmPlan, getPlanProjectContext } from '@/services/plansApiService.js';
 import { useTaskContext } from '@/hooks/useTaskContext.js';
+import { schedulePendingTasks } from '@/lib/planningEngine.js';
+import { getCheckInAvailableMinutes } from '@/lib/reportFormatting.js';
+import { listCalendarCommitments } from '@/services/calendarCommitmentService.js';
+import { getCalendarPreferences } from '@/services/calendarPreferencesService.js';
+import { readUserPreferences } from '@/services/userPreferencesService.js';
 
 const TASK_TYPE_OPTIONS = [
   'orçamento/proposta',
@@ -120,7 +125,7 @@ export default function ClearPlanPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const { currentUser } = useAuth();
-  const { refreshTasks } = useTaskContext();
+  const { tasks, checkIn, refreshTasks } = useTaskContext();
   const accountId = currentUser?.currentAccountId || getCurrentAccountId();
   const { lowStimulationMode } = useTheme();
   const cameFromDirectCreate = Boolean(location.state?.planRecord);
@@ -542,8 +547,8 @@ export default function ClearPlanPage() {
     setIsProcessing(true);
 
     try {
-      const preparedTasks = allTasks.map((t) => {
-        const scheduledDate = t.scheduledDate || t.dataSugeridaExecucao || new Date().toISOString().split('T')[0];
+      const rawTasks = allTasks.map((t) => {
+        const scheduledDate = t.scheduledDate || t.dataSugeridaExecucao || '';
         const scheduledPeriod = t.scheduledPeriod || t.periodoSugerido || 'tarde';
 
         return {
@@ -563,9 +568,19 @@ export default function ClearPlanPage() {
           isBusinessTask: Boolean(t.isBusinessTask),
           isClientTask: Boolean(t.isClientTask),
           microtarefas: t.microtarefas,
-          status: getStatusFromScheduledDate(scheduledDate)
+          status: 'pendente'
         };
       });
+      const userPreferences = readUserPreferences(currentUser?.id);
+      const planning = schedulePendingTasks([...tasks, ...rawTasks], {
+        availableMinutes: getCheckInAvailableMinutes(checkIn?.tempo || userPreferences.availableTime || '2h'),
+        commitments: listCalendarCommitments(),
+        preferences: getCalendarPreferences(),
+      });
+      const newTaskIds = new Set(rawTasks.map((task) => task.id));
+      const preparedTasks = planning.tasks
+        .filter((task) => newTaskIds.has(task.id))
+        .map((task) => ({ ...task, status: getStatusFromScheduledDate(task.scheduledDate) }));
 
       const result = await confirmPlan({
         planId: planData.id,
@@ -584,7 +599,10 @@ export default function ClearPlanPage() {
 
       setPlanData(null);
       const count = result?.createdCount ?? result?.items?.length ?? preparedTasks.length;
-      toast.success(result?.reused ? 'Estas tarefas já haviam sido criadas.' : `${count} tarefas criadas.`);
+      toast.success(result?.reused
+        ? 'Estas tarefas já haviam sido criadas.'
+        : `Organizei ${count} tarefas em ${planning.summary.distributedDayCount} dias do planejamento.`);
+      if (planning.deadlineRisks.length > 0) toast.warning(planning.deadlineRisks[0].deadlineRiskMessage);
       navigate('/');
     } catch (err) {
       console.error(err);
@@ -740,6 +758,13 @@ export default function ClearPlanPage() {
                 </div>
               )}
 
+              {(plan?.meta?.parseWarnings || []).length > 0 && (
+                <div className="mb-5 rounded-lg border border-primary/30 bg-primary/5 px-4 py-3" role="status">
+                  <p className="font-medium text-foreground">Revise a interpretação</p>
+                  {(plan.meta.parseWarnings || []).map((warning) => <p key={warning.code || warning.message} className="mt-1 text-sm text-muted-foreground">{warning.message || warning}</p>)}
+                </div>
+              )}
+
               <div className="flex flex-wrap gap-3 mb-6 bg-card p-3 rounded-2xl border border-border shadow-sm justify-center sticky top-[72px] z-30">
                 <Button onClick={handleCreateTasks} disabled={isProcessing} className="bg-primary text-primary-foreground hover:bg-primary/90 px-5 rounded-xl">
                   <ListTodo className="w-4 h-4 mr-2" /> Confirmar {selectedTaskIds.length === editableTasks.length ? 'todos' : `${selectedTaskIds.length} selecionados`}
@@ -824,7 +849,11 @@ export default function ClearPlanPage() {
                                 <span className="px-2 py-1 rounded-full bg-muted border border-border">Tipo: {task.taskType || 'administrativo'}</span>
                                 <span className="px-2 py-1 rounded-full bg-primary/10 border border-primary/20 text-primary">{task.priority || 'Prioridade média'}</span>
                                 <span className="px-2 py-1 rounded-full bg-muted border border-border"><Clock className="w-3 h-3 inline mr-1" />{task.timeEstimate || 0} min</span>
-                                <span className="px-2 py-1 rounded-full bg-muted border border-border"><Calendar className="w-3 h-3 inline mr-1" />{task.scheduledLabel || task.quandoFazer || 'Esta semana'}</span>
+                                <span className="px-2 py-1 rounded-full bg-muted border border-border"><Calendar className="w-3 h-3 inline mr-1" />{task.scheduledDate || task.scheduledLabel || task.quandoFazer || 'Sem data definida'}</span>
+                                {task.startTime && <span className="px-2 py-1 rounded-full bg-muted border border-border">Horário: {task.startTime}</span>}
+                                {!task.startTime && task.scheduledDate && <span className="px-2 py-1 rounded-full bg-muted border border-border">Sem horário, encaixe automático</span>}
+                                {task.dueDate && <span className="px-2 py-1 rounded-full bg-muted border border-border">Prazo: {task.dueDate}</span>}
+                                {task.reminderDate && <span className="px-2 py-1 rounded-full bg-muted border border-border">Lembrete: {task.reminderDate}{task.reminderTime ? ` às ${task.reminderTime}` : ''}</span>}
                                 <span className="px-2 py-1 rounded-full bg-muted border border-border">Energia: {task.energiaNecessaria || 'Média'}</span>
                                 <span className="px-2 py-1 rounded-full bg-muted border border-border">{task.recurrenceFrequency && task.recurrenceFrequency !== 'Nenhuma' ? `Recorrência: ${task.recurrenceFrequency}` : 'Sem recorrência'}</span>
                               </>
@@ -837,6 +866,22 @@ export default function ClearPlanPage() {
                             <span className="font-medium text-muted-foreground">Primeira ação: </span>
                             {task.firstStep || task.microtarefas?.[0]?.descricao || 'Definir o primeiro passo prático'}
                           </p>
+
+                          {task.notes && (
+                            <div className="text-sm text-foreground/90">
+                              <p className="font-medium text-muted-foreground">Contexto</p>
+                              <p className="mt-1 whitespace-pre-wrap">{task.notes}</p>
+                            </div>
+                          )}
+
+                          {(task.constraints || []).length > 0 && (
+                            <div className="text-sm text-foreground/90">
+                              <p className="font-medium text-muted-foreground">Manter como está</p>
+                              <ul className="mt-1 list-disc space-y-1 pl-5">
+                                {task.constraints.map((constraint) => <li key={constraint}>{constraint}</li>)}
+                              </ul>
+                            </div>
+                          )}
 
                           <div className="flex flex-wrap gap-2 pt-1">
                             <Button size="sm" variant="outline" onClick={() => setEditingTaskId((prev) => (prev === task.id ? null : task.id))}>
@@ -951,6 +996,25 @@ export default function ClearPlanPage() {
                                       updateTaskField(task.id, 'scheduledDate', e.target.value);
                                     }}
                                   />
+                                </div>
+                                <div className="space-y-1">
+                                  <Label>Horário explícito</Label>
+                                  <Input
+                                    type="time"
+                                    value={task.startTime || ''}
+                                    onChange={(e) => {
+                                      updateTaskField(task.id, 'startTime', e.target.value);
+                                      updateTaskField(task.id, 'fixedTime', Boolean(e.target.value));
+                                    }}
+                                  />
+                                </div>
+                                <div className="space-y-1">
+                                  <Label>Prazo</Label>
+                                  <Input type="date" value={(task.dueDate || '').split('T')[0]} onChange={(e) => updateTaskField(task.id, 'dueDate', e.target.value)} />
+                                </div>
+                                <div className="space-y-1 md:col-span-2">
+                                  <Label>Contexto e notas</Label>
+                                  <Textarea value={task.notes || ''} onChange={(e) => updateTaskField(task.id, 'notes', e.target.value)} />
                                 </div>
                                 <div className="space-y-1 md:col-span-2">
                                   <Label>Primeira ação</Label>

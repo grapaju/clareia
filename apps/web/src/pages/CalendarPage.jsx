@@ -47,6 +47,7 @@ import {
 import { getCalendarPreferences, isAllowedDayForTask } from '@/services/calendarPreferencesService.js';
 import { toIsoDate } from '@/lib/localDate.js';
 import { formatWeekRangeLong, formatWeekRangeShort, getCalendarTaskActions } from '@/lib/calendarViewLogic.js';
+import { buildTaskCalendarItems } from '@/lib/calendarTaskItems.js';
 import CreateFollowUpFromTaskDialog from '@/components/CreateFollowUpFromTaskDialog.jsx';
 import TaskDetailsModal from '@/components/TaskDetailsModal.jsx';
 import { isTaskOpenStatus, normalizeTaskStatus, TASK_STATUS } from '@/lib/taskExecution.js';
@@ -192,34 +193,7 @@ export default function CalendarPage() {
   const calendarPreferences = useMemo(() => getCalendarPreferences(), [currentDate, commitmentsVersion, tasks.length]);
 
   const calendarItems = useMemo(() => {
-    const taskItems = tasks
-      .filter((task) => isTaskOpenStatus(task.status) && toIsoDate(task.scheduledDate || task.dataSugeridaExecucao))
-      .map((task) => ({
-        id: `task-${task.id}`,
-        title: task.title,
-        projectId: task.project || 'Pessoal',
-        type: 'task',
-        date: toIsoDate(task.scheduledDate || task.dataSugeridaExecucao),
-        period: task.scheduledPeriod || task.periodoSugerido || 'manhã',
-        estimatedMinutes: Number(task.timeEstimate || 30),
-        status: task.status || 'Pendente',
-        sourceId: task.id,
-        sourceType: 'task'
-      }));
-
-    const dueItems = tasks
-      .filter((task) => isTaskOpenStatus(task.status) && toIsoDate(task.dueDate || task.dataLimite))
-      .map((task) => ({
-        id: `due-${task.id}`,
-        title: `Prazo: ${task.title}`,
-        projectId: task.project || 'Pessoal',
-        type: 'prazo',
-        date: toIsoDate(task.dueDate || task.dataLimite),
-        estimatedMinutes: 0,
-        status: task.status || 'Pendente',
-        sourceId: task.id,
-        sourceType: 'task_due'
-      }));
+    const { taskItems, dueItems, routineItems, focusItems } = buildTaskCalendarItems(tasks, focusSessions);
 
     const followupItems = followups
       .filter((item) => toIsoDate(item.nextFollowUpDate || item.reminderDate))
@@ -234,40 +208,6 @@ export default function CalendarPage() {
         status: item.status || 'Aguardando retorno',
         sourceId: item.id,
         sourceType: 'waiting_return'
-      }));
-
-    const routineItems = tasks
-      .filter((task) => isTaskOpenStatus(task.status) && ['Semanal', 'Mensal'].includes(task.recurrenceFrequency))
-      .map((task) => ({
-        id: `routine-${task.id}`,
-        title: `Rotina: ${task.title}`,
-        projectId: task.project || 'Pessoal',
-        type: 'rotina',
-        date: toIsoDate(task.scheduledDate || task.dataSugeridaExecucao),
-        period: task.scheduledPeriod || 'manhã',
-        estimatedMinutes: Number(task.timeEstimate || 30),
-        status: task.status || 'Ativa',
-        sourceId: task.id,
-        sourceType: 'task_routine'
-      }))
-      .filter((item) => item.date);
-
-    const focoItems = focusSessions
-      .filter((session) => toIsoDate(session.startedAt))
-      .map((session) => ({
-        id: `focus-${session.id}`,
-        title: session.title || 'Bloco de foco',
-        projectId: session.projectId || 'Pessoal',
-        type: 'foco',
-        date: toIsoDate(session.startedAt),
-        startTime: session.startedAt ? new Date(session.startedAt).toTimeString().slice(0, 5) : '',
-        endTime: session.endedAt ? new Date(session.endedAt).toTimeString().slice(0, 5) : '',
-        period: periodFromTime(session.startedAt ? new Date(session.startedAt).toTimeString().slice(0, 5) : ''),
-        estimatedMinutes: Number(session.durationMinutes || 0),
-        status: session.endedAt ? 'Concluído' : 'Planejado',
-        sourceId: session.id,
-        taskId: session.taskId || '',
-        sourceType: 'work_session'
       }));
 
     const commitmentItems = commitments.map((item) => ({
@@ -293,7 +233,7 @@ export default function CalendarPage() {
       ...dueItems,
       ...followupItems,
       ...routineItems,
-      ...focoItems,
+      ...focusItems,
       ...commitmentItems
     ].sort((a, b) => {
       const aTs = new Date(`${a.date}T${a.startTime || '12:00'}:00`).getTime();

@@ -1,3 +1,5 @@
+import { parseLocalDate } from './localDate.js';
+
 const WEEKDAY_NAMES = ['domingo', 'segunda-feira', 'terça-feira', 'quarta-feira', 'quinta-feira', 'sexta-feira', 'sábado'];
 
 function cloneDate(date) {
@@ -14,9 +16,7 @@ function toIsoDate(date) {
 
 function parseIsoDate(value) {
   if (!value) return null;
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return null;
-  return startOfDay(parsed);
+  return parseLocalDate(value);
 }
 
 function stripAccents(value = '') {
@@ -85,6 +85,10 @@ function buildScheduledLabel(now, scheduledDate, scheduledPeriod) {
     if (scheduledPeriod === 'noite') return 'Amanhã à noite';
     if (scheduledPeriod === 'tarde') return 'Amanhã à tarde';
     return 'Amanhã de manhã';
+  }
+
+  if (diffDays < 0) {
+    return `Atrasada · ${targetDay.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}`;
   }
 
   if (diffDays > 1 && diffDays <= 3) {
@@ -333,21 +337,18 @@ export function suggestExecutionDate(task, currentDate = new Date(), checkIn = n
 
 export function getScheduledLabelForTask(task, now = new Date()) {
   const referenceNow = now instanceof Date ? now : new Date(now);
-  let scheduledDate = parseIsoDate(task?.scheduledDate || task?.dataSugeridaExecucao || task?.dueDate || task?.dataLimite);
+  const taskDate = task?.scheduledDate || task?.dataSugeridaExecucao;
 
-  if (!scheduledDate) {
+  if (!taskDate) {
     return task?.scheduledLabel || 'Esta semana';
   }
 
-  const flags = inferFlags({
-    taskText: task?.title || task?.description || '',
-    taskType: task?.taskType || task?.type || '',
-    project: task?.project || ''
-  });
+  return formatTaskScheduleLabel(taskDate, task?.scheduledPeriod || task?.periodoSugerido, referenceNow);
+}
 
-  scheduledDate = ensureNotPastDate(scheduledDate, referenceNow, flags.isBusinessHoursOnly);
-  scheduledDate = enforceBusinessDayIfNeeded(scheduledDate, flags.isBusinessHoursOnly || flags.isClientTask);
-
-  const period = normalizePeriod(task?.scheduledPeriod || task?.periodoSugerido || 'tarde');
-  return buildScheduledLabel(referenceNow, scheduledDate, period);
+export function formatTaskScheduleLabel(taskDate, executionPeriod, currentDate = new Date()) {
+  const targetDate = parseIsoDate(taskDate);
+  const referenceDate = currentDate instanceof Date ? currentDate : parseIsoDate(currentDate);
+  if (!targetDate || !referenceDate) return '';
+  return buildScheduledLabel(referenceDate, targetDate, normalizePeriod(executionPeriod || 'tarde'));
 }

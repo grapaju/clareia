@@ -9,7 +9,6 @@ import { autoSuggestAll } from '@/lib/autoSuggestions';
 import { generateMicrotasks } from '@/lib/microtaskRules';
 import MicrotaskEditor from './MicrotaskEditor.jsx';
 import { normalizeMicrotasks } from '@/lib/taskExecution.js';
-import { toLocalIsoDate } from '@/lib/localDate.js';
 import { validateTaskInput } from '@/lib/taskInput.js';
 import ProjectSelect from '@/components/ProjectSelect.jsx';
 
@@ -24,7 +23,7 @@ function suggestedPeriod() {
 }
 
 function initialData(task = {}) {
-  const scheduledDate = task.scheduledDate || task.dataSugeridaExecucao || toLocalIsoDate(new Date());
+  const scheduledDate = task.scheduledDate || task.dataSugeridaExecucao || '';
   return {
     ...task,
     title: task.title || '',
@@ -45,12 +44,14 @@ function initialData(task = {}) {
   };
 }
 
-export default function TaskModal({ task, onSubmit, onCancel }) {
+export default function TaskModal({ task, projectContext = null, onSubmit, onCancel }) {
   const [formData, setFormData] = useState(() => initialData(task));
+  const [selectedProjectProfile, setSelectedProjectProfile] = useState(projectContext);
   const [errors, setErrors] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => setFormData(initialData(task)), [task]);
+  useEffect(() => setSelectedProjectProfile(projectContext), [projectContext]);
 
   const handleChange = (field, value) => {
     setFormData((current) => ({ ...current, [field]: value }));
@@ -59,16 +60,28 @@ export default function TaskModal({ task, onSubmit, onCancel }) {
 
   const handleSuggest = () => {
     if (!formData.title.trim()) return;
-    const suggestions = autoSuggestAll(formData.title, formData.dueDate);
+    const context = {
+      description: formData.description,
+      projectName: formData.project,
+      projectProfile: selectedProjectProfile,
+    };
+    const suggestions = autoSuggestAll(formData.title, formData.dueDate, context);
     setFormData((current) => ({
       ...current,
-      taskType: current.taskType || suggestions.taskType,
+      taskType: suggestions.taskType,
       project: current.project || suggestions.project,
-      timeEstimate: current.timeEstimate || String(suggestions.timeEstimate || 30),
-      nextAction: current.nextAction || suggestions.nextAction,
+      timeEstimate: String(suggestions.timeEstimate || 30),
+      energiaNecessaria: suggestions.energy || current.energiaNecessaria,
+      nextAction: suggestions.nextAction,
+      generationSource: suggestions.generationSource,
+      semanticDomain: suggestions.semanticDomain,
+      expectedOutcome: suggestions.expectedOutcome,
       microtarefas: current.microtarefas.length
         ? current.microtarefas
-        : generateMicrotasks(suggestions.taskType, current.title, suggestions.timeEstimate || 30),
+        : generateMicrotasks(suggestions.taskType, current.title, suggestions.timeEstimate || 30, {
+          ...context,
+          description: current.description,
+        }),
     }));
   };
 
@@ -86,6 +99,7 @@ export default function TaskModal({ task, onSubmit, onCancel }) {
         ...formData,
         scheduledDate: formData.dataSugeridaExecucao,
         scheduledPeriod: formData.periodoSugerido,
+        manualSchedule: Boolean(formData.dataSugeridaExecucao),
         timeEstimate: Number.parseInt(formData.timeEstimate, 10) || 30,
       });
     } finally {
@@ -110,7 +124,13 @@ export default function TaskModal({ task, onSubmit, onCancel }) {
 
       <div className="space-y-2">
         <Label htmlFor="task-project">Projeto <span className="text-muted-foreground">(opcional)</span></Label>
-        <ProjectSelect value={formData.project} onChange={(value) => handleChange('project', value)} />
+        <ProjectSelect
+          value={formData.project}
+          onChange={(value, profile) => {
+            handleChange('project', value);
+            setSelectedProjectProfile(profile);
+          }}
+        />
       </div>
 
       <div className="space-y-2">

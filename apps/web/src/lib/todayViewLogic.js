@@ -11,7 +11,7 @@ export const TODAY_GROUPS = Object.freeze([
 ]);
 
 function taskDate(task) {
-  return toIsoDate(task?.scheduledDate || task?.dataSugeridaExecucao || task?.dueDate || task?.dataLimite);
+  return toIsoDate(task?.scheduledDate || task?.dataSugeridaExecucao);
 }
 
 function isRoutine(task) {

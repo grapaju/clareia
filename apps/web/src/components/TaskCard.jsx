@@ -67,7 +67,7 @@ export default function TaskCard({ task, minimal }) {
     navigate('/foco');
   };
 
-  const whenToExecute = task.whenToExecute || getScheduledLabelForTask(task, new Date());
+  const whenToExecute = getScheduledLabelForTask(task, new Date());
   const firstAction = getTaskNextActionPresentation(task).action;
 
   const handleArchive = async () => {

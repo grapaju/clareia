@@ -18,3 +18,17 @@ test('carga planejada ignora tarefas concluidas e tempo realizado', () => {
 
   assert.equal(plannedMinutes, 45);
 });
+
+test('carga planejada ignora tarefas excluidas e arquivadas', () => {
+  const dateIso = '2026-09-12';
+  const plannedMinutes = plannedMinutesForDate({
+    dateIso,
+    tasks: [
+      { status: 'pendente', scheduledDate: dateIso, timeEstimate: 45 },
+      { status: 'pendente', scheduledDate: dateIso, timeEstimate: 90, deletedAt: '2026-09-12T10:00:00Z' },
+      { status: 'arquivada', scheduledDate: dateIso, timeEstimate: 120 },
+    ],
+  });
+
+  assert.equal(plannedMinutes, 45);
+});

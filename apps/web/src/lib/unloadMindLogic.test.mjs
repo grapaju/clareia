@@ -47,3 +47,18 @@ test('preferências limitam passos existentes e definem bloco confortável', () 
   assert.equal(task.scheduledPeriod, 'Noite');
   assert.equal(adapted.meta.preferencesApplied.microtaskDetail, 'poucos');
 });
+
+test('perfil do projeto influencia a geração sem substituir o objeto da tarefa', () => {
+  const plan = parseUnloadMindToPlan('IDTPR - revisar layout mobile', {
+    projects: [
+      { name: 'IDTPR', projectType: 'Site', summary: 'WordPress, Elementor, eventos e manutenção' },
+    ],
+  });
+  const task = [...plan.maxima, ...plan.alta, ...plan.media, ...plan.podeEsperar, ...plan.acompanharDepois][0];
+  const steps = task.microtarefas.map((item) => item.descricao);
+
+  assert.equal(task.project, 'IDTPR');
+  assert.equal(task.firstStep, 'Abrir a página em largura mobile');
+  assert.ok(steps.some((step) => /Elementor.*CSS/i.test(step)));
+  assert.ok(steps.every((step) => !/material relacionado|critério de aprovação/i.test(step)));
+});

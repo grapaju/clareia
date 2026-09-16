@@ -5,12 +5,30 @@ import { requireAuth } from '../middleware/auth.js';
 
 const router = Router();
 
+const OPERATIONAL_TASK_SQL = `
+  COALESCE(data->>'deletedAt', '') = ''
+  AND COALESCE(data->>'deleted_at', '') = ''
+  AND lower(COALESCE(data->>'isDeleted', 'false')) NOT IN ('true', '1', 'yes')
+  AND lower(COALESCE(data->>'status', '')) NOT IN ('excluida', 'excluída', 'deleted')
+`;
+
 function normalizeText(value) {
   return String(value || '').trim();
 }
 
+function normalizeTaskDates(data = {}, changedData = data) {
+  const hasChanged = (field) => Object.prototype.hasOwnProperty.call(changedData || {}, field);
+  const dueDate = hasChanged('dueDate')
+    ? changedData.dueDate
+    : hasChanged('dataLimite') ? changedData.dataLimite : data.dueDate ?? data.dataLimite ?? '';
+  const scheduledDate = hasChanged('scheduledDate')
+    ? changedData.scheduledDate
+    : hasChanged('dataSugeridaExecucao') ? changedData.dataSugeridaExecucao : data.scheduledDate ?? data.dataSugeridaExecucao ?? '';
+  return { ...data, dueDate, scheduledDate };
+}
+
 function buildTaskRecord(row) {
-  const data = row.data || {};
+  const data = normalizeTaskDates(row.data || {});
   return {
     ...data,
     id: row.id,
@@ -28,6 +46,7 @@ router.get('/', async (req, res) => {
     `SELECT id, user_id, account_id, data, created_at, updated_at
      FROM tasks
      WHERE user_id = $1
+       AND ${OPERATIONAL_TASK_SQL}
      ORDER BY created_at DESC`,
     [req.userId]
   );
@@ -38,7 +57,7 @@ router.get('/', async (req, res) => {
 router.post('/', async (req, res) => {
   const id = `task-${Date.now()}-${randomUUID().slice(0, 8)}`;
   const accountId = normalizeText(req.authUser?.accountId);
-  const payload = { ...(req.body || {}), id, userId: req.userId, accountId };
+  const payload = normalizeTaskDates({ ...(req.body || {}), id, userId: req.userId, accountId });
 
   const created = await runQuery(
     `INSERT INTO tasks (id, user_id, account_id, data)
@@ -177,13 +196,13 @@ router.patch('/:id', async (req, res) => {
     return res.status(404).json({ message: 'Tarefa nao encontrada.' });
   }
 
-  const mergedData = {
+  const mergedData = normalizeTaskDates({
     ...(existing.data || {}),
     ...(req.body || {}),
     id: existing.id,
     userId: req.userId,
     accountId: normalizeText(req.authUser?.accountId),
-  };
+  }, req.body || {});
 
   const nextAccountId = normalizeText(req.authUser?.accountId);
 

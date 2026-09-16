@@ -37,8 +37,8 @@ export default function ProjectSelect({ value = '', onChange, disabled = false }
     loadProjects();
   }, []);
 
-  const selectProject = (projectName) => {
-    onChange(projectName);
+  const selectProject = (projectName, project = null) => {
+    onChange(projectName, project || projects.find((item) => item.name === projectName) || null);
     setOpen(false);
     setCreating(false);
     setError('');
@@ -46,6 +46,7 @@ export default function ProjectSelect({ value = '', onChange, disabled = false }
 
   const selectPersonal = async () => {
     const existing = projects.find((project) => project.name.toLocaleLowerCase('pt-BR') === 'pessoal');
+    let personalProfile = existing;
     if (!existing) {
       try {
         const created = await createProjectProfileApi({
@@ -53,6 +54,7 @@ export default function ProjectSelect({ value = '', onChange, disabled = false }
           summary: 'Projeto pessoal padrão do Clareia.',
           projectType: 'Pessoal',
         });
+        personalProfile = created;
         setProjects((current) => [...current, created]);
       } catch (requestError) {
         if (requestError?.status !== 409) {
@@ -61,7 +63,7 @@ export default function ProjectSelect({ value = '', onChange, disabled = false }
         }
       }
     }
-    selectProject('Pessoal');
+    selectProject('Pessoal', personalProfile);
   };
 
   const createProject = async () => {
@@ -73,7 +75,7 @@ export default function ProjectSelect({ value = '', onChange, disabled = false }
       const created = await createProjectProfileApi({ name, projectType: 'Administrativo' });
       setProjects((current) => [...current, created]);
       setNewProjectName('');
-      selectProject(created.name);
+      selectProject(created.name, created);
     } catch (requestError) {
       setError(requestError?.status === 409
         ? 'Já existe um projeto com esse nome. Selecione-o na lista.'

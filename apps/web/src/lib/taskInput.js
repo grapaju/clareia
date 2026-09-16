@@ -1,5 +1,3 @@
-import { toLocalIsoDate } from './localDate.js';
-
 export const TASK_INPUT_DEFAULTS = Object.freeze({
   project: '',
   taskType: 'Pessoal',
@@ -39,7 +37,7 @@ export function normalizeTaskInput(input, options = {}) {
   }
 
   const now = options.now || new Date();
-  const scheduledDate = input.scheduledDate || input.dataSugeridaExecucao || toLocalIsoDate(now);
+  const scheduledDate = input.scheduledDate || input.dataSugeridaExecucao || '';
   const timeEstimate = Number.parseInt(input.timeEstimate ?? input.estimatedTime, 10);
 
   return {

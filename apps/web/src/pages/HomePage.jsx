@@ -28,9 +28,11 @@ import { useAuth } from '@/contexts/AuthContext.jsx';
 import { useTheme } from '@/contexts/ThemeContext.jsx';
 import { useProfessionalJourney } from '@/contexts/ProfessionalJourneyContext.jsx';
 import { reorganizeTasksByEnergy } from '@/lib/energyLogic.js';
-import { buildTodayGroups, getTaskNextActionPresentation, getTodayHighlight, getTodayPresentation, getVisibleTodayTasks } from '@/lib/todayViewLogic.js';
+import { buildTodayGroups, getTaskNextActionPresentation, getTodayHighlight, getTodayPresentation } from '@/lib/todayViewLogic.js';
 import { isTaskActionableStatus, normalizeTaskStatus, TASK_STATUS } from '@/lib/taskExecution.js';
 import { formatDurationFriendly, getCheckInAvailableMinutes } from '@/lib/reportFormatting.js';
+import { selectTasksWithinDailyCapacity } from '@/lib/planningEngine.js';
+import { toIsoDate } from '@/lib/localDate.js';
 import { UI_COPY } from '@/lib/uiCopy.js';
 import { getActiveWorkSession } from '@/services/workSessionService.js';
 import { readUserPreferences } from '@/services/userPreferencesService.js';
@@ -93,7 +95,12 @@ export default function HomePage() {
   }, [lowStimulationMode]);
 
   const canonical = useMemo(() => buildTodayGroups(tasks), [tasks]);
-  const visibleTodayTasks = useMemo(() => getVisibleTodayTasks(canonical.groups), [canonical.groups]);
+  const declaredAvailableMinutes = getCheckInAvailableMinutes(checkIn?.tempo || '2h');
+  const dailyPlan = useMemo(() => selectTasksWithinDailyCapacity(
+    [...canonical.groups.overdue, ...canonical.groups.today],
+    { availableMinutes: declaredAvailableMinutes },
+  ), [canonical.groups.overdue, canonical.groups.today, declaredAvailableMinutes]);
+  const visibleTodayTasks = dailyPlan.tasks;
   const visibleTaskIds = useMemo(() => new Set(visibleTodayTasks.map((task) => task.id)), [visibleTodayTasks]);
   const { recommended: rankedRecommendation, agora = [] } = reorganizeTasksByEnergy(tasks, checkIn);
   const recommendationCandidates = useMemo(() => {
@@ -104,7 +111,7 @@ export default function HomePage() {
   }, [rankedRecommendation, agora, visibleTaskIds, visibleTodayTasks]);
   const recommended = useMemo(() => recommendationCandidates.find((task) => task.id === selectedRecommendationId) || recommendationCandidates.find((task) => !skippedSuggestionIds.includes(task.id)) || null, [recommendationCandidates, selectedRecommendationId, skippedSuggestionIds]);
   const activeSession = getActiveWorkSession();
-  const highlightCandidates = useMemo(() => tasks.filter((task) => !dismissedHighlightIds.includes(task.id)), [dismissedHighlightIds, tasks]);
+  const highlightCandidates = useMemo(() => visibleTodayTasks.filter((task) => !dismissedHighlightIds.includes(task.id)), [dismissedHighlightIds, visibleTodayTasks]);
   const highlight = useMemo(() => getTodayHighlight(highlightCandidates, recommended, activeSession, checkIn), [activeSession?.id, activeSession?.taskId, checkIn, highlightCandidates, recommended]);
   const presentation = useMemo(() => getTodayPresentation(visibleTodayTasks, highlight, lowStimulationMode), [highlight, lowStimulationMode, visibleTodayTasks]);
   const highlightTask = presentation.highlight;
@@ -114,10 +121,16 @@ export default function HomePage() {
   const nextStep = nextActionPresentation?.action || '';
   const lastCompletedStep = highlightProgress?.normalized?.filter((item) => item.completed).at(-1)?.title || '';
   const isResumeHighlight = ['active_session', 'paused', 'started'].includes(highlight.reason);
-  const declaredAvailableMinutes = getCheckInAvailableMinutes(checkIn?.tempo || '2h');
   const showCompactDayPanel = hasTodayCheckIn && !isCheckInEditing;
   const isJourneyRunning = currentJourney?.status === 'active';
   const overdueCount = canonical.groups.overdue.length;
+  const weeklyPlannedCount = useMemo(() => {
+    const end = new Date();
+    end.setDate(end.getDate() + 7);
+    const endIso = toIsoDate(end);
+    return canonical.groups.upcoming.filter((task) => toIsoDate(task.scheduledDate || task.dataSugeridaExecucao) <= endIso).length;
+  }, [canonical.groups.upcoming]);
+  const deadlineRisks = tasks.filter((task) => task.deadlineRisk && isTaskActionableStatus(task.status));
 
   const executeTaskStart = async (task, options = {}) => {
     const updated = normalizeTaskStatus(task.status) === TASK_STATUS.PAUSADA ? await resumeTask(task.id) : await startTask(task.id);
@@ -243,6 +256,12 @@ export default function HomePage() {
                     </aside>
                   )}
                   <div className="min-w-0 lg:order-1">
+                  {(dailyPlan.tasks.length > 0 || deadlineRisks.length > 0) && (
+                    <div className="mb-4 space-y-2" role="status">
+                      {dailyPlan.tasks.length > 0 && <p className="text-sm text-muted-foreground">Planejado para hoje: <span className="font-medium text-foreground">{formatDurationFriendly(dailyPlan.plannedMinutes)}</span></p>}
+                      {deadlineRisks.length > 0 && <p className="rounded-md bg-muted/60 px-4 py-3 text-sm text-foreground">{deadlineRisks[0].deadlineRiskMessage}</p>}
+                    </div>
+                  )}
                   {highlightTask && (
                     <section key={highlightTask.id} className="today-motion-card content-fade-in mb-7 rounded-lg border border-border border-l-4 border-l-primary bg-card p-5 shadow-sm transition-[border-color,box-shadow,transform] duration-300 sm:p-7" aria-labelledby="recommendation-title">
                       <p className="mb-2 text-sm font-semibold text-primary">{isResumeHighlight ? (highlight.reason === 'active_session' ? 'Sessão em andamento' : 'Você parou aqui') : 'Por onde começar'}</p>
@@ -294,6 +313,13 @@ export default function HomePage() {
                         </ul>
                       )}
                     </section>
+                  )}
+
+                  {weeklyPlannedCount > 0 && (
+                    <div className="mb-6 flex flex-wrap items-center justify-between gap-3 border-y border-border py-3">
+                      <p className="text-sm text-muted-foreground">Mais {weeklyPlannedCount} {weeklyPlannedCount === 1 ? 'tarefa já distribuída' : 'tarefas já distribuídas'} para esta semana.</p>
+                      <Button size="sm" variant="ghost" onClick={() => navigate('/calendario')}>Ver planejamento</Button>
+                    </div>
                   )}
 
                   {canonical.completedToday.length > 0 && (

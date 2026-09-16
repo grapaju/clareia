@@ -245,7 +245,7 @@ export default function TaskDetailsModal({ task, isOpen, onClose }) {
                   <Badge variant="outline">{task.timeEstimate || 30} min</Badge>
                   <Badge variant="outline">{task.energiaNecessaria || 'Média'} energia</Badge>
                   {task.executionDifficulty && <Badge variant="outline">{task.executionDifficulty}</Badge>}
-                  <Badge variant="outline">{task.whenToExecute || getScheduledLabelForTask(task, new Date())}</Badge>
+                  <Badge variant="outline">{getScheduledLabelForTask(task, new Date())}</Badge>
                 </div>
               </div>
 
