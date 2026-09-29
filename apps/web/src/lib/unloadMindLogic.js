@@ -100,6 +100,19 @@ function normalizeForSignature(value) {
     .trim();
 }
 
+const TECHNICAL_SOURCE_SIGNATURES = new Set([
+  'plano clareado',
+  'mind dump',
+  'system',
+  'internal',
+  'texto colado',
+]);
+
+export function isTechnicalInternalSource(value) {
+  const signature = normalizeForSignature(String(value || ''));
+  return signature ? TECHNICAL_SOURCE_SIGNATURES.has(signature) : false;
+}
+
 function detectAction(text) {
   const lower = text.toLowerCase();
   const found = ACTION_VERBS.find((verb) => {
@@ -115,9 +128,305 @@ function detectProject(text) {
 }
 
 function detectSource(text) {
-  if (/\bwhats\s*app\b|\bwhatsapp\b/i.test(text)) return 'WhatsApp';
-  if (/\be-?mail\b|\bmensagem de e-?mail\b/i.test(text)) return 'E-mail';
-  return 'Texto colado';
+  const content = String(text || '').trim();
+  if (!content) return null;
+
+  const sourceEvidence = [
+    {
+      source: 'WhatsApp',
+      patterns: [
+        /(?:pediu|solicitou|mandou|enviou|avisou|falou|disse|recebi|veio|chegou)\s+.{0,40}\bwhats\s*app\b/i,
+        /\bwhats\s*app\b\s+.{0,40}(?:pediu|solicitou|mandou|enviou|avisou|disse|falou|recebi|veio|chegou)/i,
+        /\b(?:pelo|via|no)\s+whats\s*app\b/i,
+      ],
+    },
+    {
+      source: 'E-mail',
+      patterns: [
+        /(?:pediu|solicitou|mandou|enviou|avisou|recebi|veio|chegou)\s+.{0,40}\be-?mail\b/i,
+        /\be-?mail\b\s+.{0,40}(?:pediu|solicitou|mandou|enviou|avisou|recebi|veio|chegou)/i,
+        /\b(?:por|via)\s+e-?mail\b/i,
+      ],
+    },
+    {
+      source: 'Reunião',
+      patterns: [
+        /(?:na|em)\s+reuni[aã]o\s+.{0,40}(?:foi|ficou|decidimos|decidiu|alinhou|pedido)/i,
+        /(?:ap[oó]s|depois\s+da)\s+reuni[aã]o/i,
+      ],
+    },
+    {
+      source: 'Telefone',
+      patterns: [
+        /(?:por|via)\s+(?:telefone|liga[cç][aã]o)/i,
+        /(?:ligou|liga[cç][aã]o|telefonou)\s+.{0,40}(?:pediu|solicitou|avisou|confirmou)/i,
+      ],
+    },
+  ];
+
+  const match = sourceEvidence.find((entry) => entry.patterns.some((pattern) => pattern.test(content)));
+  return match?.source || null;
+}
+
+function stripLeadingHistoricalContext(text) {
+  return String(text || '')
+    .replace(/^(?:ap[oó]s|depois\s+d[ae])\s+[^,.;]+,\s*/i, '')
+    .replace(/^com\s+[^,.;]+,\s*/i, '')
+    .trim();
+}
+
+function normalizeListItem(item) {
+  return String(item || '')
+    .replace(/^\s*(?:[-*•]|\d+[.)])\s*/g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[,;:\-\s]+|[,;:\-\s]+$/g, '')
+    .trim();
+}
+
+function splitExplicitChecks(value) {
+  return String(value || '')
+    .split(/\n|;|,/)
+    .flatMap((part) => part.split(/\s+e\s+/i))
+    .map(normalizeListItem)
+    .filter(Boolean);
+}
+
+function parseCheckCandidatesFromCommandMatch(matchValue = '') {
+  const value = String(matchValue || '').trim();
+  if (!value) return [];
+  if (value.includes(':')) {
+    const [, afterColon = ''] = value.split(/:(.+)/);
+    return [afterColon];
+  }
+  return [value];
+}
+
+function extractRequestedChecks(text) {
+  const content = String(text || '');
+  const candidates = [];
+  const commandPattern = /(?:analisar|verificar|conferir|revisar|considerar|comparar|checar|incluir)\s+([^.;\n]+)/gi;
+  let listMatch;
+  while ((listMatch = commandPattern.exec(content)) !== null) {
+    parseCheckCandidatesFromCommandMatch(listMatch[1]).forEach((candidate) => candidates.push(candidate));
+  }
+
+  if (candidates.length === 0) return [];
+
+  const dedup = [];
+  const seen = new Set();
+  candidates.forEach((candidate) => {
+    splitExplicitChecks(candidate).forEach((item) => {
+      const signature = normalizeForSignature(item);
+      if (!signature || seen.has(signature)) return;
+      seen.add(signature);
+      dedup.push(item);
+    });
+  });
+  return dedup;
+}
+
+function looksLikeDuration(value) {
+  return /\b\d+\s*(?:min|minuto|minutos|h|hora|horas)\b|\bmeia hora\b/i.test(String(value || ''));
+}
+
+function looksLikeDateTime(value) {
+  return /\b\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?\b|\bhoje\b|\bamanh[ãa]\b|\bdepois de amanh[ãa]\b|\b(?:às|as)\s*\d{1,2}(?::\d{2})?\b/i.test(String(value || ''));
+}
+
+function hasSemanticOverlap(item, references = []) {
+  const itemSignature = normalizeForSignature(item);
+  if (!itemSignature) return false;
+  return references.some((reference) => {
+    const ref = normalizeForSignature(reference);
+    return ref && (ref.includes(itemSignature) || itemSignature.includes(ref));
+  });
+}
+
+function sanitizeRequestedChecks(checks = [], frame = {}, task = {}, taskType = '') {
+  const scopeText = frame.analysisScopeStartDate ? `desde ${frame.analysisScopeStartDate}` : '';
+  const references = [
+    frame.title,
+    task.project?.name,
+    taskType,
+    ...(frame.completedContext || []),
+    ...((frame.constraintDetails || []).map((item) => item?.text || '')),
+    scopeText,
+  ].filter(Boolean);
+
+  const sanitized = [];
+  const seen = new Set();
+
+  (Array.isArray(checks) ? checks : []).forEach((rawItem) => {
+    const item = normalizeListItem(rawItem);
+    if (!item) return;
+    const signature = normalizeForSignature(item);
+    if (!signature || seen.has(signature)) return;
+
+    const isScopePhrase = /^(?:somente|apenas)?\s*dados?\s+(?:desde|a partir de)\b/i.test(item) || /^(?:desde|a partir de)\b/i.test(item);
+    if (isScopePhrase || looksLikeDuration(item) || looksLikeDateTime(item) || hasSemanticOverlap(item, references)) {
+      return;
+    }
+
+    seen.add(signature);
+    sanitized.push(item);
+  });
+
+  return sanitized;
+}
+
+function extractNegativeConstraints(text) {
+  const content = String(text || '');
+  const constraints = [];
+  const pattern = /(?:\bn[aã]o\b|\bnao\b)\s+([^.;\n]+)/gi;
+  let match;
+  while ((match = pattern.exec(content)) !== null) {
+    const value = normalizeListItem(match[1]);
+    if (!value) continue;
+    constraints.push(`Não ${value}`);
+  }
+  return constraints;
+}
+
+function extractCompletedContext(text) {
+  const content = String(text || '');
+  const contexts = [];
+  const patterns = [
+    /(?:ap[oó]s|depois\s+d[ae])\s+([^,.;\n]+)/gi,
+    /com\s+([^,.;\n]+\s+(?:j[aá]\s+)?(?:corrigid[oa]s?|conclu[ií]d[oa]s?|atualizad[oa]s?|configurad[oa]s?|ajustad[oa]s?))/gi,
+  ];
+
+  patterns.forEach((pattern) => {
+    let match;
+    while ((match = pattern.exec(content)) !== null) {
+      const value = normalizeListItem(match[1]);
+      if (!value) continue;
+      contexts.push(value);
+    }
+  });
+
+  const dedup = [];
+  const seen = new Set();
+  contexts.forEach((item) => {
+    const signature = normalizeForSignature(item);
+    if (!signature || seen.has(signature)) return;
+    seen.add(signature);
+    dedup.push(item);
+  });
+  return dedup;
+}
+
+function extractAnalysisScopeStartDate(text) {
+  const content = String(text || '');
+  const explicitScope = content.match(/(?:somente|apenas)\s+dados?\s+(?:desde|a partir de)\s+(\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?)/i);
+  if (explicitScope) return explicitScope[1].replace('-', '/');
+  const genericScope = content.match(/(?:desde|a partir de)\s+(\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?)/i);
+  return genericScope ? genericScope[1].replace('-', '/') : '';
+}
+
+function buildConstraintDetails(constraints = [], scopeStartDate = '') {
+  const details = [];
+  (Array.isArray(constraints) ? constraints : []).forEach((constraint) => {
+    const text = normalizeListItem(constraint);
+    if (!text) return;
+    details.push({
+      text,
+      type: /^(?:n[aã]o|não)\b/i.test(text) ? 'do_not' : 'context',
+    });
+  });
+
+  if (scopeStartDate) {
+    details.push({ text: `Usar somente dados desde ${scopeStartDate}`, type: 'scope' });
+  }
+
+  const dedup = [];
+  const seen = new Set();
+  details.forEach((item) => {
+    const signature = `${item.type}:${normalizeForSignature(item.text)}`;
+    if (!signature || seen.has(signature)) return;
+    seen.add(signature);
+    dedup.push(item);
+  });
+  return dedup;
+}
+
+function buildSemanticFrame(task = {}, rawText = '') {
+  const title = stripLeadingHistoricalContext(task.title || '');
+  const combinedText = [title || task.title, task.notes, rawText].filter(Boolean).join('. ');
+  const analysisScopeStartDate = extractAnalysisScopeStartDate(combinedText);
+  const completedContext = extractCompletedContext(combinedText);
+  const inferredNegativeConstraints = extractNegativeConstraints(combinedText);
+  const mergedConstraints = [...(task.constraints || []), ...inferredNegativeConstraints];
+  const constraintDetails = buildConstraintDetails(mergedConstraints, analysisScopeStartDate);
+  const taskType = detectType(title || task.title || '', detectAction(title || task.title || ''));
+  const requestedChecks = sanitizeRequestedChecks(extractRequestedChecks(combinedText), {
+    title: title || task.title,
+    analysisScopeStartDate,
+    completedContext,
+    constraintDetails,
+  }, task, taskType);
+
+  return {
+    title: title || task.title,
+    requestedChecks,
+    analysisScopeStartDate,
+    completedContext,
+    constraintDetails,
+  };
+}
+
+function summarizeConstraintText(constraintDetails = []) {
+  return constraintDetails
+    .map((item) => normalizeListItem(item?.text))
+    .filter(Boolean);
+}
+
+function addStepIfMissing(steps, stepText) {
+  const text = normalizeListItem(stepText);
+  if (!text) return;
+  const signature = normalizeForSignature(text);
+  if (!steps.some((step) => normalizeForSignature(step) === signature)) {
+    steps.push(text);
+  }
+}
+
+function generateStepsFromRequirements(frame = {}, taskType = '', fallbackTitle = '') {
+  if (!Array.isArray(frame.requestedChecks) || frame.requestedChecks.length === 0) return [];
+
+  const steps = [];
+  const targetText = `${taskType} ${fallbackTitle}`;
+  const hasAdsContext = /google ads|campanha|pmax|grupo de recursos/i.test(targetText);
+
+  if (frame.analysisScopeStartDate) {
+    addStepIfMissing(
+      steps,
+      hasAdsContext
+        ? `Abrir o Google Ads e selecionar o período a partir de ${frame.analysisScopeStartDate}`
+        : `Selecionar o período de análise a partir de ${frame.analysisScopeStartDate}`,
+    );
+  }
+
+  frame.requestedChecks.forEach((check) => {
+    const item = normalizeListItem(check);
+    if (!item) return;
+    const verb = /^(analisar|verificar|conferir|comparar|checar|avaliar)\b/i.test(item)
+      ? ''
+      : /custo|taxa|m[ée]trica|concentra[cç][aã]o|desempenho|distribui[cç][aã]o|dados/i.test(item)
+        ? 'Analisar '
+        : 'Conferir ';
+    addStepIfMissing(steps, `${verb}${item}`);
+  });
+
+  const hasDoNotConstraint = (frame.constraintDetails || []).some((item) => item.type === 'do_not');
+  if (hasDoNotConstraint) {
+    addStepIfMissing(steps, 'Registrar a conclusão antes de decidir qualquer nova alteração');
+  }
+
+  const uncovered = frame.requestedChecks.filter((requirement) => {
+    const req = normalizeForSignature(requirement);
+    return req && !steps.some((step) => normalizeForSignature(step).includes(req) || req.includes(normalizeForSignature(step)));
+  });
+  uncovered.forEach((item) => addStepIfMissing(steps, `Conferir ${item}`));
+  return steps;
 }
 
 function hasExplicitContextProjectReference(text) {
@@ -838,34 +1147,47 @@ export function normalizeTaskTypeForTaskCollection(taskType) {
 }
 
 function canonicalTaskToLegacy(task, context = {}, rawText = '') {
+  const semanticFrame = buildSemanticFrame(task, rawText);
+  const normalizedConstraintTexts = summarizeConstraintText(semanticFrame.constraintDetails);
   const projectName = task.project?.name || '';
-  const fallbackProject = inferProjectByRules(task.title, '', null).project;
+  const fallbackProject = inferProjectByRules(semanticFrame.title || task.title, '', null).project;
   const project = projectName || fallbackProject;
   const projectProfile = findProjectProfile(project, context);
   const breakdown = generateTaskBreakdown({
-    title: task.title,
+    title: semanticFrame.title || task.title,
     description: task.notes,
-    originalText: task.title,
+    originalText: semanticFrame.title || task.title,
   }, { projectName: project, projectProfile });
-  const action = detectAction(task.title);
-  const taskType = ['debugging', 'technical', 'backend', 'integration'].includes(breakdown.suggestedDomain)
+  const action = detectAction(semanticFrame.title || task.title);
+  const detectedTaskType = ['debugging', 'technical', 'backend', 'integration'].includes(breakdown.suggestedDomain)
     ? 'sistema/CRM'
-    : detectType(task.title, action);
-  const estimatedMinutes = task.durationMinutes || estimateMinutes(taskType, task.title);
+    : detectType(semanticFrame.title || task.title, action);
+  const taskType = /google ads/i.test(semanticFrame.title || '') && detectedTaskType === 'acompanhamento'
+    ? 'Google Ads'
+    : detectedTaskType;
+  const estimatedMinutes = task.durationMinutes || estimateMinutes(taskType, semanticFrame.title || task.title);
   const { priority, priorityGroup, priorityReason } = task.priority
-    ? { priority: task.priority, priorityGroup: classifyPriority(task.title, taskType).priorityGroup, priorityReason: 'Prioridade informada pelo usuário.' }
-    : classifyPriority(task.title, taskType);
+    ? { priority: task.priority, priorityGroup: classifyPriority(semanticFrame.title || task.title, taskType).priorityGroup, priorityReason: 'Prioridade informada pelo usuário.' }
+    : classifyPriority(semanticFrame.title || task.title, taskType);
   const explicitSteps = task.microtasks?.filter((item) => item.source === 'explicit') || [];
+  const requirementSteps = explicitSteps.length
+    ? []
+    : generateStepsFromRequirements(semanticFrame, taskType, semanticFrame.title || task.title);
   const generatedSteps = breakdown.generationSource === 'fallback'
-    ? generateTypedSubtasks(taskType, task.title)
+    ? generateTypedSubtasks(taskType, semanticFrame.title || task.title)
     : breakdown.steps;
-  const stepTitles = explicitSteps.length ? explicitSteps.map((item) => item.text) : generatedSteps;
+  const stepTitles = explicitSteps.length
+    ? explicitSteps.map((item) => item.text)
+    : (requirementSteps.length ? requirementSteps : generatedSteps);
+  const stepSource = explicitSteps.length || requirementSteps.length
+    ? 'explicit'
+    : 'suggested';
   const subtasks = createSubtasks(stepTitles, estimatedMinutes).map((subtask) => ({
     ...subtask,
-    source: explicitSteps.length ? 'explicit' : 'suggested',
+    source: stepSource,
   }));
   const inferredSchedule = suggestTaskSchedule({
-    taskText: task.title,
+    taskText: semanticFrame.title || task.title,
     taskType,
     project,
     estimatedMinutes,
@@ -875,9 +1197,10 @@ function canonicalTaskToLegacy(task, context = {}, rawText = '') {
   });
 
   return {
-    title: task.title,
+    title: semanticFrame.title || task.title,
     originalText: rawText || task.title,
     sourceType: detectSource(rawText || task.title),
+    internalSource: 'mind-dump',
     project,
     projectStatus: task.project?.status || (project ? 'undecided' : 'none'),
     projectConfidence: task.project?.confidence,
@@ -906,13 +1229,23 @@ function canonicalTaskToLegacy(task, context = {}, rawText = '') {
     isClientTask: inferredSchedule.isClientTask,
     suggestedExecutionDate: task.date || '',
     suggestedPeriod: task.time ? '' : inferredSchedule.scheduledPeriod,
-    firstStep: subtasks[0]?.title || task.title,
+    firstStep: subtasks[0]?.title || semanticFrame.title || task.title,
     subtasks,
-    notes: task.notes || '',
-    constraints: task.constraints || [],
-    generationSource: explicitSteps.length ? 'explicit' : breakdown.generationSource,
+    notes: [
+      task.notes,
+      ...(semanticFrame.completedContext.length
+        ? [`Contexto já concluído: ${semanticFrame.completedContext.join('; ')}`]
+        : []),
+    ].filter(Boolean).join('\n\n'),
+    constraints: normalizedConstraintTexts,
+    constraintDetails: semanticFrame.constraintDetails,
+    analysisItems: semanticFrame.requestedChecks,
+    semanticContext: semanticFrame.completedContext,
+    generationSource: explicitSteps.length
+      ? 'explicit'
+      : (requirementSteps.length ? 'explicit_requirements' : breakdown.generationSource),
     semanticDomain: breakdown.suggestedDomain,
-    generationConfidence: breakdown.confidence,
+    generationConfidence: requirementSteps.length ? Math.max(0.8, breakdown.confidence) : breakdown.confidence,
     warning: null,
     dependencyLabel: null,
   };
@@ -981,6 +1314,7 @@ export function parseBrainDumpToTasks(inputText, context = {}) {
       title: entry.forcedTitle || toDisplayTitle(rawChunk),
       originalText: rawChunk,
       sourceType: detectSource(rawChunk),
+      internalSource: 'mind-dump',
       project: inferredProject || '',
       type: taskType,
       objective: breakdown.expectedOutcome,
@@ -1072,6 +1406,7 @@ export function parseUnloadMindToPlan(rawText, context = {}) {
       title: task.title,
       originalText: task.originalText || task.title,
       sourceType: task.sourceType || detectSource(rawText),
+      internalSource: task.internalSource || 'mind-dump',
       taskType: task.type,
       project: task.project,
       projectStatus: task.projectStatus || (task.project ? 'undecided' : 'none'),
@@ -1100,6 +1435,9 @@ export function parseUnloadMindToPlan(rawText, context = {}) {
       description: task.notes || '',
       notes: task.notes || '',
       constraints: task.constraints || [],
+      constraintDetails: task.constraintDetails || [],
+      analysisItems: task.analysisItems || [],
+      semanticContext: task.semanticContext || [],
       observacoes: [task.notes, ...(task.constraints || [])].filter(Boolean).join('\n') || task.warning || task.dependencyLabel || 'Gerado automaticamente do seu descarregamento.',
       priorityGroup,
       priority: task.priority,

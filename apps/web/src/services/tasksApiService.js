@@ -34,6 +34,7 @@ export async function completeTaskInApi(id, payload = {}) {
     alreadyCompleted: result?.alreadyCompleted === true,
     session: result?.session || null,
     alreadyRecorded: result?.alreadyRecorded === true,
+    taskSession: result?.taskSession || null,
   };
 }
 
@@ -70,3 +71,23 @@ export async function createFocusSessionInApi(taskId, payload) {
   });
   return result?.item || null;
 }
+
+export async function getCurrentTaskSessionFromApi() {
+  const result = await integratedAiClient.fetch('/tasks/session/current', { method: 'GET' });
+  return result?.session || null;
+}
+
+async function postTaskSessionTransition(action, payload = {}) {
+  const result = await integratedAiClient.fetch(`/tasks/session/${action}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return result || { session: null };
+}
+
+export const startTaskSessionInApi = (payload) => postTaskSessionTransition('start', payload);
+export const pauseTaskSessionInApi = () => postTaskSessionTransition('pause');
+export const resumeTaskSessionInApi = () => postTaskSessionTransition('resume');
+export const finishTaskSessionInApi = () => postTaskSessionTransition('finish');
+export const startNextTaskBlockInApi = (payload) => postTaskSessionTransition('next-block', payload);

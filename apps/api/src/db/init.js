@@ -22,6 +22,10 @@ CREATE TABLE IF NOT EXISTS tasks (
 
 CREATE INDEX IF NOT EXISTS idx_tasks_user_created ON tasks(user_id, created_at DESC);
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_user_desk_note_source
+  ON tasks(user_id, (data->>'sourceDeskNoteId'))
+  WHERE COALESCE(data->>'sourceDeskNoteId', '') <> '';
+
 CREATE TABLE IF NOT EXISTS task_notes (
   id TEXT PRIMARY KEY,
   task_id TEXT NOT NULL,
@@ -44,6 +48,35 @@ CREATE TABLE IF NOT EXISTS focus_sessions (
 
 CREATE INDEX IF NOT EXISTS idx_focus_sessions_task_user ON focus_sessions(task_id, user_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS active_task_sessions (
+  user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  session_id TEXT UNIQUE NOT NULL,
+  task_id TEXT NOT NULL,
+  account_id TEXT DEFAULT '',
+  state TEXT NOT NULL CHECK (state IN ('running', 'paused')),
+  accumulated_seconds BIGINT NOT NULL DEFAULT 0 CHECK (accumulated_seconds >= 0),
+  running_since TIMESTAMPTZ,
+  block_started_at TIMESTAMPTZ,
+  block_accumulated_seconds BIGINT NOT NULL DEFAULT 0 CHECK (block_accumulated_seconds >= 0),
+  block_running_since TIMESTAMPTZ,
+  block_duration_seconds INTEGER NOT NULL DEFAULT 1200 CHECK (block_duration_seconds > 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE active_task_sessions
+  ADD COLUMN IF NOT EXISTS block_accumulated_seconds BIGINT NOT NULL DEFAULT 0;
+
+ALTER TABLE active_task_sessions
+  ADD COLUMN IF NOT EXISTS block_running_since TIMESTAMPTZ;
+
+UPDATE active_task_sessions
+SET block_running_since = running_since
+WHERE state = 'running' AND block_running_since IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_active_task_sessions_task_user
+  ON active_task_sessions(task_id, user_id);
+
 CREATE TABLE IF NOT EXISTS app_records (
   id TEXT PRIMARY KEY,
   collection_name TEXT NOT NULL,
@@ -56,6 +89,25 @@ CREATE TABLE IF NOT EXISTS app_records (
 
 CREATE INDEX IF NOT EXISTS idx_app_records_collection_user_created
   ON app_records(collection_name, user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS desk_items (
+  id TEXT PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  item_type TEXT NOT NULL CHECK (item_type IN ('note', 'project', 'shortcut')),
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  revision INTEGER NOT NULL DEFAULT 1,
+  archived_at TIMESTAMPTZ,
+  deleted_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE desk_items
+  ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS idx_desk_items_user_updated
+  ON desk_items(user_id, updated_at DESC)
+  WHERE deleted_at IS NULL AND archived_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS finance_integration_accounts (
   user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,

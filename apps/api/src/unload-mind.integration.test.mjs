@@ -52,7 +52,7 @@ test('Descarregar a mente interpreta, revisa e persiste a tarefa Corcril complet
     body: { name: 'Corcril', projectType: 'Google Ads' },
   })).status, 201);
 
-  const input = `Hoje — 16/09
+  const input = `Data: 16/09/2026
 Tarefa: Corcril — registrar situação atual da campanha Google Ads após correções de mensuração
 Tempo estimado: 20 min
 Descrição/notas: Compra [V4] está como conversão secundária; checkout continua principal; WhatsApp foi corrigido; orçamento R$120/dia e ROAS 23% permanecem sem alteração.

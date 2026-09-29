@@ -927,6 +927,20 @@ export default function ProjectsPage() {
   }, [selectedProject]);
 
   useEffect(() => {
+    const requestedProject = searchParams.get('project');
+    if (!requestedProject || !profiles.some((profile) => profile.name === requestedProject)) return;
+    setSelectedProject(requestedProject);
+  }, [profiles, searchParams]);
+
+  useEffect(() => {
+    const requestedTab = String(searchParams.get('tab') || '').trim().toLowerCase();
+    if (!requestedTab) return;
+    if (['resumo', 'tarefas', 'materiais', 'historico'].includes(requestedTab)) {
+      setActiveTab(requestedTab);
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
     if (!showMaterialsToOrganize) return;
     setActiveTab('materiais');
     if (selectedProject || profiles.length === 0) return;

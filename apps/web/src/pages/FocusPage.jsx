@@ -26,8 +26,8 @@ import {
 } from '@/lib/taskExecution.js';
 import TaskPendingMicrotasksDialog from '@/components/TaskPendingMicrotasksDialog.jsx';
 import TaskPauseDialog from '@/components/TaskPauseDialog.jsx';
-import { getActiveWorkSession } from '@/services/workSessionService.js';
 import { getTaskNextActionPresentation } from '@/lib/todayViewLogic.js';
+import { useTaskSession } from '@/hooks/useTaskSession.js';
 
 export default function FocusPage() {
   const navigate = useNavigate();
@@ -40,18 +40,21 @@ export default function FocusPage() {
     checkIn,
     tasks,
     updateTask,
-    recordFocusSession,
     startTask,
     pauseTask,
     resumeTask
   } = useTaskContext();
+  const {
+    session: taskSession,
+    elapsedSeconds,
+    blockRemainingSeconds,
+    resumeSession,
+    startNextBlock,
+  } = useTaskSession();
   const { lowStimulationMode } = useTheme();
   
   const [phase, setPhase] = useState(selectedTask ? 'setup' : 'none');
   const [objective, setObjective] = useState('');
-  const [timeRemaining, setTimeRemaining] = useState(0);
-  const [timeTotal, setTimeTotal] = useState(0);
-  const [isPaused, setIsPaused] = useState(false);
   const [activeMicrotasks, setActiveMicrotasks] = useState(selectedTask?.microtarefas || []);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isBlockedDialogOpen, setIsBlockedDialogOpen] = useState(false);
@@ -64,8 +67,8 @@ export default function FocusPage() {
   const [microtaskTransition, setMicrotaskTransition] = useState(null);
   const [showAllMicrotasks, setShowAllMicrotasks] = useState(false);
   const [showTimer, setShowTimer] = useState(!lowStimulationMode);
-  const sessionRecordedRef = useRef(false);
-  const focusBlockMinutes = Number(selectedTask?.focusBlockMinutes || selectedTask?.timeEstimate || 30);
+  const focusBlockMinutes = Number(selectedTask?.focusBlockMinutes || 20);
+  const isPaused = taskSession?.state === 'paused';
 
   // Sync selectedTask when global tasks change (after edit)
   useEffect(() => {
@@ -79,17 +82,12 @@ export default function FocusPage() {
   }, [tasks, selectedTask, setSelectedTask]);
 
   useEffect(() => {
-    if (!selectedTask?.id || phase !== 'setup') return;
-    const activeSession = getActiveWorkSession();
-    if (!activeSession?.id || activeSession.taskId !== selectedTask.id) return;
-
-    const totalSeconds = focusBlockMinutes * 60;
-    const elapsedSeconds = Math.max(0, Math.floor((Date.now() - new Date(activeSession.startedAt).getTime()) / 1000));
-    setTimeTotal(totalSeconds);
-    setTimeRemaining(Math.max(0, totalSeconds - elapsedSeconds));
-    setPhase(elapsedSeconds >= totalSeconds ? 'completed' : 'working');
-    setIsPaused(false);
-  }, [focusBlockMinutes, phase, selectedTask]);
+    if (!taskSession?.taskId) return;
+    const sessionTask = tasks.find((task) => task.id === taskSession.taskId);
+    if (!sessionTask) return;
+    if (selectedTask?.id !== sessionTask.id) setSelectedTask(sessionTask);
+    setPhase('working');
+  }, [selectedTask?.id, setSelectedTask, taskSession?.taskId, tasks]);
 
   useEffect(() => {
     if (!selectedTask?.id || objective.trim()) return;
@@ -102,66 +100,26 @@ export default function FocusPage() {
     setShowTimer(!lowStimulationMode);
   }, [lowStimulationMode]);
 
-  useEffect(() => {
-    let interval;
-    if (phase === 'working' && !isPaused && timeRemaining > 0) {
-      interval = setInterval(() => {
-        setTimeRemaining(prev => {
-          if (prev <= 1) {
-            setPhase('completed');
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-    }
-    return () => clearInterval(interval);
-  }, [phase, isPaused, timeRemaining]);
-
   const handleStart = async () => {
-    const totalSecs = focusBlockMinutes * 60;
-    setTimeTotal(totalSecs);
-    setTimeRemaining(totalSecs);
     setSessionResult('');
     setNextActionAfterSession('');
-    sessionRecordedRef.current = false;
-    setPhase('working');
-    setIsPaused(false);
 
     if (selectedTask?.id) {
       try {
         const status = normalizeTaskStatus(selectedTask.status);
         const updatedTask = status === TASK_STATUS.PAUSADA
-          ? await resumeTask(selectedTask.id)
-          : await startTask(selectedTask.id);
+          ? await resumeTask(selectedTask.id, { blockDurationSeconds: focusBlockMinutes * 60 })
+          : await startTask(selectedTask.id, { blockDurationSeconds: focusBlockMinutes * 60 });
 
         if (updatedTask) {
           setSelectedTask(updatedTask);
           setActiveMicrotasks(updatedTask.microtarefas || []);
+          setPhase('working');
         }
       } catch (error) {
         console.error('Erro ao iniciar sessão de trabalho:', error);
       }
     }
-  };
-
-  const persistFocusSession = async (endReason) => {
-    if (!selectedTask?.id || sessionRecordedRef.current || timeTotal <= 0) return;
-
-    const durationSeconds = Math.max(0, timeTotal - timeRemaining);
-    if (durationSeconds < 5) return;
-
-    const activeSession = getActiveWorkSession();
-    await recordFocusSession({
-      taskId: selectedTask.id,
-      idempotencyKey: activeSession?.taskId === selectedTask.id ? activeSession.id : undefined,
-      durationSeconds,
-      objective,
-      result: sessionResult.trim(),
-      endReason
-    });
-
-    sessionRecordedRef.current = true;
   };
 
   const persistNextAction = async () => {
@@ -177,7 +135,7 @@ export default function FocusPage() {
 
     try {
       await persistNextAction();
-      const durationSeconds = Math.max(0, timeTotal - timeRemaining);
+      const durationSeconds = Math.max(0, elapsedSeconds);
       const completionPayload = {
         ...payload,
         ...(durationSeconds >= 5 ? {
@@ -233,31 +191,21 @@ export default function FocusPage() {
 
   const handleBack = async () => {
     try {
-      if (phase === 'working' || phase === 'completed') {
-        await persistFocusSession('Sessão pausada');
+      if (phase === 'working') {
         await persistNextAction();
-        if (selectedTask?.id) {
-          await pauseTask(selectedTask.id, { note: '' });
-        }
       }
     } catch (error) {
-      console.error('Erro ao pausar sessão de foco:', error);
+      console.error('Erro ao salvar próximo passo:', error);
     }
-    setSelectedTask(null);
     navigate('/');
   };
 
-  const addTime = () => {
-    const added = 15 * 60;
-    setTimeTotal(prev => prev + added);
-    setTimeRemaining(prev => prev + added);
-    setPhase('working');
-    setIsPaused(false);
+  const continueWithNextBlock = async () => {
+    await startNextBlock(focusBlockMinutes * 60);
   };
 
   const handleReorganize = async () => {
     try {
-      await persistFocusSession('Reorganizada por energia baixa');
       await persistNextAction();
     } catch (error) {
       console.error('Erro ao reorganizar sessão de foco:', error);
@@ -305,11 +253,8 @@ export default function FocusPage() {
 
   const handlePauseTask = async (note, pauseOptions = {}) => {
     if (!selectedTask?.id) return;
-    await persistFocusSession('Tarefa pausada');
     await persistNextAction();
     await pauseTask(selectedTask.id, { note, ...pauseOptions });
-    setSelectedTask(null);
-    navigate('/');
   };
 
   const formatTime = (seconds) => {
@@ -422,7 +367,7 @@ export default function FocusPage() {
                         <Pencil className="w-5 h-5" />
                       </Button>
                     </div>
-                    <p className="text-primary uppercase tracking-widest text-xs font-bold mb-4 flex items-center"><span className="w-2 h-2 rounded-full bg-primary animate-pulse mr-2" /> Foco Ativo</p>
+                    <p className="text-primary uppercase tracking-widest text-xs font-bold mb-4 flex items-center"><span className="w-2 h-2 rounded-full bg-primary mr-2" /> {isPaused ? 'Sessão pausada' : 'Foco ativo'}</p>
                     <h1 className="text-2xl md:text-3xl font-medium text-foreground leading-tight mb-6 pr-12">{selectedTask.title}</h1>
                     
                     {!hasCompletedAllSteps && (
@@ -482,10 +427,11 @@ export default function FocusPage() {
                   {showTimer ? (
                     <>
                       <div className="mb-4 text-6xl font-medium leading-none tracking-tighter text-foreground tabular-nums md:text-7xl font-variant-numeric:tabular-nums">
-                        {formatTime(timeRemaining)}
+                        {formatTime(blockRemainingSeconds)}
                       </div>
-                      <div className={`text-sm font-medium text-muted-foreground ${lowStimulationMode ? 'mb-4' : 'mb-8'}`}>
-                        Decorridos: {Math.floor((timeTotal - timeRemaining) / 60)} min / {Math.floor(timeTotal / 60)} min
+                      <div className={`space-y-1 text-sm font-medium text-muted-foreground ${lowStimulationMode ? 'mb-4' : 'mb-8'}`}>
+                        <p>Tempo restante do bloco</p>
+                        <p className="text-foreground">Tempo trabalhado: {formatTime(elapsedSeconds)}</p>
                       </div>
                       {lowStimulationMode && <Button className="mb-4" variant="ghost" onClick={() => setShowTimer(false)}>Ocultar tempo</Button>}
                     </>
@@ -497,11 +443,26 @@ export default function FocusPage() {
                     </div>
                   )}
 
+                  {blockRemainingSeconds === 0 && (
+                    <div className="mb-4 w-full rounded-lg border border-primary/30 bg-primary/5 p-4 text-left" aria-live="polite">
+                      <p className="font-semibold text-foreground">Bloco concluído</p>
+                      <div className="mt-3 grid gap-2">
+                        <Button size="sm" onClick={continueWithNextBlock}>Continuar por mais um bloco</Button>
+                        <Button size="sm" variant="outline" onClick={() => setIsPauseDialogOpen(true)}>Fazer uma pausa</Button>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="w-full space-y-3">
-                    <Button size="lg" variant="outline" onClick={() => setIsPauseDialogOpen(true)} className="w-full h-14 text-base rounded-2xl border-border bg-background text-foreground hover:bg-muted">
-                      <Pause className="w-5 h-5 mr-2" />
-                      Pausar
-                    </Button>
+                    {isPaused ? (
+                      <Button size="lg" onClick={resumeSession} className="w-full h-14 text-base rounded-2xl">
+                        <Play className="w-5 h-5 mr-2" /> Retomar
+                      </Button>
+                    ) : (
+                      <Button size="lg" variant="outline" onClick={() => setIsPauseDialogOpen(true)} className="w-full h-14 text-base rounded-2xl border-border bg-background text-foreground hover:bg-muted">
+                        <Pause className="w-5 h-5 mr-2" /> Pausar
+                      </Button>
+                    )}
                     <Button size="lg" variant="outline" onClick={() => setIsBlockedDialogOpen(true)} className="w-full h-14 text-base rounded-2xl border-border bg-background text-foreground hover:bg-muted">
                       Estou travada
                     </Button>
@@ -512,60 +473,6 @@ export default function FocusPage() {
                 </div>
 
               </div>
-            )}
-
-            {phase === 'completed' && (
-              <Card className="w-full max-w-xl animate-in zoom-in-95 duration-500 text-center border-border bg-card shadow-lg rounded-3xl">
-                <CardContent className="p-10 space-y-8">
-                  <div className="w-24 h-24 bg-primary/10 rounded-full flex items-center justify-center mx-auto text-primary">
-                    <CheckCircle2 className="w-12 h-12" />
-                  </div>
-                  <div>
-                    <h2 className="text-3xl font-medium text-foreground mb-3">Tempo finalizado!</h2>
-                    <p className="text-lg text-muted-foreground">
-                      O bloco de foco acabou. Como você se sente para continuar?
-                    </p>
-                  </div>
-
-                  <div className="space-y-4 text-left">
-                    <div className="space-y-2">
-                      <Label htmlFor="session-result">O que avançou neste bloco?</Label>
-                      <Textarea
-                        id="session-result"
-                        value={sessionResult}
-                        onChange={(event) => setSessionResult(event.target.value)}
-                        placeholder="Ex.: corrigi o formulário e validei no celular."
-                        className="min-h-24 bg-background"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="next-action-after-session">Próximo passo, se houver</Label>
-                      <Input
-                        id="next-action-after-session"
-                        value={nextActionAfterSession}
-                        onChange={(event) => setNextActionAfterSession(event.target.value)}
-                        placeholder="Ex.: publicar a alteração após o retorno do cliente"
-                        className="bg-background"
-                      />
-                    </div>
-                  </div>
-                  
-                  <div className="grid grid-cols-1 gap-3">
-                    <Button size="lg" onClick={() => setIsCompletionDialogOpen(true)} className="h-14 text-lg rounded-2xl bg-primary text-primary-foreground hover:bg-primary/90">
-                      <CheckCircle2 className="w-5 h-5 mr-2" /> Concluir a tarefa inteira
-                    </Button>
-                    <Button size="lg" variant="outline" onClick={addTime} className="h-14 text-lg rounded-2xl border-border bg-card text-foreground hover:bg-muted">
-                      Continuar mais 15 min
-                    </Button>
-                    <Button size="lg" variant="outline" onClick={handleReorganize} className="h-14 text-lg rounded-2xl border-border bg-secondary/50 text-foreground hover:bg-secondary">
-                      <RefreshCw className="w-5 h-5 mr-2" /> Reorganizar agenda (cansei)
-                    </Button>
-                    <Button size="lg" variant="ghost" onClick={handleBack} className="h-14 text-lg text-muted-foreground hover:text-foreground">
-                      Voltar para Hoje
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
             )}
 
           </main>

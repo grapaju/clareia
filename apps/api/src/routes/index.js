@@ -9,6 +9,7 @@ import projectsRouter from './projects.js';
 import plansRouter from './plans.js';
 import professionalJourneysRouter from './professional-journeys.js';
 import financeIntegrationRouter from './finance-integration.js';
+import deskItemsRouter from './desk-items.js';
 
 const router = Router();
 
@@ -21,6 +22,7 @@ export default () => {
     router.use('/plans', plansRouter);
     router.use('/professional-journeys', professionalJourneysRouter);
     router.use('/finance-integration', financeIntegrationRouter);
+    router.use('/desk-items', deskItemsRouter);
     router.use('/integrated-ai', integratedAiRouter);
     router.use('/google-drive', googleDriveRouter);
 

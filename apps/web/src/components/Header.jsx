@@ -13,12 +13,13 @@ import {
 import { useAuth } from '@/contexts/AuthContext.jsx';
 import { useTheme } from '@/contexts/ThemeContext.jsx';
 import { isPrivilegedUser } from '@/lib/accessControl.js';
-import QuickCaptureDialog from '@/components/QuickCaptureDialog.jsx';
 import { buildNotificationCenter, countUnreadAttention } from '@/lib/notificationLogic.js';
 import { countPendingUnsortedNotes, subscribeToUnsortedNotes, syncUnsortedNotesFromApi } from '@/lib/unsortedNotesStorage.js';
 import { listWaitingReturns, subscribeToWaitingReturns, syncWaitingReturnsWithCloud } from '@/services/waitingReturnService.js';
 import { listReadNotificationIds, markNotificationRead, retainActiveNotificationReads } from '@/services/notificationStateService.js';
 import { countProjectMaterialsToOrganize, subscribeToProjectMaterials } from '@/services/projectMaterialOrganizationService.js';
+import TaskSessionBar from '@/components/TaskSessionBar.jsx';
+import { MyDeskLauncher } from '@/components/MyDesk.jsx';
 
 export default function Header() {
   const { currentUser, isAuthenticated, logout } = useAuth();
@@ -104,10 +105,8 @@ export default function Header() {
         </Link>
 
         <div className="flex items-center gap-1 sm:gap-2">
-          {isAuthenticated && (
-            <QuickCaptureDialog />
-          )}
-
+          {isAuthenticated && <TaskSessionBar />}
+          {isAuthenticated && <MyDeskLauncher />}
           {isAuthenticated && (
             <Button
               variant={lowStimulationMode ? 'default' : 'ghost'}

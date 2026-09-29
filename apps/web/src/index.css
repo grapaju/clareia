@@ -1,3 +1,98 @@
+/* Sessão ativa, compacta e disponível nos cabeçalhos. */
+.task-session-control {
+  display: inline-flex;
+  height: 2.5rem;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 0.125rem;
+  overflow: hidden;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.5rem;
+  background: hsl(var(--card));
+  padding-left: 0.625rem;
+  box-shadow: 0 2px 8px hsl(var(--foreground) / 0.06);
+}
+
+.task-session-control-desk {
+  background: #f7faf8;
+}
+
+.task-session-indicator {
+  width: 0.5rem;
+  height: 0.5rem;
+  flex: 0 0 auto;
+  border-radius: 9999px;
+  background: #2f8f59;
+}
+
+.task-session-time,
+.task-session-pause {
+  display: inline-flex;
+  height: 2.375rem;
+  align-items: center;
+  justify-content: center;
+  color: hsl(var(--foreground));
+}
+
+.task-session-time {
+  gap: 0.375rem;
+  padding: 0 0.375rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.task-session-time span {
+  display: inline-block;
+  width: 4.75rem;
+  text-align: left;
+}
+
+.task-session-time svg,
+.task-session-pause svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.task-session-time:hover,
+.task-session-pause:hover {
+  background: hsl(var(--muted));
+}
+
+.task-session-pause {
+  width: 2.375rem;
+  min-width: 2.375rem;
+  border-left: 1px solid hsl(var(--border));
+  border-radius: 0;
+}
+
+@media (max-width: 639px) {
+  .task-session-control {
+    height: 2.75rem;
+    padding-left: 0;
+  }
+
+  .task-session-indicator { display: none; }
+
+  .task-session-time,
+  .task-session-pause {
+    height: 2.625rem;
+  }
+
+  .task-session-time svg {
+    display: none;
+  }
+
+  .task-session-time span {
+    width: 3.25rem;
+    text-align: center;
+    font-size: 0.75rem;
+  }
+
+  .task-session-pause {
+    width: 2.75rem;
+    min-width: 2.75rem;
+  }
+}
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
 
 @tailwind base;
@@ -294,6 +389,401 @@ html.high-contrast { --muted-foreground: 220 20% 32%; --border: 220 15% 70%; }
 
   *:focus-visible {
     @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
+
+  .desk-launcher {
+    @apply fixed right-0 z-40 inline-flex h-14 w-14 items-center justify-end overflow-hidden rounded-l-lg border border-r-0 border-primary/80 bg-primary text-primary-foreground shadow-[0_6px_16px_rgb(0_0_0/0.16)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2;
+    top: calc(4rem + 1.25rem);
+    transition: width 220ms cubic-bezier(0.22, 1, 0.36, 1), background-color 160ms ease;
+  }
+
+  .desk-launcher:hover,
+  .desk-launcher:focus-visible {
+    width: 9.25rem;
+    background-color: hsl(var(--primary) / 0.94);
+  }
+
+  .desk-launcher-label {
+    @apply whitespace-nowrap text-sm font-semibold;
+    max-width: 0;
+    opacity: 0;
+    transition: max-width 220ms cubic-bezier(0.22, 1, 0.36, 1), opacity 140ms ease;
+  }
+
+  .desk-launcher:hover .desk-launcher-label,
+  .desk-launcher:focus-visible .desk-launcher-label {
+    max-width: 6.5rem;
+    opacity: 1;
+  }
+
+  .desk-launcher-icon {
+    @apply flex h-14 w-14 shrink-0 items-center justify-center;
+  }
+
+  .desk-launcher svg { @apply h-7 w-7; }
+
+  body:has([role='dialog']) .desk-launcher { display: none; }
+
+  .desk-overlay {
+    @apply fixed inset-0 z-[100] flex flex-col text-[#25282d];
+    background-color: #FAF9F6;
+    animation: content-fade-in 180ms ease-out both;
+  }
+
+  .desk-header {
+    @apply flex min-h-16 shrink-0 items-center justify-between gap-3 border-b border-black/10 bg-white px-3 py-2 sm:px-6;
+  }
+
+  .desk-header-actions {
+    @apply flex min-w-0 items-center justify-end gap-1.5 sm:gap-2;
+  }
+
+  .desk-scroll-area {
+    @apply min-h-0 flex-1 overflow-y-auto;
+    background-color: #FAF9F6;
+  }
+
+  .desk-canvas {
+    @apply relative mx-auto w-full max-w-[1440px] p-4 md:p-6;
+  }
+
+  .desk-item {
+    @apply mb-4 md:absolute md:mb-0;
+    left: min(var(--desk-x), calc(100% - 316px));
+    top: var(--desk-y);
+  }
+
+  .desk-item:has(.desk-project-access) {
+    left: min(var(--desk-x), calc(100% - 152px));
+  }
+
+  .desk-note {
+    @apply flex w-full flex-col overflow-hidden rounded-md border border-black/10 text-[#22262b] shadow-[0_5px_14px_rgb(33_37_41/0.08)] md:w-[300px];
+    background-color: var(--desk-note-body);
+  }
+
+  .desk-note textarea {
+    @apply min-h-20 resize-none border-0 px-5 py-3.5 text-base leading-relaxed outline-none ring-0 placeholder:text-black/40 focus:ring-0;
+    background-color: var(--desk-note-body);
+  }
+
+  .desk-note-band {
+    @apply flex min-h-14 cursor-grab touch-none items-center gap-1 border-b border-black/10 px-1.5 active:cursor-grabbing;
+    background-color: var(--desk-note-band);
+  }
+
+  .desk-note-band input {
+    @apply min-w-0 flex-1 border-0 bg-transparent px-1 text-base font-semibold text-[#25282d] outline-none placeholder:text-black/70 focus:ring-0;
+  }
+
+  .desk-note-grip {
+    @apply inline-flex h-11 w-9 shrink-0 cursor-grab items-center justify-center rounded-md text-black/45 hover:bg-black/5 hover:text-black/70 active:cursor-grabbing;
+  }
+
+  .desk-note-grip svg { @apply h-5 w-5; }
+
+  .desk-note-collapsed {
+    min-height: 0;
+  }
+
+  .desk-note-collapsed .desk-note-band {
+    border-bottom: 0;
+  }
+
+  .desk-drag-handle {
+    @apply flex h-9 w-full cursor-grab touch-none items-center justify-center text-black/35 transition-colors hover:text-black/65 focus-visible:text-black/70 active:cursor-grabbing;
+  }
+
+  .desk-drag-handle svg {
+    @apply h-5 w-5;
+  }
+
+  .desk-note-footer {
+    @apply flex min-h-12 items-center justify-between gap-1 border-t border-black/10 px-2 py-1;
+    background-color: var(--desk-note-body);
+  }
+
+  .desk-actions {
+    @apply flex flex-wrap items-center justify-end;
+  }
+
+  .desk-icon-button {
+    @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-black/60 transition-colors hover:bg-black/5 hover:text-black/80 focus-visible:bg-black/5;
+  }
+
+  .desk-icon-button svg {
+    @apply h-4 w-4;
+  }
+
+  .desk-delete-action:hover,
+  .desk-delete-action:focus-visible {
+    @apply bg-red-50 text-red-700;
+  }
+
+  .desk-save-state {
+    @apply flex min-w-0 items-center gap-1 pl-2 text-xs text-black/55;
+  }
+
+  .desk-save-state svg {
+    @apply h-3.5 w-3.5;
+  }
+
+  .desk-compact {
+    @apply flex min-h-[112px] w-full items-center rounded-md border border-border bg-card shadow-sm md:w-[216px] md:flex-col;
+  }
+
+  .desk-project-access {
+    @apply relative min-h-[144px] w-full border-0 bg-transparent shadow-none md:w-[136px];
+  }
+
+  .desk-compact .desk-drag-handle {
+    @apply hidden h-7 md:flex;
+  }
+
+  .desk-compact-main {
+    @apply flex min-w-0 flex-1 items-center gap-3 px-4 text-left font-medium md:w-full md:px-3;
+  }
+
+  .desk-project-access .desk-compact-main {
+    @apply flex-col justify-center gap-1.5 px-1 text-center;
+  }
+
+  .desk-compact-main > span:last-child {
+    @apply truncate;
+  }
+
+  .desk-folder-icon,
+  .desk-shortcut-icon {
+    @apply flex h-10 w-10 shrink-0 items-center justify-center rounded-md;
+  }
+
+  .desk-folder-icon { @apply bg-sky-100 text-[#2f3a42]; }
+  .desk-shortcut-icon { @apply bg-primary/10 text-primary; }
+  .desk-folder-icon svg, .desk-shortcut-icon svg { @apply h-5 w-5; }
+
+  .desk-project-access .desk-folder-icon {
+    @apply h-[80px] w-[88px] bg-transparent;
+  }
+
+  .desk-project-access .desk-folder-icon svg {
+    @apply h-[76px] w-[88px];
+  }
+
+  .desk-compact-actions {
+    @apply flex shrink-0 items-center px-1.5 pb-1 md:w-full md:justify-end;
+  }
+
+  .desk-project-access .desk-compact-actions {
+    @apply absolute right-0 top-6 w-auto p-0;
+  }
+
+  .desk-project-access .desk-delete-action {
+    @apply h-8 w-8 rounded-full border border-black/10 bg-white/95 shadow-sm;
+  }
+
+  .desk-status {
+    @apply flex min-h-[65vh] flex-col items-center justify-center gap-4 px-6 text-center text-muted-foreground;
+  }
+
+  .desk-header-compact {
+    @apply min-h-[3.25rem] bg-[#fcfbf9] py-1.5;
+  }
+
+  .desk-breadcrumb {
+    @apply mt-0.5;
+  }
+
+  .desk-search-popover {
+    @apply absolute right-4 top-[3.5rem] z-[120] w-[320px] rounded-md border border-black/10 bg-white p-2 shadow-lg;
+  }
+
+  .desk-workspace-wrap {
+    background-color: #faf9f6;
+  }
+
+  .desk-workspace {
+    @apply relative min-h-[calc(100vh-4rem)] w-full overflow-auto;
+    background-color: #faf9f6;
+    background-image: radial-gradient(circle at 1px 1px, rgb(24 30 36 / 0.05) 1px, transparent 0);
+    background-size: 24px 24px;
+  }
+
+  .desk-node {
+    @apply absolute;
+  }
+
+  .desk-icon-folder,
+  .desk-icon-shortcut {
+    @apply flex w-[96px] cursor-pointer select-none flex-col items-center rounded-md px-1.5 py-1 text-center transition;
+  }
+
+  .desk-icon-folder:hover,
+  .desk-icon-shortcut:hover {
+    background: rgb(255 255 255 / 0.45);
+  }
+
+  .desk-icon-inner {
+    @apply flex h-[66px] w-[66px] items-center justify-center text-[#3f454d];
+  }
+
+  .desk-folder-svg {
+    width: 62px;
+    height: auto;
+    display: block;
+    user-select: none;
+    pointer-events: none;
+  }
+
+  .desk-folder-skin-none { filter: none; }
+  .desk-folder-skin-sky { filter: hue-rotate(172deg) saturate(0.56) brightness(1.03); }
+  .desk-folder-skin-sage { filter: hue-rotate(116deg) saturate(0.52) brightness(1.02); }
+  .desk-folder-skin-sand { filter: hue-rotate(345deg) saturate(0.46) brightness(1.04); }
+  .desk-folder-skin-stone { filter: saturate(0.22) brightness(1.03); }
+
+  .desk-icon-label {
+    @apply line-clamp-2 text-[13px] font-medium leading-tight text-[#25282d];
+    text-shadow: 0 1px 0 rgb(255 255 255 / 0.7);
+  }
+
+  .desk-icon-subtitle {
+    @apply mt-0.5 text-[11px] text-black/45;
+  }
+
+  .desk-selected {
+    background: rgb(56 189 248 / 0.13) !important;
+    box-shadow: inset 0 0 0 1px rgb(56 189 248 / 0.45);
+    border-radius: 8px;
+  }
+
+  .desk-mini-action {
+    @apply inline-flex h-7 w-7 items-center justify-center rounded-md border border-black/10 bg-white/95 text-black/65 transition hover:bg-white hover:text-black;
+  }
+
+  .desk-icon-menu {
+    @apply absolute -right-1 -top-1;
+  }
+
+  .desk-sticky {
+    @apply flex w-[300px] cursor-pointer select-none flex-col overflow-hidden rounded-sm border border-black/10 shadow-[0_5px_12px_rgb(0_0_0/0.08)];
+    background-color: var(--desk-note-body);
+  }
+
+  .desk-sticky-band {
+    @apply h-2.5 border-b border-black/10;
+    background-color: var(--desk-note-band);
+  }
+
+  .desk-sticky-content {
+    @apply space-y-1 px-4 pb-2.5 pt-3;
+  }
+
+  .desk-sticky-title {
+    @apply line-clamp-1 text-[14px] font-semibold text-[#2a2d31];
+  }
+
+  .desk-sticky-text {
+    @apply line-clamp-6 whitespace-pre-wrap text-[13px] leading-relaxed text-[#31363b];
+  }
+
+  .desk-sticky-footer {
+    @apply flex items-center justify-between border-t border-black/10 px-2 py-1.5;
+    background-color: color-mix(in srgb, var(--desk-note-body) 88%, #fff 12%);
+  }
+
+  .desk-sticky-project {
+    @apply max-w-[175px] truncate text-[12px] text-black/55;
+  }
+
+  .desk-rich-preview,
+  .desk-rich-full {
+    @apply space-y-1 text-[13px] leading-relaxed text-[#31363b];
+  }
+
+  .desk-rich-preview p,
+  .desk-rich-full p {
+    @apply m-0;
+  }
+
+  .desk-rich-preview ul,
+  .desk-rich-preview ol,
+  .desk-rich-full ul,
+  .desk-rich-full ol {
+    @apply m-0;
+  }
+
+  .desk-editor-tool {
+    @apply inline-flex h-8 w-8 items-center justify-center rounded border border-black/10 bg-white text-black/70 transition hover:bg-black/5 hover:text-black focus-visible:ring-2 focus-visible:ring-ring;
+  }
+
+  .desk-note-chip {
+    @apply h-3.5 w-3.5 rounded-full bg-black/30;
+  }
+
+  .desk-empty-state {
+    @apply absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-1 rounded-lg border border-dashed border-black/15 bg-white/60 px-6 py-5 text-center;
+  }
+
+  .desk-context-menu {
+    @apply fixed z-[150] min-w-[210px] rounded-md border border-black/10 bg-white p-1.5 shadow-xl;
+  }
+
+  .desk-context-menu button {
+    @apply flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-sm hover:bg-black/5;
+  }
+
+  .desk-context-menu button.danger {
+    @apply text-red-700 hover:bg-red-50;
+  }
+
+  .desk-folder-tone {
+    @apply h-10 rounded-md border border-black/10;
+  }
+
+  .desk-folder-tone-none { background: linear-gradient(180deg, #f8f8f4, #f1f1ec); }
+  .desk-folder-tone-sky { background: linear-gradient(180deg, #e8f6ff, #d6edf9); }
+  .desk-folder-tone-sage { background: linear-gradient(180deg, #eff8f3, #dceee2); }
+  .desk-folder-tone-sand { background: linear-gradient(180deg, #fff4e7, #f6e7d4); }
+  .desk-folder-tone-stone { background: linear-gradient(180deg, #f3f3f1, #e6e6e3); }
+}
+
+@media (max-width: 767px) {
+  .desk-launcher {
+    width: 44px;
+    height: 44px;
+    top: calc(4rem + 0.75rem);
+  }
+  .desk-launcher:hover,
+  .desk-launcher:focus-visible { width: 44px; }
+  .desk-launcher-label { display: none; }
+  .desk-launcher-icon { width: 44px; height: 44px; }
+  .desk-header { flex-wrap: wrap; padding-top: max(0.5rem, env(safe-area-inset-top)); }
+  .desk-header-actions { width: 100%; flex-wrap: wrap; }
+  .desk-header-actions .task-session-control { margin-right: auto; }
+  .desk-header-actions button { min-height: 44px; min-width: 44px; }
+  .desk-canvas { display: flex; flex-direction: column; }
+  .desk-item { position: static; order: var(--desk-order, 0); }
+  .desk-icon-button { width: 44px; height: 44px; }
+  .desk-note { min-height: 0; }
+  .desk-note-footer { align-items: flex-end; flex-direction: column; }
+  .desk-note-footer .desk-actions { width: 100%; justify-content: flex-end; }
+  .desk-project-access { max-width: 160px; align-self: center; flex-direction: column; }
+  .desk-project-access .desk-drag-handle { display: flex; }
+  .desk-search-popover {
+    left: 0.75rem;
+    right: 0.75rem;
+    width: auto;
+  }
+
+  .desk-workspace {
+    background-image: none;
+    min-height: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .desk-launcher,
+  .desk-launcher-label {
+    transition: none;
   }
 }
 

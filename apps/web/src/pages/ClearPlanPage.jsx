@@ -33,7 +33,7 @@ import {
 import { useAuth } from '@/contexts/AuthContext.jsx';
 import { useTheme } from '@/contexts/ThemeContext.jsx';
 import apiClient, { getCurrentAccountId } from '@/lib/apiClient.js';
-import { normalizeTaskTypeForTaskCollection } from '@/lib/unloadMindLogic.js';
+import { isTechnicalInternalSource, normalizeTaskTypeForTaskCollection } from '@/lib/unloadMindLogic.js';
 import { toast } from 'sonner';
 import { appendProjectHistory } from '@/services/projectHistoryService.js';
 import { getProjectStatusLabel, resolvePlanProjectAssociations } from '@/lib/projectAssociationLogic.js';
@@ -119,6 +119,12 @@ function getStatusFromScheduledDate(scheduledDate) {
   if (diffDays <= 0) return 'Hoje';
   if (diffDays <= 7) return 'Esta semana';
   return 'Próxima semana';
+}
+
+function semanticSourceLabel(source) {
+  const value = String(source || '').trim();
+  if (!value || isTechnicalInternalSource(value)) return '';
+  return value;
 }
 
 export default function ClearPlanPage() {
@@ -860,7 +866,9 @@ export default function ClearPlanPage() {
                             )}
                           </div>
 
-                          <p className="text-sm text-muted-foreground">Origem: {task.sourceType || plan?.meta?.origin || 'Texto colado'}</p>
+                          {semanticSourceLabel(task.sourceType) && (
+                            <p className="text-sm text-muted-foreground">Origem: {semanticSourceLabel(task.sourceType)}</p>
+                          )}
 
                           <p className="text-sm text-foreground/90">
                             <span className="font-medium text-muted-foreground">Primeira ação: </span>
@@ -874,9 +882,18 @@ export default function ClearPlanPage() {
                             </div>
                           )}
 
+                          {(task.analysisItems || []).length > 0 && (
+                            <div className="text-sm text-foreground/90">
+                              <p className="font-medium text-muted-foreground">O que analisar</p>
+                              <ul className="mt-1 list-disc space-y-1 pl-5">
+                                {(task.analysisItems || []).map((item) => <li key={item}>{item}</li>)}
+                              </ul>
+                            </div>
+                          )}
+
                           {(task.constraints || []).length > 0 && (
                             <div className="text-sm text-foreground/90">
-                              <p className="font-medium text-muted-foreground">Manter como está</p>
+                              <p className="font-medium text-muted-foreground">Restrições</p>
                               <ul className="mt-1 list-disc space-y-1 pl-5">
                                 {task.constraints.map((constraint) => <li key={constraint}>{constraint}</li>)}
                               </ul>

@@ -33,6 +33,7 @@ import { getCheckInAvailableMinutes } from '@/lib/reportFormatting.js';
 import { listCalendarCommitments } from '@/services/calendarCommitmentService.js';
 import { getCalendarPreferences } from '@/services/calendarPreferencesService.js';
 import { readUserPreferences } from '@/services/userPreferencesService.js';
+import { useTaskSession } from '@/hooks/useTaskSession.js';
 
 export const TaskContext = createContext();
 
@@ -73,6 +74,13 @@ function normalizeCheckInValue(value, field) {
 
 export function TaskProvider({ children }) {
   const { currentUser } = useAuth();
+  const {
+    session: taskSession,
+    startSession,
+    pauseSession,
+    resumeSession,
+    refreshSession,
+  } = useTaskSession();
   const [tasks, setTasks] = useState([]);
   const [tasksOwnerId, setTasksOwnerId] = useState('');
   const [isLoading, setIsLoading] = useState(true);
@@ -405,17 +413,10 @@ export function TaskProvider({ children }) {
 
     let registeredMinutes = 0;
     let completionSession = null;
-    const activeSession = getActiveWorkSession();
-    const hasActiveSessionForTask = Boolean(activeSession?.id && activeSession.taskId === id);
+    const hasActiveSessionForTask = taskSession?.taskId === id;
 
     if (hasActiveSessionForTask) {
-      const finishedSession = finishActiveWorkSessionForTask(id);
-      registeredMinutes = Number(finishedSession?.durationMinutes || 0);
-      completionSession = finishedSession ? {
-        ...finishedSession,
-        ...options.focusSession,
-        idempotencyKey: finishedSession.id,
-      } : null;
+      completionSession = options.focusSession || {};
     } else if (options.timeMode === 'custom') {
       const customMinutes = Number(options.customMinutes || 0);
       if (customMinutes > 0) {
@@ -446,6 +447,14 @@ export function TaskProvider({ children }) {
     });
     const completedTask = normalizeTaskRecord(completion.item);
     setTasks((previous) => previous.map((item) => item.id === id ? completedTask : item));
+
+    if (completion.taskSession?.id) {
+      const finishedSession = finishActiveWorkSessionForTask(id, {
+        durationMinutes: Math.max(1, Math.round(Number(completion.taskSession.elapsedSeconds || 0) / 60)),
+      });
+      registeredMinutes = Number(finishedSession?.durationMinutes || 0);
+      await refreshSession({ quiet: true, broadcast: true });
+    }
 
     if (completion.alreadyCompleted) {
       return {
@@ -562,14 +571,19 @@ export function TaskProvider({ children }) {
     const progress = getTaskMicrotaskProgress(task);
     const nextSubtaskId = progress.nextPending?.id || task.lastActiveSubtaskId || '';
 
-    const activeSession = getActiveWorkSession();
-    if (activeSession?.id && activeSession.taskId && activeSession.taskId !== id) {
-      finishActiveWorkSessionForTask(null, {
-        notes: 'Sessão encerrada ao iniciar outra tarefa.'
-      });
-    }
-
     if (options.trackTime !== false) {
+      const transition = taskSession?.taskId === id && taskSession.state === 'paused'
+        ? await resumeSession()
+        : await startSession(task, {
+          blockDurationSeconds: Number(options.blockDurationSeconds || task.focusBlockMinutes * 60 || 1200),
+        });
+      if (transition?.cancelled) return null;
+      if (transition?.previousSession?.id) {
+        finishActiveWorkSessionForTask(null, {
+          durationMinutes: Math.max(1, Math.round(Number(transition.previousSession.elapsedSeconds || 0) / 60)),
+          notes: 'Sessão pausada ao iniciar outra tarefa.'
+        });
+      }
       await startTimerWorkSession({
         projectId: task.project || 'Pessoal',
         taskId: task.id,
@@ -603,6 +617,9 @@ export function TaskProvider({ children }) {
     const note = String(options.note || '').trim();
     const resumeSuggestedDate = String(options.resumeSuggestedDate || '').trim() || null;
 
+    if (taskSession?.taskId === id) {
+      await pauseSession();
+    }
     const finishedSession = finishActiveWorkSessionForTask(id, {
       notes: note || 'Tarefa pausada'
     });

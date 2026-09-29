@@ -34,8 +34,8 @@ import { formatDurationFriendly, getCheckInAvailableMinutes } from '@/lib/report
 import { selectTasksWithinDailyCapacity } from '@/lib/planningEngine.js';
 import { toIsoDate } from '@/lib/localDate.js';
 import { UI_COPY } from '@/lib/uiCopy.js';
-import { getActiveWorkSession } from '@/services/workSessionService.js';
 import { readUserPreferences } from '@/services/userPreferencesService.js';
+import { useTaskSession } from '@/hooks/useTaskSession.js';
 
 function currentDateLabel() {
   return new Intl.DateTimeFormat('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date());
@@ -46,6 +46,7 @@ export default function HomePage() {
   const { currentUser } = useAuth();
   const { lowStimulationMode, setLowStimulationMode } = useTheme();
   const { currentJourney } = useProfessionalJourney();
+  const { session: taskSession } = useTaskSession();
   const navigate = useNavigate();
   const location = useLocation();
   const userId = currentUser?.id || '';
@@ -110,8 +111,14 @@ export default function HomePage() {
     return [...new Map(ranked.map((task) => [task.id, task])).values()];
   }, [rankedRecommendation, agora, visibleTaskIds, visibleTodayTasks]);
   const recommended = useMemo(() => recommendationCandidates.find((task) => task.id === selectedRecommendationId) || recommendationCandidates.find((task) => !skippedSuggestionIds.includes(task.id)) || null, [recommendationCandidates, selectedRecommendationId, skippedSuggestionIds]);
-  const activeSession = getActiveWorkSession();
-  const highlightCandidates = useMemo(() => visibleTodayTasks.filter((task) => !dismissedHighlightIds.includes(task.id)), [dismissedHighlightIds, visibleTodayTasks]);
+  const activeSession = taskSession ? { id: taskSession.id, taskId: taskSession.taskId } : null;
+  const sessionTask = tasks.find((task) => task.id === taskSession?.taskId) || null;
+  const highlightCandidates = useMemo(() => {
+    const candidates = [sessionTask, ...visibleTodayTasks]
+      .filter(Boolean)
+      .filter((task) => task.id === sessionTask?.id || !dismissedHighlightIds.includes(task.id));
+    return [...new Map(candidates.map((task) => [task.id, task])).values()];
+  }, [dismissedHighlightIds, sessionTask, visibleTodayTasks]);
   const highlight = useMemo(() => getTodayHighlight(highlightCandidates, recommended, activeSession, checkIn), [activeSession?.id, activeSession?.taskId, checkIn, highlightCandidates, recommended]);
   const presentation = useMemo(() => getTodayPresentation(visibleTodayTasks, highlight, lowStimulationMode), [highlight, lowStimulationMode, visibleTodayTasks]);
   const highlightTask = presentation.highlight;
@@ -121,6 +128,13 @@ export default function HomePage() {
   const nextStep = nextActionPresentation?.action || '';
   const lastCompletedStep = highlightProgress?.normalized?.filter((item) => item.completed).at(-1)?.title || '';
   const isResumeHighlight = ['active_session', 'paused', 'started'].includes(highlight.reason);
+  const highlightSessionState = taskSession && taskSession.taskId === highlightTask?.id ? taskSession.state : null;
+  const highlightStatusLabel = highlightSessionState === 'running'
+    ? 'Em andamento'
+    : highlightSessionState === 'paused' ? 'Sessão pausada' : isResumeHighlight ? 'Você parou aqui' : 'Por onde começar';
+  const highlightActionLabel = highlightSessionState === 'running'
+    ? 'Voltar ao foco'
+    : highlightSessionState === 'paused' ? 'Retomar' : isResumeHighlight ? 'Retomar' : 'Começar agora';
   const showCompactDayPanel = hasTodayCheckIn && !isCheckInEditing;
   const isJourneyRunning = currentJourney?.status === 'active';
   const overdueCount = canonical.groups.overdue.length;
@@ -133,7 +147,15 @@ export default function HomePage() {
   const deadlineRisks = tasks.filter((task) => task.deadlineRisk && isTaskActionableStatus(task.status));
 
   const executeTaskStart = async (task, options = {}) => {
-    const updated = normalizeTaskStatus(task.status) === TASK_STATUS.PAUSADA ? await resumeTask(task.id) : await startTask(task.id);
+    if (taskSession?.taskId === task.id && taskSession.state === 'running') {
+      setSelectedTask(task);
+      navigate('/foco');
+      return;
+    }
+    const updated = taskSession?.taskId === task.id && taskSession.state === 'paused'
+      ? await resumeTask(task.id)
+      : normalizeTaskStatus(task.status) === TASK_STATUS.PAUSADA ? await resumeTask(task.id) : await startTask(task.id);
+    if (!updated) return;
     setSelectedTask({ ...(updated || task), ...(options.blockMinutes ? { focusBlockMinutes: options.blockMinutes } : {}) });
     navigate('/foco');
   };
@@ -222,13 +244,13 @@ export default function HomePage() {
                       <ProfessionalJourneyCard compact periodAvailableMinutes={declaredAvailableMinutes} />
                       {highlightTask ? (
                         <div key={highlightTask.id} className="content-fade-in mt-6 border-y border-border py-6">
-                          <p className="text-sm text-muted-foreground">{isResumeHighlight ? 'Continue de onde parou' : 'Para começar agora'}</p>
+                          <p className="text-sm text-muted-foreground">{highlightSessionState === 'running' ? 'Em andamento' : highlightSessionState === 'paused' ? 'Sessão pausada' : isResumeHighlight ? 'Continue de onde parou' : 'Para começar agora'}</p>
                           <h2 className="mt-2 text-2xl font-medium text-foreground">{highlightTask.title}</h2>
                           <p className="mt-5 text-sm font-medium text-muted-foreground">Agora</p>
                           <p className="mt-1 text-base text-foreground">{nextStep}</p>
                           {nextActionPresentation.actionMinutes > 0 && <p className="mt-2 text-sm text-muted-foreground">Cerca de {formatDurationFriendly(nextActionPresentation.actionMinutes)}</p>}
                           <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-                            <Button className="press-feedback" onClick={() => handleStartTask(highlightTask)}><Play className="mr-1.5 h-4 w-4" aria-hidden="true" /> {isResumeHighlight ? 'Continuar' : 'Começar'}</Button>
+                            <Button className="press-feedback" onClick={() => handleStartTask(highlightTask)}><Play className="mr-1.5 h-4 w-4" aria-hidden="true" /> {highlightActionLabel}</Button>
                             <Button variant="outline" onClick={() => setIsBlockedDialogOpen(true)}>Não consigo agora</Button>
                             <Button variant="ghost" onClick={() => setLowStimulationMode(false)}>Ver todas as tarefas</Button>
                           </div>
@@ -264,7 +286,7 @@ export default function HomePage() {
                   )}
                   {highlightTask && (
                     <section key={highlightTask.id} className="today-motion-card content-fade-in mb-7 rounded-lg border border-border border-l-4 border-l-primary bg-card p-5 shadow-sm transition-[border-color,box-shadow,transform] duration-300 sm:p-7" aria-labelledby="recommendation-title">
-                      <p className="mb-2 text-sm font-semibold text-primary">{isResumeHighlight ? (highlight.reason === 'active_session' ? 'Sessão em andamento' : 'Você parou aqui') : 'Por onde começar'}</p>
+                      <p className="mb-2 text-sm font-semibold text-primary">{highlightStatusLabel}</p>
                       <button type="button" className="block w-full rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => setDetailsTask(highlightTask)}>
                         <h2 id="recommendation-title" className="text-2xl font-medium text-foreground">{highlightTask.title}</h2>
                         <p className="mt-2 text-sm text-muted-foreground">{highlightTask.project || 'Pessoal'}</p>
@@ -278,7 +300,7 @@ export default function HomePage() {
                         {nextActionPresentation.pauseNote && <p className="mt-2 text-sm text-muted-foreground">Onde você parou: {nextActionPresentation.pauseNote}</p>}
                       </div>
                       <div className="mt-4 flex flex-wrap items-center gap-2">
-                        <Button className="press-feedback" onClick={() => handleStartTask(highlightTask)}><Play className="mr-1.5 h-4 w-4" aria-hidden="true" /> {isResumeHighlight ? 'Continuar de onde parei' : 'Começar agora'}</Button>
+                        <Button className="press-feedback" onClick={() => handleStartTask(highlightTask)}><Play className="mr-1.5 h-4 w-4" aria-hidden="true" /> {highlightActionLabel}</Button>
                         <Button variant="outline" onClick={isResumeHighlight ? handleDismissHighlight : handleAnotherSuggestion}>Agora não</Button>
                         <Button variant="ghost" onClick={() => setDetailsTask(highlightTask)}><Eye className="mr-1.5 h-4 w-4" aria-hidden="true" /> Ver contexto</Button>
                         <DropdownMenu>

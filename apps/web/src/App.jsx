@@ -7,8 +7,10 @@ import { AuthProvider } from '@/contexts/AuthContext.jsx';
 import { TaskProvider } from '@/contexts/TaskContext.jsx';
 import { AppModeProvider } from '@/contexts/AppModeContext.jsx';
 import { ProfessionalJourneyProvider } from '@/contexts/ProfessionalJourneyContext.jsx';
+import { TaskSessionProvider } from '@/contexts/TaskSessionContext.jsx';
 import ProtectedRoute from '@/components/ProtectedRoute.jsx';
 import AdminRoute from '@/components/AdminRoute.jsx';
+import { MyDeskHost } from '@/components/MyDesk.jsx';
 
 import LoginPage from './pages/LoginPage.jsx';
 import SignupPage from './pages/SignupPage.jsx';
@@ -37,8 +39,10 @@ function App() {
       <ThemeProvider>
         <AppModeProvider>
           <ProfessionalJourneyProvider>
+            <TaskSessionProvider>
             <TaskProvider>
             <Router>
+              <MyDeskHost>
               <Routes>
                 <Route path="/login" element={<LoginPage />} />
                 <Route path="/signup" element={<SignupPage />} />
@@ -65,9 +69,11 @@ function App() {
                 
                 <Route path="*" element={withProtectedMode(<HomePage />)} />
               </Routes>
+              </MyDeskHost>
               <Toaster />
             </Router>
             </TaskProvider>
+            </TaskSessionProvider>
           </ProfessionalJourneyProvider>
         </AppModeProvider>
       </ThemeProvider>

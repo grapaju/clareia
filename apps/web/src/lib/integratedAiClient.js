@@ -20,15 +20,17 @@ const integratedAiClient = {
 			const errorBody = await response.text();
 
 			let message;
+			let payload;
 			try {
-				const parsed = JSON.parse(errorBody);
-				message = parsed?.error?.message || parsed?.message || parsed?.error;
+				payload = JSON.parse(errorBody);
+				message = payload?.error?.message || payload?.message || payload?.error;
 			} catch {
 				message = errorBody;
 			}
 
 			const error = new Error(message || `Request failed (${response.status})`);
 			error.status = response.status;
+			error.payload = payload;
 			throw error;
 		}
 

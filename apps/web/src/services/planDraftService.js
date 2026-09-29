@@ -21,7 +21,20 @@ export async function createOrReusePlanDraft({ text, userId, accountId = '', ori
     record?.planoGerado?.meta?.status === 'pending'
     && normalizeText(record?.conteudoOriginal) === normalizeText(content)
   ));
-  if (existing) return existing;
+  if (existing) {
+    return apiClient.collection('planosClareados').update(existing.id, {
+      planoGerado: {
+        ...plan,
+        meta: {
+          ...(existing.planoGerado?.meta || {}),
+          status: 'pending',
+          textoOriginal: content,
+          origin,
+          updatedAt: new Date().toISOString(),
+        }
+      }
+    }, { $autoCancel: false });
+  }
 
   return apiClient.collection('planosClareados').create({
     userId,

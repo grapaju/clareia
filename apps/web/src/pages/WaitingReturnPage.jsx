@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Helmet } from 'react-helmet';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import { Clock3, Plus, Trash2, CheckCircle2 } from 'lucide-react';
 import Header from '@/components/Header.jsx';
 import Sidebar from '@/components/Sidebar.jsx';
@@ -53,6 +53,8 @@ function safeExternalUrl(value) {
 
 export default function WaitingReturnPage() {
   const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const projectFilter = String(searchParams.get('project') || '').trim();
   const [items, setItems] = useState(() => listWaitingReturns());
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [itemToDelete, setItemToDelete] = useState(null);
@@ -68,7 +70,10 @@ export default function WaitingReturnPage() {
     status: 'Aguardando retorno'
   });
 
-  const openCount = useMemo(() => countOpenWaitingReturns(items), [items]);
+  const visibleItems = useMemo(() => {
+    if (!projectFilter) return items;
+    return items.filter((item) => String(item.project || '').trim() === projectFilter);
+  }, [items, projectFilter]);
 
   const refresh = () => setItems(listWaitingReturns());
 
@@ -82,6 +87,11 @@ export default function WaitingReturnPage() {
   useEffect(() => {
     syncWaitingReturnsWithCloud().then(() => refresh());
   }, []);
+
+  useEffect(() => {
+    if (!projectFilter) return;
+    setForm((current) => ({ ...current, project: projectFilter }));
+  }, [projectFilter]);
 
   const handleCreate = () => {
     const created = createWaitingReturn({
@@ -186,15 +196,15 @@ export default function WaitingReturnPage() {
 
               <Card className="bg-card border-border shadow-sm">
                 <CardContent className="p-6 space-y-4">
-                  <h2 className="text-lg font-medium">Acompanhamentos ({openCount} abertos)</h2>
-                  {items.length === 0 ? (
+                  <h2 className="text-lg font-medium">Acompanhamentos ({countOpenWaitingReturns(visibleItems)} abertos)</h2>
+                  {visibleItems.length === 0 ? (
                     <div className="text-sm text-muted-foreground">
-                      <p>{UI_COPY.waitingReturn.empty}</p>
+                      <p>{projectFilter ? `Nenhum acompanhamento aberto para ${projectFilter}.` : UI_COPY.waitingReturn.empty}</p>
                       <p className="mt-1">{UI_COPY.waitingReturn.emptyHelp}</p>
                     </div>
                   ) : (
                     <ul className="space-y-3">
-                      {items.map((item) => {
+                      {visibleItems.map((item) => {
                         const financeItem = isFinanceWaitingReturn(item);
                         const actions = getWaitingReturnActions(item);
                         const externalUrl = safeExternalUrl(item.contextUrl);
