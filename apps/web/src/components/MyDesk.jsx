@@ -5,11 +5,15 @@ import {
   Archive,
   ArrowLeft,
   Bold,
+  Clock3,
   Check,
+  CheckSquare,
+  File,
   FileImage,
   FileSpreadsheet,
   FileText,
   Folder,
+  Globe,
   Italic,
   Link2,
   List,
@@ -19,6 +23,7 @@ import {
   Plus,
   Search,
   Smile,
+  StickyNote,
   Strikethrough,
   Trash2,
 } from 'lucide-react';
@@ -171,11 +176,34 @@ function extensionOf(item) {
 
 function fileIcon(item) {
   if (item.sourceType === 'project-link') return Link2;
-  if (item.sourceType === 'project-note') return FileText;
+  if (item.sourceType === 'project-note') return StickyNote;
+  if (item.sourceType === 'project-tasks') return CheckSquare;
+  if (item.sourceType === 'project-waiting') return Clock3;
+  if (item.sourceType === 'project-drive-root') return Folder;
+  if (item.sourceType === 'project-material-group') return Folder;
   const extension = extensionOf(item);
+  if (['doc', 'docx', 'pdf', 'txt', 'rtf', 'odt'].includes(extension)) return FileText;
   if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(extension)) return FileImage;
   if (['xlsx', 'xls', 'csv'].includes(extension)) return FileSpreadsheet;
-  return FileText;
+  return File;
+}
+
+function shortcutSubtitle(item) {
+  if (item.sourceType === 'project-tasks') return 'Tarefas';
+  if (item.sourceType === 'project-waiting') return 'Aguardando retorno';
+  if (item.sourceType === 'project-drive-root') return 'Google Drive';
+  if (item.sourceType === 'project-link') return 'Link';
+  if (item.sourceType === 'project-file') {
+    const extension = extensionOf(item);
+    if (['doc', 'docx', 'pdf', 'txt', 'rtf', 'odt'].includes(extension)) return 'Documento';
+    return 'Arquivo';
+  }
+  if (item.shortcutKind === 'file') return 'Arquivo';
+  if (item.shortcutKind === 'link') {
+    if (String(item.url || '').trim()) return 'Link';
+    return 'Entrada';
+  }
+  return 'Atalho';
 }
 
 function shouldShowAtRoot(item) {
@@ -355,13 +383,25 @@ function RichTextEditor({ value, onChange }) {
 function DeskItemIcon({ item }) {
   if (item.type === 'project') return <img src={folderIconSrc} alt="" className={`desk-folder-svg desk-folder-skin-${item.iconTone || 'none'}`} draggable={false} />;
   if (item.type === 'shortcut') {
-    const Icon = isFileShortcut(item) ? fileIcon(item) : Link2;
+    let Icon = Link2;
+    if (item.sourceType === 'project-tasks') Icon = CheckSquare;
+    else if (item.sourceType === 'project-waiting') Icon = Clock3;
+    else if (item.sourceType === 'project-drive-root') Icon = Folder;
+    else if (item.sourceType === 'project-link') Icon = Globe;
+    else if (item.sourceType === 'project-file' || item.sourceType === 'project-material-group' || isFileShortcut(item)) Icon = fileIcon(item);
     return <Icon className="h-6 w-6" aria-hidden="true" />;
+  }
+  if (item.type === 'note' && item.isReference && item.sourceType === 'project-note') {
+    return <StickyNote className="h-6 w-6" aria-hidden="true" />;
   }
   return null;
 }
 
 function CompactItemCard({ item, selected, onClick, onDoubleClick, onMenu, onToggleChecklist }) {
+  const subtitle = item.type === 'shortcut'
+    ? shortcutSubtitle(item)
+    : (item.type === 'project' ? 'Pasta' : (getProjectName(item) || 'Sem projeto'));
+
   return (
     <article className={`rounded-lg border bg-white/85 p-3 shadow-sm ${selected ? 'border-primary/45 ring-1 ring-primary/30' : 'border-black/10'}`} onClick={onClick}>
       <div className="flex items-start justify-between gap-3">
@@ -369,7 +409,7 @@ function CompactItemCard({ item, selected, onClick, onDoubleClick, onMenu, onTog
           <span className="mt-0.5 inline-flex h-8 w-8 items-center justify-center rounded-md bg-black/5 text-black/70"><DeskItemIcon item={item} /></span>
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold">{itemName(item)}</p>
-            <p className="truncate text-xs text-muted-foreground">{getProjectName(item) || (item.type === 'project' ? 'Pasta' : 'Sem projeto')}</p>
+            <p className="truncate text-xs text-muted-foreground">{subtitle}</p>
           </div>
         </div>
         <button type="button" className="desk-mini-action" onClick={(event) => {
@@ -1572,12 +1612,22 @@ export default function MyDesk({ open, onClose }) {
 
   const addEntries = addMenuEntries(currentFolder);
   const folderVisibleItems = currentFolder
-    ? visibleItems.filter((item) => getProjectName(item) === currentFolder).length
+    ? items.filter((item) => item.type !== 'project' && getProjectName(item) === currentFolder).length + projectReferenceItems.length
     : visibleItems.length;
 
   return (
     <TooltipProvider delayDuration={250}>
       <section className="desk-overlay" role="dialog" aria-modal="true" aria-labelledby="desk-title" onKeyDown={(event) => {
+        if (event.altKey && event.key === 'ArrowLeft' && currentFolder) {
+          const internalMenuOpen = document.querySelector('[role="menu"][data-state="open"], [role="listbox"][data-state="open"]');
+          if (dialog || contextMenu || editingNoteId || internalMenuOpen) return;
+          event.preventDefault();
+          setCurrentFolder('');
+          setSelectedIds(new Set());
+          setContextMenu(null);
+          setContextMenuPlacement(null);
+          return;
+        }
         if (event.key === 'Escape' && contextMenu) {
           event.preventDefault();
           setContextMenu(null);
@@ -1586,17 +1636,39 @@ export default function MyDesk({ open, onClose }) {
         }
         if (event.key === 'Escape' && !dialog) {
           const internalMenuOpen = document.querySelector('[role="menu"][data-state="open"], [role="listbox"][data-state="open"]');
+          if (!internalMenuOpen && !editingNoteId && currentFolder) {
+            event.preventDefault();
+            setCurrentFolder('');
+            setSelectedIds(new Set());
+            return;
+          }
           if (!internalMenuOpen) closeDesk();
         }
       }}>
         <header className="desk-header desk-header-compact">
           <div className="min-w-0">
             <h1 id="desk-title" className="truncate text-base font-semibold">Minha Mesa</h1>
-            <p className="desk-breadcrumb text-xs text-muted-foreground">
-              <button type="button" className="hover:text-foreground" onClick={() => setCurrentFolder('')}>Minha Mesa</button>
-              {currentFolder && <span className="ml-1">/ <span className="font-medium text-foreground">{currentFolder}</span></span>}
-            </p>
-            {currentFolder && <p className="mt-0.5 text-[12px] text-muted-foreground">{currentFolder} · {folderVisibleItems} {folderVisibleItems === 1 ? 'item' : 'itens'}</p>}
+            {currentFolder && (
+              <div className="desk-folder-context mt-0.5">
+                <button
+                  type="button"
+                  className="desk-folder-back"
+                  onClick={() => {
+                    setCurrentFolder('');
+                    setSelectedIds(new Set());
+                    setContextMenu(null);
+                    setContextMenuPlacement(null);
+                  }}
+                >
+                  <ArrowLeft className="h-3.5 w-3.5" />
+                  Minha Mesa
+                </button>
+                <div className="desk-folder-title-wrap">
+                  <p className="desk-folder-title"><Folder className="h-4 w-4" />{currentFolder}</p>
+                  <p className="desk-folder-meta">{folderVisibleItems} {folderVisibleItems === 1 ? 'item' : 'itens'}</p>
+                </div>
+              </div>
+            )}
             {currentFolder && projectMaterialsMeta.grouped && (
               <button
                 type="button"
@@ -1732,7 +1804,7 @@ export default function MyDesk({ open, onClose }) {
                       <DeskItemIcon item={item} />
                     </div>
                     <p className="desk-icon-label">{itemName(item)}</p>
-                    {item.type === 'shortcut' && <p className="desk-icon-subtitle">{isFileShortcut(item) ? 'Arquivo' : 'Atalho'}</p>}
+                    {item.type === 'shortcut' && <p className="desk-icon-subtitle">{shortcutSubtitle(item)}</p>}
                     {selected && (
                       <button
                         type="button"

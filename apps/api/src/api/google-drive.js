@@ -553,27 +553,28 @@ async function createDriveClientForUser(userId) {
 	};
 }
 
-async function findFolderByName({ drive, parentId, name }) {
+async function findFolderByName({ drive, parentId, name, errorOnMultiple = true }) {
 	const escapedName = quoteQueryString(name);
 	const parentClause = parentId ? `'${quoteQueryString(parentId)}' in parents and ` : '';
 	const query = `${parentClause}mimeType='${GOOGLE_DRIVE_FOLDER_MIME_TYPE}' and trashed=false and name='${escapedName}'`;
 
 	const response = await drive.files.list({
 		q: query,
-		fields: 'files(id,name,webViewLink)',
-		pageSize: 2,
+		fields: 'files(id,name,webViewLink,modifiedTime)',
+		orderBy: 'modifiedTime desc',
+		pageSize: errorOnMultiple ? 2 : 10,
 	});
 
 	const matches = response.data.files || [];
-	if (matches.length > 1) {
+	if (matches.length > 1 && errorOnMultiple) {
 		throw createError(`Existem varias pastas chamadas "${name}" neste destino do Google Drive. Vincule a pasta correta antes de continuar.`, 409);
 	}
 
 	return matches[0] || null;
 }
 
-async function createFolderIfMissing({ drive, parentId, name }) {
-	const found = await findFolderByName({ drive, parentId, name });
+async function createFolderIfMissing({ drive, parentId, name, errorOnMultiple = true }) {
+	const found = await findFolderByName({ drive, parentId, name, errorOnMultiple });
 	if (found) {
 		return found;
 	}
@@ -599,7 +600,12 @@ function isValidDriveFolderId(value) {
 }
 
 async function getOrCreateAppRootFolder(drive) {
-	return createFolderIfMissing({ drive, parentId: null, name: APP_ROOT_FOLDER_NAME });
+	return createFolderIfMissing({
+		drive,
+		parentId: null,
+		name: APP_ROOT_FOLDER_NAME,
+		errorOnMultiple: false,
+	});
 }
 
 export async function getGoogleDriveStatus({ userId }) {

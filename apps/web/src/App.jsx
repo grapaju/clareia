@@ -65,7 +65,7 @@ function App() {
                 <Route path="/configuracoes" element={withProtectedMode(<SettingsPage />)} />
                 <Route path="/conta" element={withProtectedMode(<AccountPage />)} />
                 <Route path="/laboratorio" element={withProtectedMode(<AdminRoute><LaboratoryPage /></AdminRoute>)} />
-                <Route path="/integracoes/google-drive-oauth" element={withProtectedMode(<AdminRoute><GoogleDriveOAuthPage /></AdminRoute>)} />
+                <Route path="/integracoes/google-drive-oauth" element={withProtectedMode(<GoogleDriveOAuthPage />)} />
                 
                 <Route path="*" element={withProtectedMode(<HomePage />)} />
               </Routes>

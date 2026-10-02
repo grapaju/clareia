@@ -593,6 +593,26 @@ html.high-contrast { --muted-foreground: 220 20% 32%; --border: 220 15% 70%; }
     @apply mt-0.5;
   }
 
+  .desk-folder-context {
+    @apply inline-flex flex-col gap-0.5 rounded-md border border-sky-100/70 bg-sky-50/35 px-2 py-1;
+  }
+
+  .desk-folder-back {
+    @apply inline-flex w-fit items-center gap-1 text-[12px] font-medium text-sky-700 underline-offset-2 transition hover:text-sky-800 hover:underline;
+  }
+
+  .desk-folder-title-wrap {
+    @apply flex flex-col;
+  }
+
+  .desk-folder-title {
+    @apply inline-flex items-center gap-1 text-[14px] font-semibold text-[#1f2a34];
+  }
+
+  .desk-folder-meta {
+    @apply text-[11px] text-black/55;
+  }
+
   .desk-search-popover {
     @apply absolute right-4 top-[3.5rem] z-[120] w-[320px] rounded-md border border-black/10 bg-white p-2 shadow-lg;
   }
@@ -758,6 +778,22 @@ html.high-contrast { --muted-foreground: 220 20% 32%; --border: 220 15% 70%; }
   .desk-launcher-icon { width: 44px; height: 44px; }
   .desk-header { flex-wrap: wrap; padding-top: max(0.5rem, env(safe-area-inset-top)); }
   .desk-header-actions { width: 100%; flex-wrap: wrap; }
+  .desk-folder-context {
+    @apply w-full gap-1 border-0 bg-transparent px-0 py-0;
+  }
+  .desk-folder-title-wrap {
+    @apply flex-row items-center gap-1.5;
+  }
+  .desk-folder-title {
+    @apply text-[13px];
+  }
+  .desk-folder-meta {
+    @apply text-[12px];
+  }
+  .desk-folder-meta::before {
+    content: '\00B7';
+    margin-right: 0.35rem;
+  }
   .desk-header-actions .task-session-control { margin-right: auto; }
   .desk-header-actions button { min-height: 44px; min-width: 44px; }
   .desk-canvas { display: flex; flex-direction: column; }
