@@ -2,6 +2,7 @@ import { getScheduledLabelForTask } from '@/lib/schedulingRules.js';
 import { parseLocalDate } from '@/lib/localDate.js';
 import { normalizeTaskStatus, TASK_STATUS } from '@/lib/taskExecution.js';
 import { getCheckInAvailableMinutes } from './reportFormatting.js';
+import { getTaskScheduleState } from './todayViewLogic.js';
 
 function stripAccents(value = '') {
   return value
@@ -60,6 +61,17 @@ function normalizeExecutionDifficulty(value = '') {
   if (text.includes('atrito')) return 'atrito';
   if (text.includes('grande')) return 'grande';
   return 'direta';
+}
+
+function hasPeriodStarted(task, now) {
+  const scheduleState = getTaskScheduleState(task, now);
+  if (!scheduleState?.isToday || !scheduleState?.plannedPeriod) return true;
+  const periodOrder = { manhã: 1, tarde: 2, noite: 3 };
+  return periodOrder[scheduleState.currentPeriod] >= periodOrder[scheduleState.plannedPeriod];
+}
+
+function isPastPlannedPeriod(task, now) {
+  return Boolean(getTaskScheduleState(task, now).isPastPeriodToday);
 }
 
 function getTaskSearchText(task) {
@@ -187,6 +199,14 @@ function canRunNow(task, now, checkInEnergy, availableMinutes) {
     return false;
   }
 
+  if (!hasPeriodStarted(task, now)) {
+    return false;
+  }
+
+  if (isPastPlannedPeriod(task, now)) {
+    return false;
+  }
+
   if (isCampaignFollowUpTask(task) && !hasExplicitUrgentDeadline(task, now)) {
     return false;
   }
@@ -280,12 +300,12 @@ function normalizeTask(task, now) {
   };
 }
 
-export function reorganizeTasksByEnergy(tasks, checkIn) {
+export function reorganizeTasksByEnergy(tasks, checkIn, options = {}) {
   if (!Array.isArray(tasks) || tasks.length === 0) {
     return { recommended: null, agora: [], depois: [], seSobrar: [], alertasImportantes: [], fallbackMessage: '' };
   }
 
-  const now = new Date();
+  const now = options?.now instanceof Date ? options.now : new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
   const checkInEnergy = normalizeEnergy(checkIn?.energia || 'média');

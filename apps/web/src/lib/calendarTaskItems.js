@@ -1,13 +1,17 @@
 import { toIsoDate } from './localDate.js';
 import { filterOperationalTaskReferences, isTaskOpenStatus, isTaskOperational } from './taskExecution.js';
+import { getTaskScheduleState } from './todayViewLogic.js';
 
-export function buildTaskCalendarItems(tasks = [], focusSessions = []) {
+export function buildTaskCalendarItems(tasks = [], focusSessions = [], options = {}) {
+  const referenceDate = options?.referenceDate instanceof Date ? options.referenceDate : new Date();
   const operationalTasks = tasks.filter(isTaskOperational);
   const openTasks = operationalTasks.filter((task) => isTaskOpenStatus(task.status));
 
   const taskItems = openTasks
     .filter((task) => toIsoDate(task.scheduledDate || task.dataSugeridaExecucao))
-    .map((task) => ({
+    .map((task) => {
+      const scheduleState = getTaskScheduleState(task, referenceDate);
+      return ({
       id: `task-${task.id}`,
       title: task.title,
       projectId: task.project || 'Pessoal',
@@ -18,7 +22,10 @@ export function buildTaskCalendarItems(tasks = [], focusSessions = []) {
       status: task.status || 'Pendente',
       sourceId: task.id,
       sourceType: 'task',
-    }));
+      needsReschedule: scheduleState.needsReschedule,
+      isPastPeriodToday: scheduleState.isPastPeriodToday,
+    });
+    });
 
   const dueItems = openTasks
     .filter((task) => toIsoDate(task.dueDate || task.dataLimite))
@@ -36,7 +43,9 @@ export function buildTaskCalendarItems(tasks = [], focusSessions = []) {
 
   const routineItems = openTasks
     .filter((task) => ['Semanal', 'Mensal'].includes(task.recurrenceFrequency))
-    .map((task) => ({
+    .map((task) => {
+      const scheduleState = getTaskScheduleState(task, referenceDate);
+      return ({
       id: `routine-${task.id}`,
       title: `Rotina: ${task.title}`,
       projectId: task.project || 'Pessoal',
@@ -47,7 +56,10 @@ export function buildTaskCalendarItems(tasks = [], focusSessions = []) {
       status: task.status || 'Ativa',
       sourceId: task.id,
       sourceType: 'task_routine',
-    }))
+      needsReschedule: scheduleState.needsReschedule,
+      isPastPeriodToday: scheduleState.isPastPeriodToday,
+    });
+    })
     .filter((item) => item.date);
 
   const focusItems = filterOperationalTaskReferences(focusSessions, openTasks)

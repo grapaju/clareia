@@ -14,6 +14,53 @@ function taskDate(task) {
   return toIsoDate(task?.scheduledDate || task?.dataSugeridaExecucao);
 }
 
+function normalizePeriod(period = '') {
+  const value = normalized(period);
+  if (value.includes('manha')) return 'manhã';
+  if (value.includes('tarde')) return 'tarde';
+  if (value.includes('noite')) return 'noite';
+  return '';
+}
+
+function currentPeriod(referenceDate = new Date()) {
+  const hour = referenceDate.getHours();
+  if (hour >= 18) return 'noite';
+  if (hour >= 12) return 'tarde';
+  return 'manhã';
+}
+
+function periodToLabel(period = '') {
+  if (period === 'manhã') return 'de manhã';
+  if (period === 'tarde') return 'à tarde';
+  if (period === 'noite') return 'à noite';
+  return '';
+}
+
+export function getTaskScheduleState(task, referenceDate = new Date()) {
+  const todayIso = toIsoDate(referenceDate);
+  const date = taskDate(task);
+  const plannedPeriod = normalizePeriod(task?.scheduledPeriod || task?.periodoSugerido);
+  const current = currentPeriod(referenceDate);
+  const periodOrder = { manhã: 1, tarde: 2, noite: 3 };
+  const isPastPeriodToday = Boolean(
+    date
+    && date === todayIso
+    && plannedPeriod
+    && periodOrder[plannedPeriod] < periodOrder[current]
+  );
+
+  return {
+    date,
+    plannedPeriod,
+    currentPeriod: current,
+    isToday: Boolean(date && date === todayIso),
+    isPastDate: Boolean(date && date < todayIso),
+    isFutureDate: Boolean(date && date > todayIso),
+    isPastPeriodToday,
+    needsReschedule: isPastPeriodToday || Boolean(date && date < todayIso),
+  };
+}
+
 function isRoutine(task) {
   const frequency = normalized(task?.recurrenceFrequency);
   const recognizedFrequency = ['diaria', 'semanal', 'quinzenal', 'mensal', 'anual'].includes(frequency);
@@ -205,17 +252,23 @@ export function getTodayCapacityState(plannedMinutes, availableMinutes) {
 }
 
 export function getTodayTaskSituation(task, referenceDate = new Date()) {
-  const todayIso = toIsoDate(referenceDate);
-  const date = taskDate(task);
+  const scheduleState = getTaskScheduleState(task, referenceDate);
+  const { date } = scheduleState;
   const routine = isRoutine(task);
   let label = 'Sem data';
 
-  if (date && date < todayIso) label = 'Atrasada';
-  else if (date === todayIso || isLegacyToday(task)) {
-    const period = String(task?.scheduledPeriod || task?.periodoSugerido || '').toLocaleLowerCase('pt-BR');
-    label = period.includes('manhã') || period.includes('manha')
+  if (scheduleState.isPastDate) label = 'Atrasada';
+  else if (scheduleState.isPastPeriodToday) {
+    const periodLabel = periodToLabel(scheduleState.plannedPeriod);
+    label = periodLabel ? `Planejada para hoje ${periodLabel} · a reorganizar` : 'Planejada para hoje · a reorganizar';
+  } else if (scheduleState.isToday || isLegacyToday(task)) {
+    label = scheduleState.plannedPeriod === 'manhã'
       ? 'Hoje de manhã'
-      : period.includes('noite') ? 'Hoje à noite' : period.includes('tarde') ? 'Hoje à tarde' : 'Hoje';
+      : scheduleState.plannedPeriod === 'noite'
+        ? 'Hoje à noite'
+        : scheduleState.plannedPeriod === 'tarde'
+          ? 'Hoje à tarde'
+          : 'Hoje';
   } else if (date) {
     const tomorrow = new Date(referenceDate.getFullYear(), referenceDate.getMonth(), referenceDate.getDate() + 1);
     label = date === toIsoDate(tomorrow)
@@ -223,18 +276,19 @@ export function getTodayTaskSituation(task, referenceDate = new Date()) {
       : new Date(`${date}T12:00:00`).toLocaleDateString('pt-BR');
   }
 
-  return { label, routine };
+  return { label, routine, scheduleState };
 }
 
-export function getTaskRowMetadata(task) {
+export function getTaskRowMetadata(task, referenceDate = new Date()) {
   const progress = getTaskMicrotaskProgress(task);
-  const situation = getTodayTaskSituation(task);
+  const situation = getTodayTaskSituation(task, referenceDate);
   return {
     date: taskDate(task),
     minutes: Number(task.timeEstimate || task.estimatedMinutes || 0),
     progress: progress.total ? `${progress.completed}/${progress.total}` : '',
     situation: situation.label,
     isRoutine: situation.routine,
+    scheduleState: situation.scheduleState,
   };
 }
 

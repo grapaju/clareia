@@ -1,6 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Helmet } from 'react-helmet';
 import { BarChart3, Download, FileText, Trash2, Pencil } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
 import Header from '@/components/Header.jsx';
 import Sidebar from '@/components/Sidebar.jsx';
 import MobileNav from '@/components/MobileNav.jsx';
@@ -35,10 +36,52 @@ import { listDailyWrapUps } from '@/services/dailyWrapUpService.js';
 import { toast } from 'sonner';
 import { formatDurationFriendly, pluralizeCount } from '@/lib/reportFormatting.js';
 import { normalizeTaskStatus, TASK_STATUS } from '@/lib/taskExecution.js';
-import { listProfessionalJourneys } from '@/services/professionalJourneyApiService.js';
-import { buildWorkdayReport } from '@/lib/professionalJourneyLogic.js';
+import {
+  createProfessionalPause,
+  deleteProfessionalActivity,
+  deleteProfessionalJourney,
+  deleteProfessionalPause,
+  listProfessionalJourneys,
+  updateProfessionalActivity,
+  updateProfessionalJourney,
+  updateProfessionalPause
+} from '@/services/professionalJourneyApiService.js';
+import { buildWorkdayReport, getProfessionalWeekRange } from '@/lib/professionalJourneyLogic.js';
 import { buildTaskTimeReport } from '@/lib/taskTimeReportLogic.js';
 import { useProfessionalJourney } from '@/contexts/ProfessionalJourneyContext.jsx';
+import { listWaitingReturns } from '@/services/waitingReturnService.js';
+import { listJourneyReviews } from '@/services/journeyReviewService.js';
+
+const REPORT_TIME_ZONE = 'America/Sao_Paulo';
+
+function dateKeyInTimeZone(referenceDate = new Date(), timeZone = REPORT_TIME_ZONE) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(referenceDate);
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${value.year}-${value.month}-${value.day}`;
+}
+
+function formatDateKeyPtBr(dateKey) {
+  if (!dateKey) return '-';
+  return new Date(`${dateKey}T12:00:00Z`).toLocaleDateString('pt-BR');
+}
+
+function normalizeProjectName(value) {
+  return String(value || '').trim().toLocaleLowerCase('pt-BR');
+}
+
+function wrapUpActivityStatusLabel(value) {
+  const status = String(value || '').trim().toLocaleLowerCase('pt-BR');
+  if (status === 'concluida') return 'Concluída';
+  if (status === 'em_andamento') return 'Em andamento';
+  if (status === 'aguardando_retorno') return 'Aguardando retorno';
+  if (status === 'pausada') return 'Pausada';
+  return 'Concluída';
+}
 
 function formatDateTime(value) {
   if (!value) return '-';
@@ -52,6 +95,15 @@ function formatDateInputValue(value) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate()).toISOString().split('T')[0];
 }
 
+function formatDateTimeInputValue(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const local = new Date(date);
+  local.setMinutes(local.getMinutes() - local.getTimezoneOffset());
+  return local.toISOString().slice(0, 16);
+}
+
 function formatSignedDuration(minutes) {
   const value = Number(minutes || 0);
   if (value === 0) return '0h';
@@ -59,20 +111,36 @@ function formatSignedDuration(minutes) {
 }
 
 export default function ReportsPage() {
+  const [searchParams] = useSearchParams();
   const { currentUser } = useAuth();
   const { tasks } = useTaskContext();
   const { professionalProjects } = useProfessionalJourney();
-  const [projectFilter, setProjectFilter] = useState('all');
+  const requestedProject = String(searchParams.get('project') || '').trim();
+  const reportScope = String(searchParams.get('scope') || '').trim().toLowerCase();
+  const requestedStartDate = String(searchParams.get('startDate') || '').trim();
+  const requestedEndDate = String(searchParams.get('endDate') || '').trim();
+  const requestedPreset = String(searchParams.get('preset') || '').trim().toLowerCase();
+
+  const [projectFilter, setProjectFilter] = useState(requestedProject || 'all');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [taskTypeFilter, setTaskTypeFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [sourceFilter, setSourceFilter] = useState('all');
   const [journeyStatusFilter, setJourneyStatusFilter] = useState('all');
-  const [professionalData, setProfessionalData] = useState({ journeys: [], pauses: [] });
+  const [professionalData, setProfessionalData] = useState({ journeys: [], pauses: [], activities: [] });
   const [isManualTimeOpen, setIsManualTimeOpen] = useState(false);
   const [sessionToDelete, setSessionToDelete] = useState(null);
   const [editingSession, setEditingSession] = useState(null);
+  const [journeyToDelete, setJourneyToDelete] = useState(null);
+  const [pauseToDelete, setPauseToDelete] = useState(null);
+  const [activityToDelete, setActivityToDelete] = useState(null);
+  const [editingJourney, setEditingJourney] = useState(null);
+  const [editingPause, setEditingPause] = useState(null);
+  const [editingActivity, setEditingActivity] = useState(null);
+  const [journeyForm, setJourneyForm] = useState({ startedAt: '', endedAt: '', closingNote: '' });
+  const [pauseForm, setPauseForm] = useState({ startedAt: '', endedAt: '', category: '' });
+  const [activityForm, setActivityForm] = useState({ title: '', category: 'Outro', startedAt: '', endedAt: '', notes: '', reason: '' });
   const [editSessionForm, setEditSessionForm] = useState({
     projectId: '',
     startedAtDate: '',
@@ -82,13 +150,39 @@ export default function ReportsPage() {
 
   const [sessionVersion, setSessionVersion] = useState(0);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [journeyReviews, setJourneyReviews] = useState([]);
+  const [isSavingJourneyEdit, setIsSavingJourneyEdit] = useState(false);
+  const [isSavingPauseEdit, setIsSavingPauseEdit] = useState(false);
+  const [isSavingActivityEdit, setIsSavingActivityEdit] = useState(false);
+  const initializedFiltersRef = useRef(false);
 
   useEffect(() => {
     if (!currentUser?.id) return;
     listProfessionalJourneys()
-      .then((data) => setProfessionalData(data || { journeys: [], pauses: [] }))
-      .catch(() => setProfessionalData({ journeys: [], pauses: [] }));
+      .then((data) => setProfessionalData(data || { journeys: [], pauses: [], activities: [] }))
+      .catch(() => setProfessionalData({ journeys: [], pauses: [], activities: [] }));
+    listJourneyReviews()
+      .then((items) => setJourneyReviews(Array.isArray(items) ? items : []))
+      .catch(() => setJourneyReviews([]));
   }, [currentUser?.id, sessionVersion]);
+
+  useEffect(() => {
+    if (initializedFiltersRef.current) return;
+    const requestedProfile = professionalProjects.find((profile) => normalizeProjectName(profile.name) === normalizeProjectName(requestedProject));
+    const effectiveTimeZone = requestedProfile?.timezone || REPORT_TIME_ZONE;
+    const weekRange = getProfessionalWeekRange(new Date(), effectiveTimeZone);
+
+    setProjectFilter(requestedProfile?.name || requestedProject || 'all');
+    setStartDate(requestedStartDate || weekRange.startDate);
+    setEndDate(requestedEndDate || weekRange.endDate);
+
+    if (requestedPreset === 'current-week') {
+      setStartDate(weekRange.startDate);
+      setEndDate(weekRange.endDate);
+    }
+
+    initializedFiltersRef.current = true;
+  }, [professionalProjects, requestedEndDate, requestedPreset, requestedProject, requestedStartDate]);
 
   const escapeCsv = (value) => {
     const text = String(value ?? '');
@@ -100,7 +194,7 @@ export default function ReportsPage() {
 
   const allSessions = useMemo(() => listWorkSessions(), [sessionVersion]);
   const allHistory = useMemo(() => listAllTaskHistory(), [sessionVersion]);
-  const allWrapUps = useMemo(() => listDailyWrapUps(currentUser?.id), [sessionVersion, currentUser?.id]);
+  const localWrapUps = useMemo(() => listDailyWrapUps(currentUser?.id), [sessionVersion, currentUser?.id]);
 
   const taskById = useMemo(() => {
     const map = new Map();
@@ -136,6 +230,26 @@ export default function ReportsPage() {
     weeklyTargetMinutes: workdayWeeklyTarget,
     timeZone: workdayTimeZone,
   }), [professionalData.pauses, professionalJourneyRows, workdayTimeZone, workdayWeeklyTarget]);
+
+  const pausesByJourneyId = useMemo(() => {
+    const map = new Map();
+    (professionalData.pauses || []).forEach((pause) => {
+      if (!map.has(pause.journeyId)) map.set(pause.journeyId, []);
+      map.get(pause.journeyId).push(pause);
+    });
+    map.forEach((items) => items.sort((left, right) => new Date(left.startedAt) - new Date(right.startedAt)));
+    return map;
+  }, [professionalData.pauses]);
+
+  const activitiesByJourneyId = useMemo(() => {
+    const map = new Map();
+    (professionalData.activities || []).forEach((activity) => {
+      if (!map.has(activity.journeyId)) map.set(activity.journeyId, []);
+      map.get(activity.journeyId).push(activity);
+    });
+    map.forEach((items) => items.sort((left, right) => new Date(left.startedAt) - new Date(right.startedAt)));
+    return map;
+  }, [professionalData.activities]);
 
   const taskTypeOptions = useMemo(() => {
     const set = new Set();
@@ -197,18 +311,37 @@ export default function ReportsPage() {
   }, [completedEvents, taskTimeReport]);
 
   const wrapUpRows = useMemo(() => {
-    return allWrapUps.filter((item) => {
+    const merged = [...journeyReviews];
+    localWrapUps.forEach((item) => {
+      const exists = merged.some((review) => String(review?.journeyId || '') && String(review.journeyId) === String(item.journeyId || ''));
+      if (!exists) merged.push(item);
+    });
+    return merged.filter((item) => {
+      if (projectFilter !== 'all' && normalizeProjectName(item.journeyProjectName) !== normalizeProjectName(projectFilter)) return false;
       if (startDate && new Date(`${item.date}T00:00:00`) < new Date(`${startDate}T00:00:00`)) return false;
       if (endDate && new Date(`${item.date}T23:59:59`) > new Date(`${endDate}T23:59:59`)) return false;
       return true;
     });
-  }, [allWrapUps, startDate, endDate]);
+  }, [endDate, journeyReviews, localWrapUps, projectFilter, startDate]);
+
+  const waitingReturnRows = useMemo(() => {
+    return listWaitingReturns().filter((item) => {
+      if (projectFilter !== 'all' && normalizeProjectName(item.project) !== normalizeProjectName(projectFilter)) return false;
+      const candidateDate = String(item.nextFollowUpDate || item.reminderDate || item.createdAt || '').slice(0, 10);
+      if (startDate && candidateDate && candidateDate < startDate) return false;
+      if (endDate && candidateDate && candidateDate > endDate) return false;
+      return true;
+    });
+  }, [endDate, projectFilter, sessionVersion, startDate]);
 
   const wrapUpTotals = useMemo(() => {
     const daysClosed = wrapUpRows.length;
     const declaredHours = wrapUpRows.reduce((sum, item) => sum + Number(item.loggedHours || 0), 0);
-    const withImprovements = wrapUpRows.filter((item) => String(item.improvementIdea || '').trim()).length;
-    const withWaitingReturn = wrapUpRows.filter((item) => String(item.waitingReturn || '').trim()).length;
+    const withImprovements = wrapUpRows.filter((item) => String(item.concluded || '').trim()).length;
+    const withWaitingReturn = wrapUpRows.filter((item) => (
+      String(item.waitingExternal || item.waitingReturn || '').trim()
+      || (Array.isArray(item.activities) && item.activities.some((activity) => ['aguardando_retorno', 'pausada'].includes(String(activity.status || '').trim())))
+    )).length;
 
     return {
       daysClosed,
@@ -240,6 +373,14 @@ export default function ReportsPage() {
     setSessionToDelete(null);
     setSessionVersion((value) => value + 1);
     toast.success('Sessão removida.');
+  };
+
+  const handleApplyCurrentWeekPreset = () => {
+    const selectedProfile = professionalProjects.find((profile) => profile.name === projectFilter);
+    const timeZone = selectedProfile?.timezone || REPORT_TIME_ZONE;
+    const weekRange = getProfessionalWeekRange(new Date(), timeZone);
+    setStartDate(weekRange.startDate);
+    setEndDate(weekRange.endDate);
   };
 
   const openEditSession = (session) => {
@@ -276,6 +417,170 @@ export default function ReportsPage() {
     setEditingSession(null);
     setSessionVersion((value) => value + 1);
     toast.success('Sessão atualizada.');
+  };
+
+  const openJourneyEditor = (journey) => {
+    if (!journey?.id) return;
+    setEditingJourney(journey);
+    setJourneyForm({
+      startedAt: formatDateTimeInputValue(journey.startedAt),
+      endedAt: formatDateTimeInputValue(journey.endedAt),
+      closingNote: journey.closingNote || ''
+    });
+  };
+
+  const handleSaveJourneyEdit = async () => {
+    if (!editingJourney?.id) return;
+    if (!journeyForm.startedAt || !journeyForm.endedAt) {
+      toast.error('Informe entrada e saída para corrigir a jornada.');
+      return;
+    }
+    if (new Date(journeyForm.endedAt) <= new Date(journeyForm.startedAt)) {
+      toast.error('A saída precisa ser posterior à entrada.');
+      return;
+    }
+
+    setIsSavingJourneyEdit(true);
+    try {
+      await updateProfessionalJourney(editingJourney.id, {
+        startedAt: new Date(journeyForm.startedAt).toISOString(),
+        endedAt: new Date(journeyForm.endedAt).toISOString(),
+        closingNote: journeyForm.closingNote
+      });
+      setEditingJourney(null);
+      setSessionVersion((value) => value + 1);
+      toast.success('Jornada atualizada.');
+    } catch (error) {
+      console.error(error);
+      toast.error(error?.message || 'Não consegui atualizar a jornada.');
+    } finally {
+      setIsSavingJourneyEdit(false);
+    }
+  };
+
+  const handleDeleteJourney = async () => {
+    if (!journeyToDelete?.id) return;
+    try {
+      await deleteProfessionalJourney(journeyToDelete.id);
+      setJourneyToDelete(null);
+      setSessionVersion((value) => value + 1);
+      toast.success('Lançamento de jornada removido.');
+    } catch (error) {
+      console.error(error);
+      toast.error(error?.message || 'Não consegui remover este lançamento de jornada.');
+    }
+  };
+
+  const openPauseEditor = (journey, pause = null) => {
+    setEditingPause({ journeyId: journey.id, pause });
+    setPauseForm({
+      startedAt: formatDateTimeInputValue(pause?.startedAt || ''),
+      endedAt: formatDateTimeInputValue(pause?.endedAt || ''),
+      category: pause?.category || ''
+    });
+  };
+
+  const handleSavePauseEdit = async () => {
+    if (!editingPause?.journeyId) return;
+    if (!pauseForm.startedAt || !pauseForm.endedAt) {
+      toast.error('Informe início e fim da pausa.');
+      return;
+    }
+    if (new Date(pauseForm.endedAt) <= new Date(pauseForm.startedAt)) {
+      toast.error('O fim da pausa deve ser posterior ao início.');
+      return;
+    }
+    setIsSavingPauseEdit(true);
+    try {
+      const payload = {
+        startedAt: new Date(pauseForm.startedAt).toISOString(),
+        endedAt: new Date(pauseForm.endedAt).toISOString(),
+        category: pauseForm.category
+      };
+      if (editingPause.pause?.id) {
+        await updateProfessionalPause(editingPause.pause.id, payload);
+      } else {
+        await createProfessionalPause(editingPause.journeyId, payload);
+      }
+      setEditingPause(null);
+      setSessionVersion((value) => value + 1);
+      toast.success(editingPause.pause?.id ? 'Pausa atualizada.' : 'Pausa adicionada.');
+    } catch (error) {
+      console.error(error);
+      toast.error(error?.message || 'Não consegui salvar a pausa.');
+    } finally {
+      setIsSavingPauseEdit(false);
+    }
+  };
+
+  const handleDeletePause = async () => {
+    if (!pauseToDelete?.id) return;
+    try {
+      await deleteProfessionalPause(pauseToDelete.id);
+      setPauseToDelete(null);
+      setSessionVersion((value) => value + 1);
+      toast.success('Registro de pausa removido.');
+    } catch (error) {
+      console.error(error);
+      toast.error(error?.message || 'Não consegui remover esta pausa.');
+    }
+  };
+
+  const openActivityEditor = (activity) => {
+    if (!activity?.id) return;
+    setEditingActivity(activity);
+    setActivityForm({
+      title: activity.title || '',
+      category: activity.category || 'Outro',
+      startedAt: formatDateTimeInputValue(activity.startedAt),
+      endedAt: formatDateTimeInputValue(activity.endedAt),
+      notes: activity.notes || '',
+      reason: ''
+    });
+  };
+
+  const handleSaveActivityEdit = async () => {
+    if (!editingActivity?.id) return;
+    if (!activityForm.title || !activityForm.startedAt || !activityForm.endedAt) {
+      toast.error('Preencha título, início e fim da atividade.');
+      return;
+    }
+    if (new Date(activityForm.endedAt) <= new Date(activityForm.startedAt)) {
+      toast.error('O fim da atividade deve ser posterior ao início.');
+      return;
+    }
+    setIsSavingActivityEdit(true);
+    try {
+      await updateProfessionalActivity(editingActivity.id, {
+        title: activityForm.title,
+        category: activityForm.category,
+        startedAt: new Date(activityForm.startedAt).toISOString(),
+        endedAt: new Date(activityForm.endedAt).toISOString(),
+        notes: activityForm.notes,
+        reason: activityForm.reason
+      });
+      setEditingActivity(null);
+      setSessionVersion((value) => value + 1);
+      toast.success('Atividade atualizada.');
+    } catch (error) {
+      console.error(error);
+      toast.error(error?.message || 'Não consegui atualizar a atividade.');
+    } finally {
+      setIsSavingActivityEdit(false);
+    }
+  };
+
+  const handleDeleteActivity = async () => {
+    if (!activityToDelete?.id) return;
+    try {
+      await deleteProfessionalActivity(activityToDelete.id);
+      setActivityToDelete(null);
+      setSessionVersion((value) => value + 1);
+      toast.success('Atividade removida.');
+    } catch (error) {
+      console.error(error);
+      toast.error(error?.message || 'Não consegui remover esta atividade.');
+    }
   };
 
   const downloadCsv = (content, fileName) => {
@@ -357,6 +662,39 @@ export default function ReportsPage() {
       });
     }
 
+    lines.push('');
+    lines.push('Encerramentos do período:');
+    if (wrapUpRows.length === 0) {
+      lines.push('- Sem encerramentos no período.');
+    } else {
+      wrapUpRows.forEach((row) => {
+        lines.push(`- ${formatDateKeyPtBr(row.date)} (${row.journeyProjectName || 'Sem projeto'})`);
+        if (row.concluded) lines.push(`  Concluído: ${row.concluded}`);
+        if (row.continueContext || row.paused) lines.push(`  A continuar: ${row.continueContext || row.paused}`);
+        if (row.waitingExternal || row.waitingReturn) lines.push(`  Aguardando retorno: ${row.waitingExternal || row.waitingReturn}`);
+        if (Array.isArray(row.activities) && row.activities.length > 0) {
+          row.activities.forEach((activity) => {
+            lines.push(`  - ${activity.description || 'Atividade'} [${wrapUpActivityStatusLabel(activity.status)}]`);
+            if (activity.projectOrFront) lines.push(`    Projeto/frente: ${activity.projectOrFront}`);
+            if (activity.nextStep) lines.push(`    Próximo passo: ${activity.nextStep}`);
+            if (activity.waitingOn) lines.push(`    Aguardando: ${activity.waitingOn}`);
+            if (Number(activity.durationMinutes || 0) > 0) lines.push(`    Tempo: ${formatDurationFriendly(activity.durationMinutes)}`);
+            if (activity.deliveryLink) lines.push(`    Entrega: ${activity.deliveryLink}`);
+          });
+        }
+      });
+    }
+
+    lines.push('');
+    lines.push('Aguardando retorno:');
+    if (waitingReturnRows.length === 0) {
+      lines.push('- Sem pendências no período.');
+    } else {
+      waitingReturnRows.forEach((item) => {
+        lines.push(`- ${item.project || 'Sem projeto'}: ${item.waitingFor || item.title || 'Sem descrição'} (${item.status || 'Aguardando retorno'})`);
+      });
+    }
+
     try {
       await navigator.clipboard.writeText(lines.join('\n'));
       toast.success('Resumo copiado.');
@@ -367,10 +705,24 @@ export default function ReportsPage() {
   };
 
   const handleExportPdf = async () => {
+    const pendingReviewDays = wrapUpRows.filter((row) => String(row.status || '').trim().toLowerCase() !== 'finalized');
+    if (pendingReviewDays.length > 0) {
+      const proceed = window.confirm(
+        `Há ${pendingReviewDays.length} dia(s) com revisão pendente neste período. Deseja exportar apenas com os registros já confirmados?`
+      );
+      if (!proceed) return;
+    }
     setIsExportingPdf(true);
     try {
       const { jsPDF } = await import('jspdf');
       const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+      const generatedAt = new Date();
+      const fileDateKey = dateKeyInTimeZone(generatedAt, REPORT_TIME_ZONE);
+      const generatedAtLabel = new Intl.DateTimeFormat('pt-BR', {
+        timeZone: REPORT_TIME_ZONE,
+        dateStyle: 'short',
+        timeStyle: 'short'
+      }).format(generatedAt);
 
       const pageWidth = doc.internal.pageSize.getWidth();
       const pageHeight = doc.internal.pageSize.getHeight();
@@ -405,8 +757,13 @@ export default function ReportsPage() {
         cursorY += 4;
       };
 
-      writeLine('Relatórios de jornada e tarefas - Clareia', { fontSize: 16, bold: true });
-      writeLine(`Gerado em: ${new Date().toLocaleString('pt-BR')}`);
+      writeLine(
+        reportScope === 'journey' && projectFilter !== 'all'
+          ? `Relatório semanal — ${projectFilter}`
+          : 'Relatórios de jornada e tarefas - Clareia',
+        { fontSize: 16, bold: true }
+      );
+      writeLine(`Gerado em: ${generatedAtLabel} (${REPORT_TIME_ZONE})`);
       writeLine(`Período: ${startDate || 'início'} até ${endDate || 'hoje'}`);
       writeLine(`Projeto: ${projectFilter === 'all' ? 'Todos' : projectFilter}`);
       writeLine(`Tipo de tarefa: ${taskTypeFilter === 'all' ? 'Todos' : taskTypeFilter}`);
@@ -451,7 +808,46 @@ export default function ReportsPage() {
         });
       }
 
-      doc.save(`clareia-relatorio-horas-${new Date().toISOString().split('T')[0]}.pdf`);
+      divider();
+      writeLine('C) Encerramento diário', { fontSize: 12, bold: true });
+      if (wrapUpRows.length === 0) {
+        writeLine('Sem encerramentos no período selecionado.');
+      } else {
+        wrapUpRows.forEach((row) => {
+          writeLine(`${formatDateKeyPtBr(row.date)} | ${row.journeyProjectName || 'Sem projeto'}`, { bold: true });
+          if (row.concluded) writeLine(`Concluído: ${row.concluded}`);
+          if (row.continueContext || row.paused) writeLine(`A continuar: ${row.continueContext || row.paused}`);
+          if (row.waitingExternal || row.waitingReturn) writeLine(`Aguardando retorno: ${row.waitingExternal || row.waitingReturn}`);
+          if (Array.isArray(row.activities) && row.activities.length > 0) {
+            row.activities.forEach((activity) => {
+              writeLine(`- ${activity.description || 'Atividade'} [${wrapUpActivityStatusLabel(activity.status)}]`);
+              if (activity.projectOrFront) writeLine(`  Projeto/frente: ${activity.projectOrFront}`);
+              if (activity.nextStep) writeLine(`  Próximo passo: ${activity.nextStep}`);
+              if (activity.waitingOn) writeLine(`  Aguardando: ${activity.waitingOn}`);
+              if (Number(activity.durationMinutes || 0) > 0) writeLine(`  Tempo: ${formatDurationFriendly(activity.durationMinutes)}`);
+              if (activity.deliveryLink) writeLine(`  Entrega: ${activity.deliveryLink}`);
+            });
+          }
+          cursorY += 1;
+        });
+      }
+
+      divider();
+      writeLine('D) Aguardando retorno', { fontSize: 12, bold: true });
+      if (waitingReturnRows.length === 0) {
+        writeLine('Sem pendências para o contexto selecionado.');
+      } else {
+        waitingReturnRows.forEach((item) => {
+          writeLine(`${item.project || 'Sem projeto'} | ${item.waitingFor || item.title || 'Sem descrição'}`, { bold: true });
+          writeLine(`Status: ${item.status || 'Aguardando retorno'}`);
+          if (item.contactName) writeLine(`De quem: ${item.contactName}`);
+          if (item.nextFollowUp) writeLine(`Próxima ação: ${item.nextFollowUp}`);
+          if (item.nextFollowUpDate || item.reminderDate) writeLine(`Desde/lembrar em: ${formatDateKeyPtBr(item.nextFollowUpDate || item.reminderDate)}`);
+          cursorY += 1;
+        });
+      }
+
+      doc.save(`clareia-relatorio-horas-${fileDateKey}.pdf`);
       toast.success('PDF exportado.');
     } catch (error) {
       console.error(error);
@@ -463,7 +859,7 @@ export default function ReportsPage() {
 
   return (
     <>
-      <Helmet><title>Relatórios - Clareia</title></Helmet>
+      <Helmet><title>{reportScope === 'journey' && projectFilter !== 'all' ? `Histórico da jornada — ${projectFilter} - Clareia` : 'Relatórios - Clareia'}</title></Helmet>
       <div className="min-h-screen bg-background">
         <Header />
         <div className="flex">
@@ -473,8 +869,14 @@ export default function ReportsPage() {
               <div className="flex items-center gap-3">
                 <BarChart3 className="w-8 h-8 text-primary" />
                 <div>
-                  <h1 className="text-3xl font-medium text-foreground">Relatórios</h1>
-                  <p className="text-sm text-muted-foreground">Carga horária e execução dos projetos são apresentadas separadamente.</p>
+                  <h1 className="text-3xl font-medium text-foreground">
+                    {reportScope === 'journey' && projectFilter !== 'all' ? `Histórico da jornada — ${projectFilter}` : 'Relatórios'}
+                  </h1>
+                  <p className="text-sm text-muted-foreground">
+                    {reportScope === 'journey' && projectFilter !== 'all'
+                      ? `Contexto do projeto ${projectFilter}. Período: ${startDate || '-'} até ${endDate || '-'}`
+                      : 'Carga horária e execução dos projetos são apresentadas separadamente.'}
+                  </p>
                 </div>
               </div>
 
@@ -536,6 +938,11 @@ export default function ReportsPage() {
 
                   <div className="flex flex-wrap gap-2">
                     <Button onClick={() => setIsManualTimeOpen(true)}>Adicionar tempo manual</Button>
+                    {projectFilter !== 'all' && (
+                      <Button variant="outline" onClick={handleApplyCurrentWeekPreset}>
+                        Relatório semanal — {projectFilter}
+                      </Button>
+                    )}
                     <Button variant="outline" onClick={handleExportWorkdayCsv}>
                       <Download className="w-4 h-4 mr-2" /> CSV da jornada
                     </Button>
@@ -573,6 +980,101 @@ export default function ReportsPage() {
                           <span className="text-right text-muted-foreground">{formatDurationFriendly(row.workdayDuration)} · pausas {formatDurationFriendly(row.pauseDuration)} · {pluralizeCount(row.closedWorkdays, 'encerramento', 'encerramentos')}</span>
                         </div>
                       ))}
+                    </CardContent>
+                  </Card>
+
+                  <Card>
+                    <CardContent className="p-6 space-y-3">
+                      <h3 className="font-medium text-foreground">Lançamentos da jornada</h3>
+                      <p className="text-xs text-muted-foreground">
+                        Ações distintas: excluir registro de tempo remove apenas este lançamento; excluir tarefa permanece na seção de tarefas.
+                      </p>
+                      {professionalJourneyRows.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">Sem lançamentos para os filtros atuais.</p>
+                      ) : professionalJourneyRows.map((journey) => {
+                        const pauses = pausesByJourneyId.get(journey.id) || [];
+                        const activities = activitiesByJourneyId.get(journey.id) || [];
+                        return (
+                          <details key={journey.id} className="rounded-lg border border-border bg-background p-3">
+                            <summary className="cursor-pointer list-none">
+                              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                                <div>
+                                  <p className="text-sm font-medium text-foreground">{journey.projectName}</p>
+                                  <p className="text-xs text-muted-foreground">
+                                    {formatDateTime(journey.startedAt)} até {formatDateTime(journey.endedAt)} · {formatDurationFriendly(journey.netMinutes)}
+                                  </p>
+                                </div>
+                                <div className="flex gap-2">
+                                  <Button size="sm" variant="outline" onClick={(event) => { event.preventDefault(); openJourneyEditor(journey); }}>
+                                    <Pencil className="h-4 w-4" />
+                                  </Button>
+                                  <Button size="sm" variant="outline" className="text-destructive" onClick={(event) => { event.preventDefault(); setJourneyToDelete(journey); }}>
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              </div>
+                            </summary>
+                            <div className="mt-3 space-y-3">
+                              <div>
+                                <div className="mb-1 flex items-center justify-between">
+                                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Pausas</p>
+                                  <Button size="sm" variant="outline" onClick={() => openPauseEditor(journey, null)}>Adicionar pausa</Button>
+                                </div>
+                                {pauses.length === 0 ? (
+                                  <p className="text-xs text-muted-foreground">Sem pausas registradas.</p>
+                                ) : (
+                                  <div className="space-y-2">
+                                    {pauses.map((pause) => (
+                                      <div key={pause.id} className="flex items-center justify-between rounded border border-border px-3 py-2">
+                                        <div>
+                                          <p className="text-sm text-foreground">{pause.category || 'Pausa'}</p>
+                                          <p className="text-xs text-muted-foreground">{formatDateTime(pause.startedAt)} até {formatDateTime(pause.endedAt)}</p>
+                                        </div>
+                                        <div className="flex gap-2">
+                                          <Button size="sm" variant="ghost" onClick={() => openPauseEditor(journey, pause)}>
+                                            <Pencil className="h-4 w-4" />
+                                          </Button>
+                                          <Button size="sm" variant="ghost" className="text-destructive" onClick={() => setPauseToDelete(pause)}>
+                                            <Trash2 className="h-4 w-4" />
+                                          </Button>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+
+                              <div>
+                                <p className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Atividades</p>
+                                {activities.length === 0 ? (
+                                  <p className="text-xs text-muted-foreground">Sem atividades vinculadas.</p>
+                                ) : (
+                                  <div className="space-y-2">
+                                    {activities.map((activity) => (
+                                      <div key={activity.id} className="flex items-center justify-between rounded border border-border px-3 py-2">
+                                        <div>
+                                          <p className="text-sm text-foreground">{activity.title}</p>
+                                          <p className="text-xs text-muted-foreground">
+                                            {activity.category} · {formatDateTime(activity.startedAt)} até {formatDateTime(activity.endedAt)}
+                                          </p>
+                                        </div>
+                                        <div className="flex gap-2">
+                                          <Button size="sm" variant="ghost" onClick={() => openActivityEditor(activity)}>
+                                            <Pencil className="h-4 w-4" />
+                                          </Button>
+                                          <Button size="sm" variant="ghost" className="text-destructive" onClick={() => setActivityToDelete(activity)}>
+                                            <Trash2 className="h-4 w-4" />
+                                          </Button>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </details>
+                        );
+                      })}
                     </CardContent>
                   </Card>
                 </section>
@@ -678,7 +1180,7 @@ export default function ReportsPage() {
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                     <Card className="bg-background border-border"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Dias encerrados</p><p className="text-2xl font-medium text-foreground">{wrapUpTotals.daysClosed}</p></CardContent></Card>
                     <Card className="bg-background border-border"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Horas declaradas</p><p className="text-2xl font-medium text-foreground">{wrapUpTotals.declaredHours.toFixed(1)}h</p></CardContent></Card>
-                    <Card className="bg-background border-border"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Com melhorias registradas</p><p className="text-2xl font-medium text-foreground">{wrapUpTotals.withImprovements}</p></CardContent></Card>
+                    <Card className="bg-background border-border"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Com atividades concluídas</p><p className="text-2xl font-medium text-foreground">{wrapUpTotals.withImprovements}</p></CardContent></Card>
                     <Card className="bg-background border-border"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Com aguardando retorno</p><p className="text-2xl font-medium text-foreground">{wrapUpTotals.withWaitingReturn}</p></CardContent></Card>
                   </div>
 
@@ -690,15 +1192,60 @@ export default function ReportsPage() {
                         <div key={row.id} className="rounded-xl border border-border p-4 bg-background space-y-2">
                           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
                             <p className="text-sm font-medium text-foreground">{new Date(`${row.date}T12:00:00`).toLocaleDateString('pt-BR')}</p>
-                            <p className="text-xs text-muted-foreground">Criado em {formatDateTime(row.createdAt)}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {String(row.status || '').toLowerCase() !== 'finalized' ? 'Revisão pendente · ' : ''}
+                              Criado em {formatDateTime(row.createdAt || row.created)}
+                            </p>
                           </div>
+                          {row.journeyProjectName && <p className="text-xs text-muted-foreground">Projeto: {row.journeyProjectName}</p>}
                           {row.concluded && <p className="text-sm text-foreground"><span className="font-medium">Concluído:</span> {row.concluded}</p>}
-                          {row.paused && <p className="text-sm text-foreground"><span className="font-medium">Pausado:</span> {row.paused}</p>}
-                          {row.waitingReturn && <p className="text-sm text-foreground"><span className="font-medium">Aguardando retorno:</span> {row.waitingReturn}</p>}
-                          {row.improvementIdea && <p className="text-sm text-foreground"><span className="font-medium">Melhoria guardada:</span> {row.improvementIdea}</p>}
+                          {(row.continueContext || row.paused) && <p className="text-sm text-foreground"><span className="font-medium">A continuar:</span> {row.continueContext || row.paused}</p>}
+                          {(row.waitingExternal || row.waitingReturn) && <p className="text-sm text-foreground"><span className="font-medium">Aguardando retorno:</span> {row.waitingExternal || row.waitingReturn}</p>}
+                          {Array.isArray(row.activities) && row.activities.length > 0 && (
+                            <div className="space-y-2">
+                              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Atividades organizadas</p>
+                              {row.activities.map((activity) => (
+                                <div key={activity.id || `${row.id}-${activity.description}`} className="rounded-md border border-border/70 p-2 text-sm">
+                                  <p className="font-medium text-foreground">{activity.description || 'Atividade'}</p>
+                                  <p className="text-xs text-muted-foreground">{wrapUpActivityStatusLabel(activity.status)}</p>
+                                  {activity.projectOrFront && <p className="text-xs text-muted-foreground">Projeto/frente: {activity.projectOrFront}</p>}
+                                  {activity.nextStep && <p className="text-xs text-muted-foreground">Próximo passo: {activity.nextStep}</p>}
+                                  {activity.waitingOn && <p className="text-xs text-muted-foreground">Aguardando: {activity.waitingOn}</p>}
+                                  {Number(activity.durationMinutes || 0) > 0 && <p className="text-xs text-muted-foreground">Tempo: {formatDurationFriendly(activity.durationMinutes)}</p>}
+                                  {activity.deliveryLink && <p className="text-xs text-muted-foreground">Entrega: {activity.deliveryLink}</p>}
+                                </div>
+                              ))}
+                            </div>
+                          )}
                           {Number(row.loggedHours || 0) > 0 && (
                             <p className="text-sm text-foreground"><span className="font-medium">Horas registradas:</span> {Number(row.loggedHours || 0).toFixed(1)}h</p>
                           )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card className="bg-card border-border shadow-sm">
+                <CardContent className="p-6 space-y-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <h2 className="text-lg font-medium text-foreground">Aguardando retorno</h2>
+                    <p className="text-xs text-muted-foreground">Pendências por projeto e período selecionados</p>
+                  </div>
+                  {waitingReturnRows.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">Não há pendências para os filtros atuais.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {waitingReturnRows.slice(0, 15).map((item) => (
+                        <div key={item.id} className="rounded-xl border border-border bg-background p-4 space-y-1">
+                          <p className="text-sm font-medium text-foreground">{item.waitingFor || item.title || 'Sem descrição'}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {item.project || 'Sem projeto'} · {item.status || 'Aguardando retorno'}
+                          </p>
+                          {item.contactName && <p className="text-sm text-foreground"><span className="font-medium">De quem:</span> {item.contactName}</p>}
+                          {(item.nextFollowUp || item.observations) && <p className="text-sm text-foreground"><span className="font-medium">Próximo passo:</span> {item.nextFollowUp || item.observations}</p>}
+                          {(item.nextFollowUpDate || item.reminderDate) && <p className="text-xs text-muted-foreground">Data: {formatDateKeyPtBr(item.nextFollowUpDate || item.reminderDate)}</p>}
                         </div>
                       ))}
                     </div>
@@ -726,6 +1273,11 @@ export default function ReportsPage() {
             <AlertDialogTitle>Excluir sessão?</AlertDialogTitle>
             <AlertDialogDescription>
               Esta ação remove o registro de tempo permanentemente.
+              {sessionToDelete?.id && (
+                <span className="mt-2 block text-xs text-muted-foreground">
+                  ID: {sessionToDelete.id} · {formatDateTime(sessionToDelete.startedAt)} · {formatDurationFriendly(sessionToDelete.durationMinutes)} · {sessionToDelete.source === 'manual' ? 'manual' : 'timer'}
+                </span>
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -736,6 +1288,156 @@ export default function ReportsPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <AlertDialog open={Boolean(journeyToDelete)} onOpenChange={(open) => !open && setJourneyToDelete(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Excluir lançamento de jornada?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Esta ação remove somente este lançamento de jornada (entrada/saída/pausas/atividades vinculadas). Não exclui tarefas.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDeleteJourney} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Excluir lançamento
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={Boolean(pauseToDelete)} onOpenChange={(open) => !open && setPauseToDelete(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Excluir pausa?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Esta ação remove apenas este registro de pausa e recalcula a jornada.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDeletePause} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Excluir pausa
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={Boolean(activityToDelete)} onOpenChange={(open) => !open && setActivityToDelete(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remover atividade do registro diário?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Esta ação remove apenas a atividade deste relato. A tarefa original permanece.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDeleteActivity} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Remover atividade
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <Dialog open={Boolean(editingJourney)} onOpenChange={(open) => !open && setEditingJourney(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Corrigir entrada e saída da jornada</DialogTitle>
+            <DialogDescription>Atualize horário de entrada, saída e texto de encerramento.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label>Entrada</Label>
+                <Input type="datetime-local" value={journeyForm.startedAt} onChange={(event) => setJourneyForm((current) => ({ ...current, startedAt: event.target.value }))} />
+              </div>
+              <div className="space-y-1">
+                <Label>Saída</Label>
+                <Input type="datetime-local" value={journeyForm.endedAt} onChange={(event) => setJourneyForm((current) => ({ ...current, endedAt: event.target.value }))} />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label>Encerramento diário</Label>
+              <Input value={journeyForm.closingNote} onChange={(event) => setJourneyForm((current) => ({ ...current, closingNote: event.target.value }))} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditingJourney(null)}>Cancelar</Button>
+            <Button onClick={handleSaveJourneyEdit} disabled={isSavingJourneyEdit}>{isSavingJourneyEdit ? 'Salvando...' : 'Salvar'}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(editingPause)} onOpenChange={(open) => !open && setEditingPause(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{editingPause?.pause?.id ? 'Editar pausa' : 'Adicionar pausa'}</DialogTitle>
+            <DialogDescription>A pausa precisa estar dentro da jornada e sem sobreposição.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <Label>Categoria</Label>
+              <Input value={pauseForm.category} onChange={(event) => setPauseForm((current) => ({ ...current, category: event.target.value }))} />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label>Início</Label>
+                <Input type="datetime-local" value={pauseForm.startedAt} onChange={(event) => setPauseForm((current) => ({ ...current, startedAt: event.target.value }))} />
+              </div>
+              <div className="space-y-1">
+                <Label>Fim</Label>
+                <Input type="datetime-local" value={pauseForm.endedAt} onChange={(event) => setPauseForm((current) => ({ ...current, endedAt: event.target.value }))} />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditingPause(null)}>Cancelar</Button>
+            <Button onClick={handleSavePauseEdit} disabled={isSavingPauseEdit}>{isSavingPauseEdit ? 'Salvando...' : 'Salvar pausa'}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(editingActivity)} onOpenChange={(open) => !open && setEditingActivity(null)}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Editar atividade do registro diário</DialogTitle>
+            <DialogDescription>Atualize descrição, categoria, intervalo e observações.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <Label>Descrição</Label>
+              <Input value={activityForm.title} onChange={(event) => setActivityForm((current) => ({ ...current, title: event.target.value }))} />
+            </div>
+            <div className="space-y-1">
+              <Label>Categoria</Label>
+              <Input value={activityForm.category} onChange={(event) => setActivityForm((current) => ({ ...current, category: event.target.value }))} />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label>Início</Label>
+                <Input type="datetime-local" value={activityForm.startedAt} onChange={(event) => setActivityForm((current) => ({ ...current, startedAt: event.target.value }))} />
+              </div>
+              <div className="space-y-1">
+                <Label>Fim</Label>
+                <Input type="datetime-local" value={activityForm.endedAt} onChange={(event) => setActivityForm((current) => ({ ...current, endedAt: event.target.value }))} />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label>Observações</Label>
+              <Input value={activityForm.notes} onChange={(event) => setActivityForm((current) => ({ ...current, notes: event.target.value }))} />
+            </div>
+            <div className="space-y-1">
+              <Label>Motivo da correção (opcional)</Label>
+              <Input value={activityForm.reason} onChange={(event) => setActivityForm((current) => ({ ...current, reason: event.target.value }))} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditingActivity(null)}>Cancelar</Button>
+            <Button onClick={handleSaveActivityEdit} disabled={isSavingActivityEdit}>{isSavingActivityEdit ? 'Salvando...' : 'Salvar atividade'}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={Boolean(editingSession)} onOpenChange={(open) => !open && setEditingSession(null)}>
         <DialogContent className="max-w-lg">

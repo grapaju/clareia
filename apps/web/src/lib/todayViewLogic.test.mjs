@@ -91,11 +91,20 @@ test('capacidade distingue sobra, limite exato, quase cheia e excedida', () => {
 });
 
 test('situação atrasada não é rotulada como hoje à tarde', () => {
-  assert.deepEqual(getTodayTaskSituation({ scheduledDate: '2026-08-31', scheduledPeriod: 'tarde' }, referenceDate), {
-    label: 'Atrasada',
-    routine: false,
-  });
+  const overdue = getTodayTaskSituation({ scheduledDate: '2026-08-31', scheduledPeriod: 'tarde' }, referenceDate);
+  assert.equal(overdue.label, 'Atrasada');
+  assert.equal(overdue.routine, false);
   assert.equal(getTodayTaskSituation({ scheduledDate: '2026-09-01', scheduledPeriod: 'tarde' }, referenceDate).label, 'Hoje à tarde');
+});
+
+test('período planejado que já passou vira item para reorganizar', () => {
+  const nightReference = new Date(2026, 9, 12, 21, 45);
+  const morningTask = getTodayTaskSituation(
+    { scheduledDate: '2026-10-12', scheduledPeriod: 'manhã' },
+    nightReference
+  );
+  assert.equal(morningTask.label, 'Planejada para hoje de manhã · a reorganizar');
+  assert.equal(morningTask.scheduleState?.isPastPeriodToday, true);
 });
 
 test('filtro informa subconjunto sem alterar os grupos canônicos', () => {

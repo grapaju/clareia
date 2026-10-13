@@ -1,3 +1,5 @@
+import { normalizeWrapUpActivities } from '../lib/professionalJourneyWrapUpLogic.js';
+
 const DAILY_WRAP_UP_PREFIX = 'clareia_daily_wrap_up';
 
 function safeParse(value, fallback) {
@@ -70,22 +72,40 @@ export function saveDailyWrapUp(userId, payload = {}) {
   const all = listDailyWrapUps(userId);
   const continueContext = String(payload.continueContext ?? payload.paused ?? '').trim();
   const waitingExternal = String(payload.waitingExternal ?? payload.waitingReturn ?? '').trim();
+  const normalizedJourneyId = String(payload.journeyId || '').trim() || null;
+  const normalizedProjectName = String(payload.journeyProjectName || '').trim();
+  const date = payload.date || toDateIso();
+  const existingIndex = all.findIndex((item) => (
+    String(item?.date || '') === date
+    && (
+      (normalizedJourneyId && String(item?.journeyId || '') === normalizedJourneyId)
+      || (!normalizedJourneyId && normalizedProjectName && String(item?.journeyProjectName || '').trim().toLocaleLowerCase('pt-BR') === normalizedProjectName.toLocaleLowerCase('pt-BR'))
+    )
+  ));
+  const previous = existingIndex >= 0 ? all[existingIndex] : null;
+
   const record = {
-    id: `wrapup-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    id: previous?.id || `wrapup-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     date: payload.date || toDateIso(),
     concluded: String(payload.concluded || '').trim(),
     continueContext,
     waitingExternal,
     paused: continueContext,
     waitingReturn: waitingExternal,
+    activities: Object.hasOwn(payload || {}, 'activities')
+      ? normalizeWrapUpActivities(payload.activities)
+      : (Array.isArray(previous?.activities) ? normalizeWrapUpActivities(previous.activities) : []),
     endedAt: payload.endedAt || null,
-    journeyId: String(payload.journeyId || '').trim() || null,
-    journeyProjectName: String(payload.journeyProjectName || '').trim(),
-    resumeState: 'pending',
-    createdAt: new Date().toISOString()
+    journeyId: normalizedJourneyId,
+    journeyProjectName: normalizedProjectName,
+    resumeState: previous?.resumeState || 'pending',
+    createdAt: previous?.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString()
   };
 
-  const next = [record, ...all].slice(0, 90);
+  const next = existingIndex >= 0
+    ? [record, ...all.filter((_, index) => index !== existingIndex)].slice(0, 90)
+    : [record, ...all].slice(0, 90);
   window.localStorage.setItem(storageKey(userId), JSON.stringify(next));
   return record;
 }

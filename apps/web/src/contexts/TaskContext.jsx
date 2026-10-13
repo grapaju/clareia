@@ -16,7 +16,14 @@ import {
 import { getNextRecurringDate, getStatusForScheduledDate, resetMicrotasks } from '@/lib/recurrenceLogic.js';
 import { appendProjectHistory } from '@/services/projectHistoryService.js';
 import { addTaskHistoryEvent } from '@/services/taskHistoryService.js';
-import { addManualWorkSession, finishActiveWorkSessionForTask, getActiveWorkSession, listWorkSessions, startTimerWorkSession } from '@/services/workSessionService.js';
+import {
+  addManualWorkSession,
+  deleteWorkSession,
+  finishActiveWorkSessionForTask,
+  getActiveWorkSession,
+  listWorkSessions,
+  startTimerWorkSession
+} from '@/services/workSessionService.js';
 import {
   completeAllMicrotasks,
   getTaskMicrotaskProgress,
@@ -352,12 +359,16 @@ export function TaskProvider({ children }) {
     setSelectedTask((current) => current?.id === id ? null : current);
     try {
       await deleteTaskInApi(id);
+      const linkedSessions = listWorkSessions().filter((session) => session.taskId === id);
+      linkedSessions.forEach((session) => deleteWorkSession(session.id));
       if (removedTask) {
         addTaskHistoryEvent({
           taskId: id,
           projectId: removedTask.project || 'Pessoal',
           type: 'task_deleted',
-          message: `Tarefa excluída: ${removedTask.title || 'Tarefa sem título'}`,
+          message: linkedSessions.length > 0
+            ? `Tarefa excluída: ${removedTask.title || 'Tarefa sem título'} (${linkedSessions.length} sessão(ões) removida(s))`
+            : `Tarefa excluída: ${removedTask.title || 'Tarefa sem título'}`,
         });
       }
     } catch (error) {
@@ -436,15 +447,53 @@ export function TaskProvider({ children }) {
     }
 
     const accountId = currentUser?.currentAccountId || '';
-    const completion = await completeTaskInApi(id, {
-      completedAt: new Date().toISOString(),
-      ...(completionSession ? {
-        session: {
-          ...completionSession,
-          ...(accountId ? { accountId } : {})
+    let completion = null;
+    try {
+      completion = await completeTaskInApi(id, {
+        completedAt: new Date().toISOString(),
+        ...(completionSession ? {
+          session: {
+            ...completionSession,
+            ...(accountId ? { accountId } : {})
+          }
+        } : {})
+      });
+    } catch (error) {
+      try {
+        const latestTasks = await listTasksFromApi();
+        const activeSession = await refreshSession({ quiet: true, broadcast: true });
+        const reconciledTask = latestTasks
+          .filter((record) => !isTaskDeleted(record))
+          .map((record) => normalizeTaskRecord(record))
+          .find((record) => record.id === id);
+
+        const normalizedActiveTaskId = String(activeSession?.taskId || '').trim();
+        const normalizedSessionState = String(activeSession?.state || '').trim().toLowerCase();
+        const hasInconsistentActiveSession = Boolean(
+          activeSession
+          && normalizedActiveTaskId === String(id).trim()
+          && normalizedSessionState !== 'finished'
+        );
+
+        if (reconciledTask && isTaskCompletedStatus(reconciledTask.status) && !hasInconsistentActiveSession) {
+          setTasks(latestTasks.filter((record) => !isTaskDeleted(record)).map((record) => normalizeTaskRecord(record)));
+          return {
+            blocked: false,
+            task: reconciledTask,
+            pendingSnapshot,
+            registeredMinutes,
+            reconciled: true,
+          };
         }
-      } : {})
-    });
+
+        if (hasInconsistentActiveSession) {
+          throw new Error('Tarefa concluída foi reconciliada, mas a sessão ativa permaneceu aberta no servidor.');
+        }
+      } catch (reconciliationError) {
+        console.error('Falha ao reconciliar estado da tarefa após erro na conclusão:', reconciliationError);
+      }
+      throw error;
+    }
     const completedTask = normalizeTaskRecord(completion.item);
     setTasks((previous) => previous.map((item) => item.id === id ? completedTask : item));
 

@@ -61,3 +61,46 @@ test('permite retomar, resolver ou deixar contexto para outro dia sem criar tare
   updateDailyWrapUpResumeState('user-a', record.id, 'resolved');
   assert.equal(getLatestDailyWrapUpForResume('user-a', new Date(2026, 8, 11, 8, 0, 0), 'inPACTA'), null);
 });
+
+test('salvar novamente o encerramento do mesmo dia atualiza sem duplicar', () => {
+  const first = saveDailyWrapUp('user-a', {
+    date: '2026-10-12',
+    journeyId: 'journey-123',
+    journeyProjectName: 'inPACTA',
+    concluded: 'Primeira versão'
+  });
+  const second = saveDailyWrapUp('user-a', {
+    date: '2026-10-12',
+    journeyId: 'journey-123',
+    journeyProjectName: 'inPACTA',
+    concluded: 'Versão revisada'
+  });
+
+  const rows = listDailyWrapUps('user-a');
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].id, first.id);
+  assert.equal(rows[0].id, second.id);
+  assert.equal(rows[0].concluded, 'Versão revisada');
+});
+
+test('guarda atividades estruturadas do encerramento diário', () => {
+  const record = saveDailyWrapUp('user-a', {
+    date: '2026-10-12',
+    journeyId: 'journey-88',
+    journeyProjectName: 'InPACTA',
+    activities: [{
+      description: 'Análise do GLPI',
+      status: 'pausada',
+      projectOrFront: 'InPACTA',
+      durationMinutes: 42,
+      nextStep: 'Retomar triagem',
+      waitingOn: 'Equipe de TI',
+      deliveryLink: 'https://example.com'
+    }]
+  });
+
+  assert.equal(Array.isArray(record.activities), true);
+  assert.equal(record.activities.length, 1);
+  assert.equal(record.activities[0].status, 'pausada');
+  assert.equal(record.activities[0].durationMinutes, 42);
+});

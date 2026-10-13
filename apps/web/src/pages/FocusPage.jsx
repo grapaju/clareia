@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Helmet } from 'react-helmet';
 import { useNavigate } from 'react-router-dom';
 import { Focus, Play, Pause, CheckCircle2, ArrowLeft, RefreshCw, Pencil } from 'lucide-react';
+import { toast } from 'sonner';
 import Header from '@/components/Header.jsx';
 import Sidebar from '@/components/Sidebar.jsx';
 import MobileNav from '@/components/MobileNav.jsx';
@@ -67,6 +68,7 @@ export default function FocusPage() {
   const [microtaskTransition, setMicrotaskTransition] = useState(null);
   const [showAllMicrotasks, setShowAllMicrotasks] = useState(false);
   const [showTimer, setShowTimer] = useState(!lowStimulationMode);
+  const [isPendingCompletionSubmitting, setIsPendingCompletionSubmitting] = useState(false);
   const focusBlockMinutes = Number(selectedTask?.focusBlockMinutes || 20);
   const isPaused = taskSession?.state === 'paused';
 
@@ -157,35 +159,56 @@ export default function FocusPage() {
       setSelectedTask(null);
       navigate('/');
     } catch (error) {
+      toast.error('Não consegui concluir a tarefa agora. Tente novamente em instantes.');
       console.error('Erro ao registrar sessão de foco:', error);
     }
   };
 
   const handleMarkRemainingAsDone = async () => {
-    if (!selectedTask?.id) return;
-    const result = await completeTask(selectedTask.id, {
-      ...(pendingCompletionPayload || {}),
-      markRemainingAsDone: true
-    });
-    if (!result?.blocked) {
-      setPendingCompletionData(null);
-      setPendingCompletionPayload(null);
-      setSelectedTask(null);
-      navigate('/');
+    if (!selectedTask?.id || isPendingCompletionSubmitting) return false;
+    setIsPendingCompletionSubmitting(true);
+    try {
+      const result = await completeTask(selectedTask.id, {
+        ...(pendingCompletionPayload || {}),
+        markRemainingAsDone: true
+      });
+      if (!result?.blocked) {
+        setPendingCompletionData(null);
+        setPendingCompletionPayload(null);
+        setSelectedTask(null);
+        navigate('/');
+        return true;
+      }
+      return false;
+    } catch (error) {
+      toast.error('Não foi possível concluir a tarefa agora. Tente novamente.');
+      return false;
+    } finally {
+      setIsPendingCompletionSubmitting(false);
     }
   };
 
   const handleForceComplete = async () => {
-    if (!selectedTask?.id) return;
-    const result = await completeTask(selectedTask.id, {
-      ...(pendingCompletionPayload || {}),
-      forceComplete: true
-    });
-    if (!result?.blocked) {
-      setPendingCompletionData(null);
-      setPendingCompletionPayload(null);
-      setSelectedTask(null);
-      navigate('/');
+    if (!selectedTask?.id || isPendingCompletionSubmitting) return false;
+    setIsPendingCompletionSubmitting(true);
+    try {
+      const result = await completeTask(selectedTask.id, {
+        ...(pendingCompletionPayload || {}),
+        forceComplete: true
+      });
+      if (!result?.blocked) {
+        setPendingCompletionData(null);
+        setPendingCompletionPayload(null);
+        setSelectedTask(null);
+        navigate('/');
+        return true;
+      }
+      return false;
+    } catch (error) {
+      toast.error('Não consegui concluir a tarefa agora. Confira sua conexão e tente novamente.');
+      return false;
+    } finally {
+      setIsPendingCompletionSubmitting(false);
     }
   };
 
@@ -508,6 +531,7 @@ export default function FocusPage() {
       <TaskPendingMicrotasksDialog
         isOpen={Boolean(pendingCompletionData)}
         onOpenChange={(open) => {
+          if (isPendingCompletionSubmitting) return;
           if (!open) setPendingCompletionData(null);
         }}
         pendingData={pendingCompletionData}
@@ -515,6 +539,7 @@ export default function FocusPage() {
         onBack={() => setPendingCompletionData(null)}
         onMarkRemaining={handleMarkRemainingAsDone}
         onForceComplete={handleForceComplete}
+        isSubmitting={isPendingCompletionSubmitting}
       />
 
       <TaskPauseDialog

@@ -7,16 +7,6 @@ import {
   DialogTitle
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle
-} from '@/components/ui/alert-dialog';
 
 export default function TaskPendingMicrotasksDialog({
   isOpen,
@@ -29,6 +19,11 @@ export default function TaskPendingMicrotasksDialog({
   isSubmitting = false
 }) {
   const [isForceConfirmOpen, setIsForceConfirmOpen] = useState(false);
+  const handleMainDialogOpenChange = (open) => {
+    if (isSubmitting) return;
+    if (!open) setIsForceConfirmOpen(false);
+    onOpenChange?.(open);
+  };
 
   const completed = Number(pendingData?.completedMicrotasks || 0);
   const pending = Number(pendingData?.pendingMicrotasks || 0);
@@ -36,7 +31,7 @@ export default function TaskPendingMicrotasksDialog({
 
   return (
     <>
-      <Dialog open={isOpen} onOpenChange={onOpenChange}>
+      <Dialog open={isOpen} onOpenChange={handleMainDialogOpenChange}>
         <DialogContent className="w-[min(680px,calc(100vw-32px))] max-w-[680px] p-0 overflow-hidden">
           <DialogHeader className="px-6 pt-6">
             <DialogTitle>Ainda falta concluir alguns passos</DialogTitle>
@@ -61,41 +56,49 @@ export default function TaskPendingMicrotasksDialog({
               Voltar para a tarefa
             </Button>
             <Button className="w-full md:w-auto md:max-w-full whitespace-normal" variant="outline" onClick={onMarkRemaining} disabled={isSubmitting}>
-              Marcar restantes como feitas
+              Marcar restantes como feitas e concluir
             </Button>
-            <Button
-              className="w-full md:w-auto md:max-w-full whitespace-normal border-amber-300 text-amber-800 hover:bg-amber-50"
-              variant="outline"
-              onClick={() => setIsForceConfirmOpen(true)}
-              disabled={isSubmitting}
-            >
-              Concluir mesmo assim
-            </Button>
+            {isForceConfirmOpen ? (
+              <div className="w-full rounded-md border border-amber-300 bg-amber-50 p-3 md:w-auto md:max-w-full">
+                <p className="text-sm text-amber-900">
+                  Algumas microtarefas continuarão pendentes mesmo com a tarefa concluída.
+                </p>
+                <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:justify-end">
+                  <Button
+                    className="w-full md:w-auto"
+                    variant="ghost"
+                    onClick={() => setIsForceConfirmOpen(false)}
+                    disabled={isSubmitting}
+                  >
+                    Agora não
+                  </Button>
+                  <Button
+                    className="w-full md:w-auto border-amber-300 text-amber-800 hover:bg-amber-100"
+                    variant="outline"
+                    disabled={isSubmitting}
+                    onClick={async () => {
+                      if (isSubmitting) return;
+                      const confirmed = await onForceComplete?.();
+                      if (confirmed !== false) setIsForceConfirmOpen(false);
+                    }}
+                  >
+                    {isSubmitting ? 'Concluindo...' : 'Concluir mesmo assim'}
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <Button
+                className="w-full md:w-auto md:max-w-full whitespace-normal border-amber-300 text-amber-800 hover:bg-amber-50"
+                variant="outline"
+                onClick={() => setIsForceConfirmOpen(true)}
+                disabled={isSubmitting}
+              >
+                Concluir mesmo assim
+              </Button>
+            )}
           </div>
         </DialogContent>
       </Dialog>
-
-      <AlertDialog open={isForceConfirmOpen} onOpenChange={setIsForceConfirmOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Confirmar conclusão manual</AlertDialogTitle>
-            <AlertDialogDescription>
-              Algumas microtarefas continuarão pendentes mesmo com a tarefa marcada como concluída.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Agora não</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={async () => {
-                await onForceComplete?.();
-                setIsForceConfirmOpen(false);
-              }}
-            >
-              Concluir mesmo assim
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </>
   );
 }

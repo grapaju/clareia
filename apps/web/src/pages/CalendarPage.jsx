@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Helmet } from 'react-helmet';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -53,6 +53,31 @@ import TaskDetailsModal from '@/components/TaskDetailsModal.jsx';
 import { isTaskOpenStatus, normalizeTaskStatus, TASK_STATUS } from '@/lib/taskExecution.js';
 import TaskPendingMicrotasksDialog from '@/components/TaskPendingMicrotasksDialog.jsx';
 import TaskPauseDialog from '@/components/TaskPauseDialog.jsx';
+
+const DEFAULT_TIME_ZONE = 'America/Sao_Paulo';
+
+function getNowInTimeZone(timeZone = DEFAULT_TIME_ZONE) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date());
+  const valueByType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return new Date(
+    Number(valueByType.year),
+    Number(valueByType.month) - 1,
+    Number(valueByType.day),
+    Number(valueByType.hour),
+    Number(valueByType.minute),
+    Number(valueByType.second || 0),
+    0
+  );
+}
 
 function formatDate(value) {
   if (!value) return '-';
@@ -172,6 +197,7 @@ export default function CalendarPage() {
   const [followUpTask, setFollowUpTask] = useState(null);
   const [pendingCompletionData, setPendingCompletionData] = useState(null);
   const [pendingCompletionPayload, setPendingCompletionPayload] = useState(null);
+  const [isPendingCompletionSubmitting, setIsPendingCompletionSubmitting] = useState(false);
   const [isPauseDialogOpen, setIsPauseDialogOpen] = useState(false);
   const [editDate, setEditDate] = useState('');
   const [editPeriod, setEditPeriod] = useState('manhã');
@@ -185,7 +211,35 @@ export default function CalendarPage() {
   const [detailsTask, setDetailsTask] = useState(null);
   const [draggedTaskId, setDraggedTaskId] = useState('');
   const [selectedDayIso, setSelectedDayIso] = useState('');
+  const [referenceNow, setReferenceNow] = useState(() => getNowInTimeZone(DEFAULT_TIME_ZONE));
   const commitmentTriggerRef = useRef(null);
+
+  useEffect(() => {
+    let timeoutId = 0;
+    const scheduleMinuteTick = () => {
+      const now = getNowInTimeZone(DEFAULT_TIME_ZONE);
+      const next = new Date(now);
+      next.setSeconds(0, 0);
+      next.setMinutes(next.getMinutes() + 1);
+      timeoutId = window.setTimeout(() => {
+        setReferenceNow(getNowInTimeZone(DEFAULT_TIME_ZONE));
+        scheduleMinuteTick();
+      }, Math.max(1000, next.getTime() - now.getTime()));
+    };
+    const refreshNow = () => setReferenceNow(getNowInTimeZone(DEFAULT_TIME_ZONE));
+    const onVisibilityChange = () => {
+      if (!document.hidden) refreshNow();
+    };
+
+    scheduleMinuteTick();
+    window.addEventListener('focus', refreshNow);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.clearTimeout(timeoutId);
+      window.removeEventListener('focus', refreshNow);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, []);
 
   const followups = useMemo(() => listWaitingReturns(), [tasks.length]);
   const focusSessions = useMemo(() => listWorkSessions(), [tasks.length]);
@@ -193,7 +247,7 @@ export default function CalendarPage() {
   const calendarPreferences = useMemo(() => getCalendarPreferences(), [currentDate, commitmentsVersion, tasks.length]);
 
   const calendarItems = useMemo(() => {
-    const { taskItems, dueItems, routineItems, focusItems } = buildTaskCalendarItems(tasks, focusSessions);
+    const { taskItems, dueItems, routineItems, focusItems } = buildTaskCalendarItems(tasks, focusSessions, { referenceDate: referenceNow });
 
     const followupItems = followups
       .filter((item) => toIsoDate(item.nextFollowUpDate || item.reminderDate))
@@ -240,7 +294,7 @@ export default function CalendarPage() {
       const bTs = new Date(`${b.date}T${b.startTime || '12:00'}:00`).getTime();
       return aTs - bTs;
     });
-  }, [tasks, followups, commitments, focusSessions]);
+  }, [tasks, followups, commitments, focusSessions, referenceNow]);
 
   const currentIso = toIsoDate(currentDate);
   const availableMinutes = availableMinutesFromCheckIn(checkIn);
@@ -370,14 +424,18 @@ export default function CalendarPage() {
 
   const handleCompleteTask = async () => {
     if (!selectedItem?.sourceId) return;
-    const payload = { timeMode: 'planned' };
-    setPendingCompletionPayload(payload);
-    const result = await completeTask(selectedItem.sourceId, payload);
-    if (result?.blocked) {
-      setPendingCompletionData(result);
-      return;
+    try {
+      const payload = { timeMode: 'planned' };
+      setPendingCompletionPayload(payload);
+      const result = await completeTask(selectedItem.sourceId, payload);
+      if (result?.blocked) {
+        setPendingCompletionData(result);
+        return;
+      }
+      toast.success('Tarefa concluída.');
+    } catch (error) {
+      toast.error('Não consegui concluir a tarefa agora. Tente novamente em instantes.');
     }
-    toast.success('Tarefa concluída.');
   };
 
   const handlePauseFromPending = async (note, pauseOptions = {}) => {
@@ -390,28 +448,48 @@ export default function CalendarPage() {
   };
 
   const handleMarkRemainingAsDone = async () => {
-    if (!pendingCompletionData?.task?.id) return;
-    const result = await completeTask(pendingCompletionData.task.id, {
-      ...(pendingCompletionPayload || {}),
-      markRemainingAsDone: true
-    });
-    if (!result?.blocked) {
-      setPendingCompletionData(null);
-      setPendingCompletionPayload(null);
-      toast.success('Tarefa concluída.');
+    if (!pendingCompletionData?.task?.id || isPendingCompletionSubmitting) return false;
+    setIsPendingCompletionSubmitting(true);
+    try {
+      const result = await completeTask(pendingCompletionData.task.id, {
+        ...(pendingCompletionPayload || {}),
+        markRemainingAsDone: true
+      });
+      if (!result?.blocked) {
+        setPendingCompletionData(null);
+        setPendingCompletionPayload(null);
+        toast.success('Tarefa concluída.');
+        return true;
+      }
+      return false;
+    } catch (error) {
+      toast.error('Não foi possível concluir a tarefa agora. Tente novamente.');
+      return false;
+    } finally {
+      setIsPendingCompletionSubmitting(false);
     }
   };
 
   const handleForceComplete = async () => {
-    if (!pendingCompletionData?.task?.id) return;
-    const result = await completeTask(pendingCompletionData.task.id, {
-      ...(pendingCompletionPayload || {}),
-      forceComplete: true
-    });
-    if (!result?.blocked) {
-      setPendingCompletionData(null);
-      setPendingCompletionPayload(null);
-      toast.success('Tarefa concluída manualmente.');
+    if (!pendingCompletionData?.task?.id || isPendingCompletionSubmitting) return false;
+    setIsPendingCompletionSubmitting(true);
+    try {
+      const result = await completeTask(pendingCompletionData.task.id, {
+        ...(pendingCompletionPayload || {}),
+        forceComplete: true
+      });
+      if (!result?.blocked) {
+        setPendingCompletionData(null);
+        setPendingCompletionPayload(null);
+        toast.success('Tarefa concluída manualmente.');
+        return true;
+      }
+      return false;
+    } catch (error) {
+      toast.error('Não consegui concluir a tarefa agora. Confira sua conexão e tente novamente.');
+      return false;
+    } finally {
+      setIsPendingCompletionSubmitting(false);
     }
   };
 
@@ -764,7 +842,7 @@ export default function CalendarPage() {
   const buildItemMetaLine = (item) => {
     const project = item.projectId || 'Pessoal';
     const duration = formatMinutesLabel(item.estimatedMinutes || 0);
-    return `${project} · ${duration}`;
+    return `${project} · ${duration}${item.isPastPeriodToday ? ' · período passou' : ''}`;
   };
 
   const selectedDayData = useMemo(() => {
@@ -1221,11 +1299,15 @@ export default function CalendarPage() {
         task={followUpTask}
         onConfirmMarkTaskDone={async () => {
           if (!selectedItem?.sourceId) return;
-          const payload = { timeMode: 'planned' };
-          setPendingCompletionPayload(payload);
-          const result = await completeTask(selectedItem.sourceId, payload);
-          if (result?.blocked) {
-            setPendingCompletionData(result);
+          try {
+            const payload = { timeMode: 'planned' };
+            setPendingCompletionPayload(payload);
+            const result = await completeTask(selectedItem.sourceId, payload);
+            if (result?.blocked) {
+              setPendingCompletionData(result);
+            }
+          } catch (error) {
+            toast.error('Não consegui concluir a tarefa agora. Tente novamente em instantes.');
           }
         }}
       />
@@ -1233,6 +1315,7 @@ export default function CalendarPage() {
       <TaskPendingMicrotasksDialog
         isOpen={Boolean(pendingCompletionData)}
         onOpenChange={(open) => {
+          if (isPendingCompletionSubmitting) return;
           if (!open) setPendingCompletionData(null);
         }}
         pendingData={pendingCompletionData}
@@ -1240,6 +1323,7 @@ export default function CalendarPage() {
         onBack={() => setPendingCompletionData(null)}
         onMarkRemaining={handleMarkRemainingAsDone}
         onForceComplete={handleForceComplete}
+        isSubmitting={isPendingCompletionSubmitting}
       />
 
       <TaskPauseDialog

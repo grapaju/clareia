@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   buildProfessionalJourneyClosingNote,
   buildProfessionalJourneyWrapUp,
+  normalizeWrapUpActivities,
   resolveProfessionalJourneyEndAt
 } from './professionalJourneyWrapUpLogic.js';
 
@@ -10,7 +11,8 @@ test('permite encerrar sem preencher nenhum campo', () => {
   assert.deepEqual(buildProfessionalJourneyWrapUp(), {
     concluded: '',
     continueContext: '',
-    waitingExternal: ''
+    waitingExternal: '',
+    activities: []
   });
   assert.equal(buildProfessionalJourneyClosingNote(), '');
 });
@@ -39,4 +41,23 @@ test('preserva uma ou várias atividades concluídas no histórico da Jornada', 
   assert.match(note, /Atualização da página\nRevisão dos documentos/);
   assert.match(note, /Para continuar:\nContinuar módulo de contratos/);
   assert.match(note, /Aguardando retorno externo:\nDocumento do financeiro/);
+});
+
+test('normaliza lista de atividades do encerramento sem exigir tarefa', () => {
+  const items = normalizeWrapUpActivities([
+    {
+      description: 'Análise do GLPI',
+      status: 'pausada',
+      projectOrFront: 'InPACTA',
+      durationMinutes: '95',
+      nextStep: 'Retomar triagem',
+      waitingOn: '',
+      deliveryLink: 'https://example.com/entrega'
+    },
+    { description: '', nextStep: '', waitingOn: '' }
+  ]);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].status, 'pausada');
+  assert.equal(items[0].durationMinutes, 95);
+  assert.equal(items[0].deliveryLink, 'https://example.com/entrega');
 });

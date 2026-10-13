@@ -28,7 +28,7 @@ import { useAuth } from '@/contexts/AuthContext.jsx';
 import { useTheme } from '@/contexts/ThemeContext.jsx';
 import { useProfessionalJourney } from '@/contexts/ProfessionalJourneyContext.jsx';
 import { reorganizeTasksByEnergy } from '@/lib/energyLogic.js';
-import { buildTodayGroups, getTaskNextActionPresentation, getTodayHighlight, getTodayPresentation } from '@/lib/todayViewLogic.js';
+import { buildTodayGroups, getTaskNextActionPresentation, getTaskScheduleState, getTodayHighlight, getTodayPresentation } from '@/lib/todayViewLogic.js';
 import { isTaskActionableStatus, normalizeTaskStatus, TASK_STATUS } from '@/lib/taskExecution.js';
 import { formatDurationFriendly, getCheckInAvailableMinutes } from '@/lib/reportFormatting.js';
 import { selectTasksWithinDailyCapacity } from '@/lib/planningEngine.js';
@@ -37,8 +37,39 @@ import { UI_COPY } from '@/lib/uiCopy.js';
 import { readUserPreferences } from '@/services/userPreferencesService.js';
 import { useTaskSession } from '@/hooks/useTaskSession.js';
 
-function currentDateLabel() {
-  return new Intl.DateTimeFormat('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date());
+const DEFAULT_TIME_ZONE = 'America/Sao_Paulo';
+
+function currentDateLabel(date = new Date(), timeZone = DEFAULT_TIME_ZONE) {
+  return new Intl.DateTimeFormat('pt-BR', { weekday: 'long', day: 'numeric', month: 'long', timeZone }).format(date);
+}
+
+function getConfiguredTimeZone(userId = '', journeyTimeZone = '') {
+  if (journeyTimeZone) return journeyTimeZone;
+  const userPreferences = readUserPreferences(userId);
+  return userPreferences?.timeZone || userPreferences?.timezone || DEFAULT_TIME_ZONE;
+}
+
+function getNowInTimeZone(timeZone = DEFAULT_TIME_ZONE) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date());
+  const valueByType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return new Date(
+    Number(valueByType.year),
+    Number(valueByType.month) - 1,
+    Number(valueByType.day),
+    Number(valueByType.hour),
+    Number(valueByType.minute),
+    Number(valueByType.second || 0),
+    0
+  );
 }
 
 export default function HomePage() {
@@ -67,8 +98,11 @@ export default function HomePage() {
   const [dismissedHighlightIds, setDismissedHighlightIds] = useState([]);
   const [isHardDayOpen, setIsHardDayOpen] = useState(false);
   const [isNoAlternativeOpen, setIsNoAlternativeOpen] = useState(false);
+  const [isPendingCompletionSubmitting, setIsPendingCompletionSubmitting] = useState(false);
   const calmTitleRef = useRef(null);
   const openingPreferenceUserRef = useRef('');
+  const homeTimeZone = getConfiguredTimeZone(userId, currentJourney?.timezone);
+  const [referenceNow, setReferenceNow] = useState(() => getNowInTimeZone(homeTimeZone));
 
   useEffect(() => {
     if (!userId || openingPreferenceUserRef.current === userId) return;
@@ -95,7 +129,37 @@ export default function HomePage() {
     window.requestAnimationFrame(() => calmTitleRef.current?.focus());
   }, [lowStimulationMode]);
 
-  const canonical = useMemo(() => buildTodayGroups(tasks), [tasks]);
+  useEffect(() => {
+    setReferenceNow(getNowInTimeZone(homeTimeZone));
+
+    let timeoutId = 0;
+    const scheduleMinuteTick = () => {
+      const now = getNowInTimeZone(homeTimeZone);
+      const next = new Date(now);
+      next.setSeconds(0, 0);
+      next.setMinutes(next.getMinutes() + 1);
+      timeoutId = window.setTimeout(() => {
+        setReferenceNow(getNowInTimeZone(homeTimeZone));
+        scheduleMinuteTick();
+      }, Math.max(1000, next.getTime() - now.getTime()));
+    };
+
+    const refreshNow = () => setReferenceNow(getNowInTimeZone(homeTimeZone));
+    const onVisibilityChange = () => {
+      if (!document.hidden) refreshNow();
+    };
+
+    scheduleMinuteTick();
+    window.addEventListener('focus', refreshNow);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.clearTimeout(timeoutId);
+      window.removeEventListener('focus', refreshNow);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [homeTimeZone]);
+
+  const canonical = useMemo(() => buildTodayGroups(tasks, referenceNow), [referenceNow, tasks]);
   const declaredAvailableMinutes = getCheckInAvailableMinutes(checkIn?.tempo || '2h');
   const dailyPlan = useMemo(() => selectTasksWithinDailyCapacity(
     [...canonical.groups.overdue, ...canonical.groups.today],
@@ -103,13 +167,17 @@ export default function HomePage() {
   ), [canonical.groups.overdue, canonical.groups.today, declaredAvailableMinutes]);
   const visibleTodayTasks = dailyPlan.tasks;
   const visibleTaskIds = useMemo(() => new Set(visibleTodayTasks.map((task) => task.id)), [visibleTodayTasks]);
-  const { recommended: rankedRecommendation, agora = [] } = reorganizeTasksByEnergy(tasks, checkIn);
+  const { recommended: rankedRecommendation, agora = [] } = reorganizeTasksByEnergy(tasks, checkIn, { now: referenceNow });
   const recommendationCandidates = useMemo(() => {
     const ranked = [rankedRecommendation, ...agora, ...visibleTodayTasks]
       .filter(Boolean)
-      .filter((task) => visibleTaskIds.has(task.id) && isTaskActionableStatus(task.status));
+      .filter((task) => (
+        visibleTaskIds.has(task.id)
+        && isTaskActionableStatus(task.status)
+        && !getTaskScheduleState(task, referenceNow).needsReschedule
+      ));
     return [...new Map(ranked.map((task) => [task.id, task])).values()];
-  }, [rankedRecommendation, agora, visibleTaskIds, visibleTodayTasks]);
+  }, [rankedRecommendation, agora, visibleTaskIds, visibleTodayTasks, referenceNow]);
   const recommended = useMemo(() => recommendationCandidates.find((task) => task.id === selectedRecommendationId) || recommendationCandidates.find((task) => !skippedSuggestionIds.includes(task.id)) || null, [recommendationCandidates, selectedRecommendationId, skippedSuggestionIds]);
   const activeSession = taskSession ? { id: taskSession.id, taskId: taskSession.taskId } : null;
   const sessionTask = tasks.find((task) => task.id === taskSession?.taskId) || null;
@@ -170,18 +238,50 @@ export default function HomePage() {
   };
   const handleCompleteTask = async (payload) => {
     if (!completionTask?.id) return;
-    setPendingCompletionPayload(payload);
-    const result = await completeTask(completionTask.id, payload);
-    if (result?.blocked) { setPendingCompletionData(result); setCompletionTask(null); return; }
-    setCompletionTask(null);
+    try {
+      setPendingCompletionPayload(payload);
+      const result = await completeTask(completionTask.id, payload);
+      if (result?.blocked) { setPendingCompletionData(result); setCompletionTask(null); return; }
+      setCompletionTask(null);
+    } catch (error) {
+      toast.error('Não consegui concluir a tarefa agora. Tente novamente em instantes.');
+    }
   };
   const handleMarkRemainingAsDone = async () => {
-    const result = await completeTask(pendingCompletionData.task.id, { ...(pendingCompletionPayload || {}), markRemainingAsDone: true });
-    if (!result?.blocked) setPendingCompletionData(null);
+    if (!pendingCompletionData?.task?.id || isPendingCompletionSubmitting) return false;
+    setIsPendingCompletionSubmitting(true);
+    try {
+      const result = await completeTask(pendingCompletionData.task.id, { ...(pendingCompletionPayload || {}), markRemainingAsDone: true });
+      if (!result?.blocked) {
+        setPendingCompletionData(null);
+        setPendingCompletionPayload(null);
+        return true;
+      }
+      return false;
+    } catch (error) {
+      toast.error('Não foi possível concluir agora. Confira sua conexão e tente novamente.');
+      return false;
+    } finally {
+      setIsPendingCompletionSubmitting(false);
+    }
   };
   const handleForceComplete = async () => {
-    const result = await completeTask(pendingCompletionData.task.id, { ...(pendingCompletionPayload || {}), forceComplete: true });
-    if (!result?.blocked) setPendingCompletionData(null);
+    if (!pendingCompletionData?.task?.id || isPendingCompletionSubmitting) return false;
+    setIsPendingCompletionSubmitting(true);
+    try {
+      const result = await completeTask(pendingCompletionData.task.id, { ...(pendingCompletionPayload || {}), forceComplete: true });
+      if (!result?.blocked) {
+        setPendingCompletionData(null);
+        setPendingCompletionPayload(null);
+        return true;
+      }
+      return false;
+    } catch (error) {
+      toast.error('Não consegui concluir a tarefa agora. Tente novamente em instantes.');
+      return false;
+    } finally {
+      setIsPendingCompletionSubmitting(false);
+    }
   };
   const rowProps = (task) => ({ task, isRecommended: Boolean(recommended?.id === task.id && recommended.id !== highlightTask?.id), onStart: handleStartTask, onOpen: setDetailsTask, onEdit: setEditTask, onComplete: setCompletionTask, onReopen: (item) => reopenTask(item.id, 'Hoje'), onWaiting: (item) => updateTask(item.id, { status: TASK_STATUS.AGUARDANDO_RETORNO }), onArchive: (item) => updateTask(item.id, { status: TASK_STATUS.ARQUIVADA }), onDelete: setDeleteTaskTarget });
 
@@ -217,7 +317,7 @@ export default function HomePage() {
               {!lowStimulationMode && (
                 <header className="mb-7 pt-1">
                   <h1 className="text-3xl font-semibold text-foreground">Hoje</h1>
-                  <p className="mt-2 text-base font-medium capitalize text-foreground/80">{currentDateLabel()}</p>
+                  <p className="mt-2 text-base font-medium capitalize text-foreground/80">{currentDateLabel(referenceNow, homeTimeZone)}</p>
                   <p className="mt-2 max-w-2xl text-base leading-relaxed text-muted-foreground">{UI_COPY.today.intro}</p>
                 </header>
               )}
@@ -374,7 +474,19 @@ export default function HomePage() {
         }} />}
         {editTask && <EditTaskModal task={editTask} isOpen onClose={() => setEditTask(null)} />}
         <TaskCompletionDialog isOpen={Boolean(completionTask)} onOpenChange={(open) => !open && setCompletionTask(null)} task={completionTask} onConfirm={handleCompleteTask} />
-        <TaskPendingMicrotasksDialog isOpen={Boolean(pendingCompletionData)} onOpenChange={(open) => !open && setPendingCompletionData(null)} pendingData={pendingCompletionData} onPause={() => setIsPauseDialogOpen(true)} onBack={() => setPendingCompletionData(null)} onMarkRemaining={handleMarkRemainingAsDone} onForceComplete={handleForceComplete} />
+        <TaskPendingMicrotasksDialog
+          isOpen={Boolean(pendingCompletionData)}
+          onOpenChange={(open) => {
+            if (isPendingCompletionSubmitting) return;
+            if (!open) setPendingCompletionData(null);
+          }}
+          pendingData={pendingCompletionData}
+          onPause={() => setIsPauseDialogOpen(true)}
+          onBack={() => setPendingCompletionData(null)}
+          onMarkRemaining={handleMarkRemainingAsDone}
+          onForceComplete={handleForceComplete}
+          isSubmitting={isPendingCompletionSubmitting}
+        />
         <TaskPauseDialog isOpen={isPauseDialogOpen} onOpenChange={setIsPauseDialogOpen} defaultValue={pendingCompletionData?.task?.pauseNote || ''} task={pendingCompletionData?.task} onConfirm={async (note, pauseOptions) => { await pauseTask(pendingCompletionData.task.id, { note, ...pauseOptions }); setIsPauseDialogOpen(false); setPendingCompletionData(null); }} />
         <TaskPickerDialog open={isTaskPickerOpen} onOpenChange={setIsTaskPickerOpen} tasks={recommendationCandidates} onSelect={(task) => { setSelectedRecommendationId(task.id); setSkippedSuggestionIds([]); setIsTaskPickerOpen(false); }} onViewAll={() => setIsTaskPickerOpen(false)} />
         <SmallerStepDialog task={smallStepTask} open={Boolean(smallStepTask)} onOpenChange={(open) => { if (!open) { setSmallStepTask(null); setSmallStepMinutes(null); } }} onApply={(nextAction, options) => updateTask(smallStepTask.id, { nextAction, ...(smallStepMinutes ? { nextActionMinutes: options?.isUndo ? smallStepTask.nextActionMinutes || null : smallStepMinutes } : {}) })} />

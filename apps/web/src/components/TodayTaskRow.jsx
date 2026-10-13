@@ -10,6 +10,7 @@ export default function TodayTaskRow({ task, isRecommended = false, completed = 
   const metadata = getTaskRowMetadata(task);
   const status = normalizeTaskStatus(task.status);
   const isPaused = status === TASK_STATUS.PAUSADA;
+  const showSuggestedNow = isRecommended && !metadata.scheduleState?.needsReschedule;
 
   return (
     <li className="group content-fade-in flex min-h-14 items-center gap-3 border-b border-border/70 px-4 py-3 last:border-b-0">
@@ -28,7 +29,7 @@ export default function TodayTaskRow({ task, isRecommended = false, completed = 
           {(task.energiaNecessaria || task.energyLevel) && <span className="inline-flex items-center gap-1"><BatteryMedium className="h-3 w-3" aria-hidden="true" />{task.energiaNecessaria || task.energyLevel} energia</span>}
           {metadata.progress && <span>{metadata.progress} passos</span>}
           {completed && workedMinutes > 0 && <span>{formatDurationFriendly(workedMinutes)} realizados</span>}
-          {isRecommended && <span className="font-medium text-sky-600">Sugerida agora</span>}
+          {showSuggestedNow && <span className="font-medium text-sky-600">Sugerida agora</span>}
         </span>
       </button>
       {completed ? (

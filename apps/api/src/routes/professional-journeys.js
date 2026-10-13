@@ -25,6 +25,11 @@ function isoDate(value, fallback = null) {
   return date.toISOString();
 }
 
+function optionalIsoDate(value) {
+  if (value === undefined || value === null || String(value).trim() === '') return null;
+  return isoDate(value);
+}
+
 function inferCategory(title) {
   const value = text(title).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   if (/\b(reuniao|alinhamento|call|meet)\b/.test(value)) return 'Reunião';
@@ -105,6 +110,78 @@ async function closeActiveActivity(client, userId, endedAt) {
      WHERE user_id = $2 AND ended_at IS NULL`,
     [endedAt, userId]
   );
+}
+
+async function ensureJourneyRangeConsistency(client, { userId, journeyId, startedAt, endedAt, excludingPauseId = '' }) {
+  if (endedAt && new Date(endedAt) <= new Date(startedAt)) {
+    throw httpError(400, 'O encerramento deve ocorrer depois do inicio.');
+  }
+
+  const [pauseOutOfBounds, activityOutOfBounds] = await Promise.all([
+    client.query(
+      `SELECT id
+       FROM professional_journey_pauses
+       WHERE user_id = $1
+         AND journey_id = $2
+         AND ($5 = '' OR id <> $5)
+         AND (
+           started_at < $3::timestamptz
+           OR ended_at IS NULL
+           OR ($4::timestamptz IS NOT NULL AND ended_at > $4::timestamptz)
+         )
+       LIMIT 1`,
+      [userId, journeyId, startedAt, endedAt, excludingPauseId]
+    ),
+    client.query(
+      `SELECT id
+       FROM professional_activities
+       WHERE user_id = $1
+         AND journey_id = $2
+         AND (
+           started_at < $3::timestamptz
+           OR ended_at IS NULL
+           OR ($4::timestamptz IS NOT NULL AND ended_at > $4::timestamptz)
+         )
+       LIMIT 1`,
+      [userId, journeyId, startedAt, endedAt]
+    ),
+  ]);
+
+  if (pauseOutOfBounds.rows[0]) {
+    throw httpError(409, 'Existe pausa fora do intervalo da jornada. Ajuste as pausas antes de salvar.');
+  }
+  if (activityOutOfBounds.rows[0]) {
+    throw httpError(409, 'Existe atividade fora do intervalo da jornada. Ajuste as atividades antes de salvar.');
+  }
+}
+
+async function ensurePauseFitsJourneyAndNoOverlap(client, { userId, journeyId, pauseId = '', startedAt, endedAt }) {
+  if (new Date(endedAt) <= new Date(startedAt)) {
+    throw httpError(400, 'A pausa deve terminar depois do inicio.');
+  }
+
+  const journey = await loadJourney(client, journeyId, userId, true);
+  const journeyEnd = journey.ended_at ? new Date(journey.ended_at) : null;
+  if (new Date(startedAt) < new Date(journey.started_at)) {
+    throw httpError(400, 'A pausa deve ocorrer dentro da jornada.');
+  }
+  if (journeyEnd && new Date(endedAt) > journeyEnd) {
+    throw httpError(400, 'A pausa deve ocorrer dentro da jornada.');
+  }
+
+  const overlap = await client.query(
+    `SELECT id
+     FROM professional_journey_pauses
+     WHERE user_id = $1
+       AND journey_id = $2
+       AND ($3 = '' OR id <> $3)
+       AND tstzrange(started_at, ended_at, '[)') && tstzrange($4::timestamptz, $5::timestamptz, '[)')
+     LIMIT 1`,
+    [userId, journeyId, pauseId, startedAt, endedAt]
+  );
+  if (overlap.rows[0]) {
+    throw httpError(409, 'Existe sobreposição entre pausas neste intervalo.');
+  }
 }
 
 router.use(requireAuth);
@@ -288,6 +365,121 @@ router.post('/:journeyId/close', async (req, res) => {
     );
     return updated.rows[0];
   });
+
+  router.patch('/:journeyId', async (req, res) => {
+    const item = await withTransaction(async (client) => {
+      const journey = await loadJourney(client, req.params.journeyId, req.userId, true);
+      const startedAt = req.body?.startedAt ? isoDate(req.body.startedAt) : journey.started_at;
+      const endedAt = Object.hasOwn(req.body || {}, 'endedAt') ? optionalIsoDate(req.body.endedAt) : journey.ended_at;
+      const closingNote = Object.hasOwn(req.body || {}, 'closingNote') ? text(req.body.closingNote) : journey.closing_note;
+      await ensureJourneyRangeConsistency(client, { userId: req.userId, journeyId: journey.id, startedAt, endedAt });
+
+      const updated = await client.query(
+        `UPDATE professional_journeys
+         SET started_at = $1,
+             ended_at = $2,
+             closing_note = $3,
+             status = CASE WHEN $2::timestamptz IS NULL THEN status ELSE 'closed' END,
+             updated_at = now()
+         WHERE id = $4 AND user_id = $5 RETURNING *`,
+        [startedAt, endedAt, closingNote, journey.id, req.userId]
+      );
+      return updated.rows[0];
+    });
+    res.json({ item: mapJourney(item) });
+  });
+
+  router.delete('/:journeyId', async (req, res) => {
+    const deleted = await runQuery(
+      'DELETE FROM professional_journeys WHERE id = $1 AND user_id = $2 RETURNING id',
+      [req.params.journeyId, req.userId]
+    );
+    if (!deleted.rows[0]) return res.status(404).json({ message: 'Jornada nao encontrada.' });
+    res.status(204).send();
+  });
+
+  router.post('/:journeyId/pauses', async (req, res) => {
+    const startedAt = isoDate(req.body?.startedAt);
+    const endedAt = isoDate(req.body?.endedAt);
+    const category = text(req.body?.category);
+    const item = await withTransaction(async (client) => {
+      await ensurePauseFitsJourneyAndNoOverlap(client, {
+        userId: req.userId,
+        journeyId: req.params.journeyId,
+        startedAt,
+        endedAt,
+      });
+      const id = `pause-${Date.now()}-${randomUUID().slice(0, 8)}`;
+      const created = await client.query(
+        `INSERT INTO professional_journey_pauses
+         (id, journey_id, user_id, category, started_at, ended_at)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING id, journey_id, category, started_at, ended_at`,
+        [id, req.params.journeyId, req.userId, category, startedAt, endedAt]
+      );
+      return created.rows[0];
+    });
+    res.status(201).json({
+      item: {
+        id: item.id,
+        journeyId: item.journey_id,
+        category: item.category || '',
+        startedAt: item.started_at,
+        endedAt: item.ended_at,
+      }
+    });
+  });
+
+  router.patch('/pauses/:pauseId', async (req, res) => {
+    const item = await withTransaction(async (client) => {
+      const found = await client.query(
+        'SELECT * FROM professional_journey_pauses WHERE id = $1 AND user_id = $2 FOR UPDATE',
+        [req.params.pauseId, req.userId]
+      );
+      const current = found.rows[0];
+      if (!current) throw httpError(404, 'Pausa nao encontrada.');
+
+      const startedAt = req.body?.startedAt ? isoDate(req.body.startedAt) : current.started_at;
+      const endedAt = req.body?.endedAt ? isoDate(req.body.endedAt) : current.ended_at;
+      const category = Object.hasOwn(req.body || {}, 'category') ? text(req.body.category) : (current.category || '');
+      if (!endedAt) throw httpError(400, 'Informe inicio e fim para a pausa.');
+
+      await ensurePauseFitsJourneyAndNoOverlap(client, {
+        userId: req.userId,
+        journeyId: current.journey_id,
+        pauseId: current.id,
+        startedAt,
+        endedAt,
+      });
+
+      const updated = await client.query(
+        `UPDATE professional_journey_pauses
+         SET category = $1, started_at = $2, ended_at = $3, updated_at = now()
+         WHERE id = $4 AND user_id = $5
+         RETURNING id, journey_id, category, started_at, ended_at`,
+        [category, startedAt, endedAt, current.id, req.userId]
+      );
+      return updated.rows[0];
+    });
+    res.json({
+      item: {
+        id: item.id,
+        journeyId: item.journey_id,
+        category: item.category || '',
+        startedAt: item.started_at,
+        endedAt: item.ended_at,
+      }
+    });
+  });
+
+  router.delete('/pauses/:pauseId', async (req, res) => {
+    const deleted = await runQuery(
+      'DELETE FROM professional_journey_pauses WHERE id = $1 AND user_id = $2 RETURNING id',
+      [req.params.pauseId, req.userId]
+    );
+    if (!deleted.rows[0]) return res.status(404).json({ message: 'Pausa nao encontrada.' });
+    res.status(204).send();
+  });
   res.json({ item: mapJourney(item) });
 });
 
@@ -370,6 +562,15 @@ router.patch('/activities/:activityId', async (req, res) => {
        JSON.stringify(previous), current.id, req.userId]
     );
     return updated.rows[0];
+  });
+
+  router.delete('/activities/:activityId', async (req, res) => {
+    const deleted = await runQuery(
+      'DELETE FROM professional_activities WHERE id = $1 AND user_id = $2 RETURNING id',
+      [req.params.activityId, req.userId]
+    );
+    if (!deleted.rows[0]) return res.status(404).json({ message: 'Atividade nao encontrada.' });
+    res.status(204).send();
   });
   res.json({ item: mapActivity(item) });
 });
