@@ -53,14 +53,27 @@ test('isola dados, materiais e Google Drive entre usuários A e B', async (conte
   const userB = await signup('b');
   const projectA = await api(baseUrl, '/projects', { token: userA.token, method: 'POST', body: { name: 'Projeto A' } });
   assert.equal(projectA.status, 201);
+  const workFrontA = await api(baseUrl, '/projects/Projeto%20A/work-fronts', {
+    token: userA.token,
+    method: 'POST',
+    body: { name: 'Infraestrutura, cloud e segurança', displayOrder: 0 },
+  });
+  assert.equal(workFrontA.status, 201);
 
   const taskAResponse = await api(baseUrl, '/tasks', {
     token: userA.token,
     method: 'POST',
-    body: { title: 'Tarefa privada A', project: 'Projeto A', userId: userB.user.id, status: 'pendente' },
+    body: {
+      title: 'Tarefa privada A',
+      project: 'Projeto A',
+      workFrontId: String(workFrontA.payload.item.id),
+      userId: userB.user.id,
+      status: 'pendente'
+    },
   });
   assert.equal(taskAResponse.status, 201);
   assert.equal(taskAResponse.payload.item.userId, userA.user.id);
+  assert.equal(taskAResponse.payload.item.workFrontName, 'Infraestrutura, cloud e segurança');
   const taskA = taskAResponse.payload.item;
 
   assert.equal((await api(baseUrl, `/tasks/${taskA.id}/notes`, { token: userA.token, method: 'POST', body: { content: 'Nota A' } })).status, 201);
@@ -69,9 +82,11 @@ test('isola dados, materiais e Google Drive entre usuários A e B', async (conte
 
   const tasksForB = await api(baseUrl, '/tasks', { token: userB.token });
   const projectsForB = await api(baseUrl, '/projects', { token: userB.token });
+  const workFrontsForB = await api(baseUrl, '/projects/Projeto%20A/work-fronts', { token: userB.token });
   const savedForB = await api(baseUrl, '/records/guardados', { token: userB.token });
   assert.deepEqual(tasksForB.payload.items, []);
   assert.deepEqual(projectsForB.payload.items, []);
+  assert.deepEqual(workFrontsForB.payload.items, []);
   assert.deepEqual(savedForB.payload.items, []);
 
   assert.equal((await api(baseUrl, `/tasks/${taskA.id}/notes`, { token: userB.token })).status, 404);

@@ -23,6 +23,14 @@ function normalizeProjectId(projectId) {
   return value || 'Pessoal';
 }
 
+function normalizeWorkFrontId(workFrontId) {
+  return String(workFrontId || '').trim();
+}
+
+function normalizeWorkFrontName(workFrontName) {
+  return String(workFrontName || '').trim();
+}
+
 function minutesBetween(startedAt, endedAt) {
   const start = new Date(startedAt).getTime();
   const end = new Date(endedAt).getTime();
@@ -90,6 +98,8 @@ function createOrReuseTimerWorkSession(payload = {}) {
   const session = {
     id: uid(),
     projectId: normalizeProjectId(payload.projectId),
+    workFrontId: normalizeWorkFrontId(payload.workFrontId),
+    workFrontName: normalizeWorkFrontName(payload.workFrontName),
     taskId: payload.taskId || null,
     title: String(payload.title || '').trim() || 'Sessão de foco',
     startedAt: now,
@@ -186,6 +196,8 @@ export function addManualWorkSession(payload = {}) {
   const session = {
     id: uid(),
     projectId: normalizeProjectId(payload.projectId),
+    workFrontId: normalizeWorkFrontId(payload.workFrontId),
+    workFrontName: normalizeWorkFrontName(payload.workFrontName),
     taskId: payload.taskId || null,
     title: String(payload.title || '').trim() || 'Tempo manual',
     startedAt,
@@ -222,6 +234,8 @@ export function updateWorkSession(id, updates = {}) {
     ...current,
     ...updates,
     projectId: updates.projectId !== undefined ? normalizeProjectId(updates.projectId) : current.projectId,
+    workFrontId: updates.workFrontId !== undefined ? normalizeWorkFrontId(updates.workFrontId) : normalizeWorkFrontId(current.workFrontId),
+    workFrontName: updates.workFrontName !== undefined ? normalizeWorkFrontName(updates.workFrontName) : normalizeWorkFrontName(current.workFrontName),
     title: updates.title !== undefined ? String(updates.title || '').trim() : current.title,
     notes: updates.notes !== undefined ? String(updates.notes || '').trim() : current.notes
   };

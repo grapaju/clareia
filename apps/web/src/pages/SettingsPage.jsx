@@ -302,6 +302,12 @@ export default function SettingsPage() {
 
                   <TabsContent value="conta" className="mt-0 space-y-5">
                     <SectionTitle title="Conta e dados" description="Dados pessoais, senha e sessão ficam em uma área separada." />
+                    <ToggleRow
+                      label="Exibir Minha Mesa na navegação"
+                      description="Ao desativar, a Minha Mesa fica oculta, sem apagar nenhum conteúdo salvo."
+                      checked={preferences.showMyDeskInNavigation !== false}
+                      onChange={(value) => update({ showMyDeskInNavigation: value })}
+                    />
                     <Button onClick={() => navigate('/conta')}>Abrir Conta</Button>
                   </TabsContent>
                 </div>

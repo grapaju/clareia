@@ -266,6 +266,23 @@ CREATE TABLE IF NOT EXISTS project_profiles (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_project_profiles_user_name_ci
   ON project_profiles(user_id, lower(name));
 
+CREATE TABLE IF NOT EXISTS project_work_fronts (
+  id BIGSERIAL PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  project_name TEXT NOT NULL,
+  name TEXT NOT NULL,
+  display_order INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(user_id, project_name, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_work_fronts_user_project
+  ON project_work_fronts(user_id, lower(project_name), display_order ASC, created_at ASC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_project_work_fronts_user_project_name_ci
+  ON project_work_fronts(user_id, lower(project_name), lower(name));
+
 ALTER TABLE finance_client_project_mappings
   ADD COLUMN IF NOT EXISTS project_id BIGINT;
 

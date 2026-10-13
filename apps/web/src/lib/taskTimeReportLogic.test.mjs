@@ -18,6 +18,23 @@ test('relatorio de tarefas usa somente sessoes de tarefas e projetos', () => {
     { taskId: 'analytics', minutes: 130 },
     { taskId: 'idt-site', minutes: 105 },
   ]);
+  assert.deepEqual(report.byProjectFront.map(({ project, workFrontName, minutes }) => ({ project, workFrontName, minutes })), [
+    { project: 'Corcril', workFrontName: '', minutes: 130 },
+    { project: 'IDT-PR', workFrontName: '', minutes: 105 },
+  ]);
+});
+
+test('agrupa por projeto e frente quando a sessão informa a frente', () => {
+  const report = buildTaskTimeReport([
+    { taskId: 'infra-1', projectId: 'Grupo MAIS Empresas', workFrontName: 'Infraestrutura, cloud e segurança', durationMinutes: 45 },
+    { taskId: 'infra-2', projectId: 'Grupo MAIS Empresas', workFrontName: 'Infraestrutura, cloud e segurança', durationMinutes: 30 },
+    { taskId: 'm365-1', projectId: 'Grupo MAIS Empresas', workFrontName: 'Microsoft 365', durationMinutes: 20 },
+  ]);
+
+  assert.deepEqual(report.byProjectFront.map(({ project, workFrontName, minutes, sessions }) => ({ project, workFrontName, minutes, sessions })), [
+    { project: 'Grupo MAIS Empresas', workFrontName: 'Infraestrutura, cloud e segurança', minutes: 75, sessions: 2 },
+    { project: 'Grupo MAIS Empresas', workFrontName: 'Microsoft 365', minutes: 20, sessions: 1 },
+  ]);
 });
 
 test('totais diferentes entre jornada e tarefas sao aceitos', () => {

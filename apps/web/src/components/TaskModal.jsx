@@ -11,6 +11,7 @@ import MicrotaskEditor from './MicrotaskEditor.jsx';
 import { normalizeMicrotasks } from '@/lib/taskExecution.js';
 import { validateTaskInput } from '@/lib/taskInput.js';
 import ProjectSelect from '@/components/ProjectSelect.jsx';
+import WorkFrontSelect from '@/components/WorkFrontSelect.jsx';
 
 const TASK_TYPES = ['Cobrança', 'Reunião', 'Desenvolvimento', 'Site', 'Google Ads', 'Atendimento', 'Administrativo', 'Pessoal', 'Evento', 'Outro'];
 const TIME_OPTIONS = ['15', '30', '45', '60', '90', '120', '180'];
@@ -28,6 +29,8 @@ function initialData(task = {}) {
     ...task,
     title: task.title || '',
     project: task.project || '',
+    workFrontId: String(task.workFrontId || ''),
+    workFrontName: task.workFrontName || '',
     nextAction: task.nextAction || '',
     dueDate: task.dueDate ? String(task.dueDate).split('T')[0] : '',
     description: task.description || '',
@@ -97,6 +100,8 @@ export default function TaskModal({ task, projectContext = null, onSubmit, onCan
     try {
       await onSubmit({
         ...formData,
+        workFrontId: String(formData.workFrontId || ''),
+        workFrontName: String(formData.workFrontName || ''),
         scheduledDate: formData.dataSugeridaExecucao,
         scheduledPeriod: formData.periodoSugerido,
         manualSchedule: Boolean(formData.dataSugeridaExecucao),
@@ -127,9 +132,27 @@ export default function TaskModal({ task, projectContext = null, onSubmit, onCan
         <ProjectSelect
           value={formData.project}
           onChange={(value, profile) => {
+            const hasProjectChanged = value !== formData.project;
             handleChange('project', value);
+            if (!value || hasProjectChanged) {
+              handleChange('workFrontId', '');
+              handleChange('workFrontName', '');
+            }
             setSelectedProjectProfile(profile);
           }}
+        />
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="task-work-front">Frente de trabalho <span className="text-muted-foreground">(opcional)</span></Label>
+        <WorkFrontSelect
+          projectName={formData.project}
+          value={formData.workFrontId}
+          onChange={(frontId) => {
+            handleChange('workFrontId', frontId);
+            if (!frontId) handleChange('workFrontName', '');
+          }}
+          disabled={!formData.project}
         />
       </div>
 

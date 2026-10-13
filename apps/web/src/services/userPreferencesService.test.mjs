@@ -3,10 +3,23 @@ import assert from 'node:assert/strict';
 import { normalizeUserPreferences, readUserPreferences, saveUserPreferencesLocally } from './userPreferencesService.js';
 
 const storage = new Map();
+const listeners = new Map();
 globalThis.window = {
   localStorage: {
     getItem: (key) => storage.get(key) ?? null,
     setItem: (key, value) => storage.set(key, value),
+  },
+  addEventListener: (name, handler) => {
+    const current = listeners.get(name) || new Set();
+    current.add(handler);
+    listeners.set(name, current);
+  },
+  removeEventListener: (name, handler) => {
+    listeners.get(name)?.delete(handler);
+  },
+  dispatchEvent: (event) => {
+    listeners.get(event?.type)?.forEach((handler) => handler(event));
+    return true;
   },
   document: {
     documentElement: {
@@ -25,6 +38,7 @@ test('mantem defaults para usuarios existentes sem preferencias', () => {
   assert.equal(result.textSize, 'confortavel');
   assert.equal(result.microtaskDetail, 'equilibrado');
   assert.equal(result.openingPreference, 'dashboard');
+  assert.equal(result.showMyDeskInNavigation, true);
 });
 
 test('limita objetivos principais a duas escolhas e preserva secoes parciais', () => {
@@ -73,4 +87,9 @@ test('isola tamanho, detalhamento e abertura entre usuários', () => {
 test('migra opções antigas de tamanho para a escala atual', () => {
   assert.equal(normalizeUserPreferences({ textSize: 'normal' }).textSize, 'confortavel');
   assert.equal(normalizeUserPreferences({ textSize: 'maior' }).textSize, 'grande');
+});
+
+test('mantem Minha Mesa visível por padrão e respeita ocultação explícita', () => {
+  assert.equal(normalizeUserPreferences({}).showMyDeskInNavigation, true);
+  assert.equal(normalizeUserPreferences({ showMyDeskInNavigation: false }).showMyDeskInNavigation, false);
 });

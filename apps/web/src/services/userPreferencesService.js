@@ -37,6 +37,7 @@ export const DEFAULT_USER_PREFERENCES = Object.freeze({
   },
   quietHours: { enabled: false, start: '20:00', end: '08:00' },
   integrations: { googleCalendar: false, googleDrive: false },
+  showMyDeskInNavigation: true,
 });
 
 function storageKey(userId) {
@@ -55,7 +56,28 @@ export function normalizeUserPreferences(value = {}) {
     notifications: { ...DEFAULT_USER_PREFERENCES.notifications, ...(value.notifications || {}) },
     quietHours: { ...DEFAULT_USER_PREFERENCES.quietHours, ...(value.quietHours || {}) },
     integrations: { ...DEFAULT_USER_PREFERENCES.integrations, ...(value.integrations || {}) },
+    showMyDeskInNavigation: value.showMyDeskInNavigation !== false,
   };
+}
+
+const USER_PREFERENCES_EVENT = 'clareia:user-preferences-updated';
+
+function publishUserPreferences(userId, preferences) {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent(USER_PREFERENCES_EVENT, {
+    detail: { userId: String(userId || ''), preferences: normalizeUserPreferences(preferences) },
+  }));
+}
+
+export function subscribeUserPreferences(userId, callback) {
+  if (typeof window === 'undefined' || typeof callback !== 'function') return () => {};
+  const targetUserId = String(userId || '');
+  const onPreferences = (event) => {
+    if (targetUserId && event?.detail?.userId !== targetUserId) return;
+    callback(normalizeUserPreferences(event?.detail?.preferences || {}));
+  };
+  window.addEventListener(USER_PREFERENCES_EVENT, onPreferences);
+  return () => window.removeEventListener(USER_PREFERENCES_EVENT, onPreferences);
 }
 
 export function applyUserPreferencesToRoot(preferences) {
@@ -81,6 +103,7 @@ export function saveUserPreferencesLocally(userId, updates) {
   const next = normalizeUserPreferences({ ...readUserPreferences(userId), ...updates, updatedAt: new Date().toISOString() });
   window.localStorage.setItem(storageKey(userId), JSON.stringify(next));
   applyUserPreferencesToRoot(next);
+  publishUserPreferences(userId, next);
   return next;
 }
 

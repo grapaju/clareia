@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   Cloud,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
   FileText,
   Folder,
@@ -116,6 +117,12 @@ import {
   mergeProjectProfilesApi,
   updateProjectProfileApi
 } from '@/services/projectProfilesApiService.js';
+import {
+  createProjectWorkFrontApi,
+  deleteProjectWorkFrontApi,
+  listProjectWorkFrontsApi,
+  updateProjectWorkFrontApi,
+} from '@/services/projectWorkFrontsApiService.js';
 
 const LEGACY_PROJECT_PROFILES_KEY = 'clareia_project_profiles_v1';
 const PROJECT_HISTORY_KEY = 'clareia_project_history_v1';
@@ -264,6 +271,17 @@ export default function ProjectsPage() {
   const [notes, setNotes] = useState([]);
   const [workSessions, setWorkSessions] = useState([]);
   const [taskFilter, setTaskFilter] = useState('abertas');
+  const [workFrontFilter, setWorkFrontFilter] = useState('all');
+  const [workFronts, setWorkFronts] = useState([]);
+  const [collapsedWorkFronts, setCollapsedWorkFronts] = useState({});
+  const [newWorkFrontName, setNewWorkFrontName] = useState('');
+  const [isManageWorkFrontsOpen, setIsManageWorkFrontsOpen] = useState(false);
+  const [isCreatingWorkFront, setIsCreatingWorkFront] = useState(false);
+  const [editingWorkFrontId, setEditingWorkFrontId] = useState(null);
+  const [editingWorkFrontName, setEditingWorkFrontName] = useState('');
+  const [deletingWorkFront, setDeletingWorkFront] = useState(null);
+  const [deleteWorkFrontStrategy, setDeleteWorkFrontStrategy] = useState('unassign');
+  const [deleteWorkFrontTargetId, setDeleteWorkFrontTargetId] = useState('none');
   const [isManualTimeOpen, setIsManualTimeOpen] = useState(false);
   const [isDeleteSessionDialogOpen, setIsDeleteSessionDialogOpen] = useState(false);
   const [sessionToDelete, setSessionToDelete] = useState(null);
@@ -439,6 +457,30 @@ export default function ProjectsPage() {
   const selectedProfile = useMemo(() => profiles.find((item) => item.name === selectedProject) || null, [profiles, selectedProject]);
 
   useEffect(() => {
+    if (!selectedProject) {
+      setWorkFronts([]);
+      setWorkFrontFilter('all');
+      setCollapsedWorkFronts({});
+      return;
+    }
+    setWorkFrontFilter('all');
+    setCollapsedWorkFronts({});
+    let active = true;
+    listProjectWorkFrontsApi(selectedProject)
+      .then((items) => {
+        if (!active) return;
+        setWorkFronts(Array.isArray(items) ? items : []);
+      })
+      .catch(() => {
+        if (!active) return;
+        setWorkFronts([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [selectedProject]);
+
+  useEffect(() => {
     let isMounted = true;
 
     const loadDriveConfig = async () => {
@@ -534,12 +576,43 @@ export default function ProjectsPage() {
   const projectTasksOpen = useMemo(() => tasks.filter((item) => item.project === selectedProject && isTaskOpenStatus(item.status)), [tasks, selectedProject]);
   const projectTasksDone = useMemo(() => tasks.filter((item) => item.project === selectedProject && isTaskCompletedStatus(item.status)), [tasks, selectedProject]);
   const projectTasksArchived = useMemo(() => tasks.filter((item) => item.project === selectedProject && isTaskArchivedStatus(item.status)), [tasks, selectedProject]);
-  const projectTasksForFilter = useMemo(() => {
+  const projectTasksByStatusFilter = useMemo(() => {
     if (taskFilter === 'todas') return tasks.filter((item) => item.project === selectedProject);
     if (taskFilter === 'concluidas') return projectTasksDone;
     if (taskFilter === 'arquivadas') return projectTasksArchived;
     return projectTasksOpen;
   }, [taskFilter, tasks, selectedProject, projectTasksOpen, projectTasksDone, projectTasksArchived]);
+  const projectTasksForFilter = useMemo(() => {
+    if (workFrontFilter === 'all') return projectTasksByStatusFilter;
+    if (workFrontFilter === 'none') return projectTasksByStatusFilter.filter((task) => !normalizeText(task.workFrontId) && !normalizeText(task.workFrontName));
+    return projectTasksByStatusFilter.filter((task) => String(task.workFrontId || '') === workFrontFilter);
+  }, [projectTasksByStatusFilter, workFrontFilter]);
+  const projectTaskGroups = useMemo(() => {
+    const frontById = new Map(workFronts.map((front) => [String(front.id), front]));
+    const groups = new Map();
+
+    projectTasksForFilter.forEach((task) => {
+      const frontId = String(task.workFrontId || '').trim();
+      const knownFront = frontId ? frontById.get(frontId) : null;
+      const key = frontId || 'none';
+      const frontName = knownFront?.name || normalizeText(task.workFrontName) || 'Sem frente';
+      const current = groups.get(key) || { key, frontId, frontName, tasks: [] };
+      current.tasks.push(task);
+      groups.set(key, current);
+    });
+
+    const orderById = new Map(workFronts.map((front, index) => [String(front.id), index]));
+    return Array.from(groups.values()).sort((left, right) => {
+      if (left.key === 'none' && right.key !== 'none') return 1;
+      if (right.key === 'none' && left.key !== 'none') return -1;
+      const leftOrder = orderById.get(left.key);
+      const rightOrder = orderById.get(right.key);
+      if (leftOrder !== undefined && rightOrder !== undefined) return leftOrder - rightOrder;
+      if (leftOrder !== undefined) return -1;
+      if (rightOrder !== undefined) return 1;
+      return left.frontName.localeCompare(right.frontName, 'pt-BR');
+    });
+  }, [projectTasksForFilter, workFronts]);
 
   const projectTimeSummary = useMemo(() => getWorkTimeSummary(selectedProject || 'Pessoal'), [workSessions, selectedProject]);
 
@@ -1863,6 +1936,100 @@ export default function ProjectsPage() {
     });
   };
 
+  const reloadWorkFronts = async (projectName = selectedProject) => {
+    if (!projectName) return;
+    try {
+      const items = await listProjectWorkFrontsApi(projectName);
+      setWorkFronts(Array.isArray(items) ? items : []);
+    } catch {
+      setWorkFronts([]);
+    }
+  };
+
+  const handleCreateWorkFront = async () => {
+    const name = normalizeText(newWorkFrontName);
+    if (!selectedProject || !name) return;
+    setIsCreatingWorkFront(true);
+    try {
+      await createProjectWorkFrontApi(selectedProject, {
+        name,
+        displayOrder: workFronts.length,
+      });
+      setNewWorkFrontName('');
+      await reloadWorkFronts(selectedProject);
+      toast.success('Frente criada.');
+    } catch (error) {
+      toast.error(error?.status === 409
+        ? 'Já existe uma frente com esse nome neste projeto.'
+        : 'Não consegui criar a frente agora. Tente novamente.');
+    } finally {
+      setIsCreatingWorkFront(false);
+    }
+  };
+
+  const handleRenameWorkFront = async () => {
+    const nextName = normalizeText(editingWorkFrontName);
+    if (!selectedProject || !editingWorkFrontId || !nextName) return;
+    try {
+      await updateProjectWorkFrontApi(selectedProject, editingWorkFrontId, { name: nextName });
+      setEditingWorkFrontId(null);
+      setEditingWorkFrontName('');
+      await reloadWorkFronts(selectedProject);
+      toast.success('Frente atualizada.');
+    } catch (error) {
+      toast.error(error?.status === 409
+        ? 'Já existe uma frente com esse nome neste projeto.'
+        : 'Não consegui renomear a frente agora.');
+    }
+  };
+
+  const handleMoveWorkFront = async (frontId, direction) => {
+    const index = workFronts.findIndex((front) => Number(front.id) === Number(frontId));
+    if (index < 0) return;
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= workFronts.length) return;
+    const reordered = [...workFronts];
+    const [moved] = reordered.splice(index, 1);
+    reordered.splice(targetIndex, 0, moved);
+    setWorkFronts(reordered.map((front, order) => ({ ...front, displayOrder: order })));
+    try {
+      await Promise.all(reordered.map((front, order) => updateProjectWorkFrontApi(selectedProject, front.id, { displayOrder: order })));
+      await reloadWorkFronts(selectedProject);
+    } catch {
+      await reloadWorkFronts(selectedProject);
+      toast.error('Não consegui reordenar as frentes agora.');
+    }
+  };
+
+  const handleDeleteWorkFront = async () => {
+    if (!selectedProject || !deletingWorkFront?.id) return;
+    try {
+      await deleteProjectWorkFrontApi(selectedProject, deletingWorkFront.id, {
+        strategy: deleteWorkFrontStrategy,
+        targetFrontId: deleteWorkFrontStrategy === 'transfer' ? deleteWorkFrontTargetId : null,
+      });
+      setDeletingWorkFront(null);
+      setDeleteWorkFrontStrategy('unassign');
+      setDeleteWorkFrontTargetId('none');
+      await reloadWorkFronts(selectedProject);
+      await refreshTasks();
+      toast.success('Frente removida.');
+    } catch {
+      toast.error('Não consegui excluir a frente agora.');
+    }
+  };
+
+  const handleMoveTaskToFront = async (task, workFrontId) => {
+    try {
+      await updateTask(task.id, {
+        workFrontId: workFrontId || '',
+      });
+      await refreshTasks();
+    } catch {
+      toast.error('Não consegui atualizar a frente da tarefa.');
+    }
+  };
+
   const handleCreateTaskForProject = async (taskPayload) => {
     if (!selectedProject) return;
 
@@ -2719,6 +2886,19 @@ export default function ProjectsPage() {
                                   <SelectItem value="todas">Todas</SelectItem>
                                 </SelectContent>
                               </Select>
+                              <Select value={workFrontFilter} onValueChange={setWorkFrontFilter}>
+                                <SelectTrigger className="w-[220px]"><SelectValue placeholder="Filtrar por frente" /></SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="all">Todas as frentes</SelectItem>
+                                  <SelectItem value="none">Sem frente</SelectItem>
+                                  {workFronts.map((front) => (
+                                    <SelectItem key={front.id} value={String(front.id)}>{front.name}</SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                              <Button variant="outline" onClick={() => setIsManageWorkFrontsOpen(true)}>
+                                Gerenciar frentes
+                              </Button>
                               <Button onClick={() => setIsCreateTaskDialogOpen(true)}>
                                 <Plus className="w-4 h-4 mr-2" /> Adicionar tarefa
                               </Button>
@@ -2729,36 +2909,70 @@ export default function ProjectsPage() {
                             <p className="text-sm text-muted-foreground">Nenhuma tarefa neste filtro.</p>
                           ) : (
                             <div className="space-y-4">
-                              {projectTasksForFilter.map((task) => {
-                                const material = getTaskMaterials(task.id);
-                                const completedAt = getTaskLastCompletionDate(task.id);
-                                return (
-                                  <div key={task.id} className="rounded-xl border border-border p-4">
-                                    <TaskCard task={task} onComplete={completeTask} minimal />
-                                    <div className="mt-3 flex flex-wrap gap-2">
-                                      <Badge variant="outline">Arquivos vinculados: {material.relatedFiles.length}</Badge>
-                                      <Badge variant="outline">Links vinculados: {material.relatedLinks.length}</Badge>
-                                      <Badge variant="outline">Acessos vinculados: {material.relatedAccesses.length}</Badge>
-                                      <Badge variant="outline">Notas vinculadas: {material.relatedNotes.length}</Badge>
+                              {projectTaskGroups.map((group) => (
+                                <section key={group.key} className="rounded-xl border border-border p-3">
+                                  <button
+                                    type="button"
+                                    className="flex w-full items-center justify-between gap-3 rounded-md px-2 py-2 text-left hover:bg-muted/30"
+                                    onClick={() => setCollapsedWorkFronts((current) => ({ ...current, [group.key]: !current[group.key] }))}
+                                  >
+                                    <div>
+                                      <p className="text-sm font-medium">{group.frontName}</p>
+                                      <p className="text-xs text-muted-foreground">{group.tasks.length} tarefa(s)</p>
                                     </div>
+                                    <ChevronDown className={`h-4 w-4 transition-transform ${collapsedWorkFronts[group.key] ? '-rotate-90' : ''}`} />
+                                  </button>
 
-                                    {taskFilter === 'concluidas' && (
-                                      <div className="mt-3 rounded-lg bg-muted/30 p-3 text-xs text-muted-foreground space-y-1">
-                                        <p>Título: <span className="text-foreground">{task.title}</span></p>
-                                        <p>Projeto: <span className="text-foreground">{task.project || 'Pessoal'}</span></p>
-                                        <p>Data de conclusão: {completedAt ? formatDateTime(completedAt) : 'não registrada'}</p>
-                                        <p>Tempo registrado: {workSessions.filter((session) => session.taskId === task.id).reduce((sum, session) => sum + Number(session.durationMinutes || 0), 0)} min</p>
-                                        <p>Microtarefas concluídas: {(task.microtarefas || []).filter((item) => item.status === 'concluída').length}</p>
-                                        <div className="flex flex-wrap gap-2 pt-1">
-                                          <Button size="sm" variant="outline" onClick={() => openReopenTaskDialog(task)}>
-                                            Reabrir tarefa
-                                          </Button>
-                                        </div>
-                                      </div>
-                                    )}
-                                  </div>
-                                );
-                              })}
+                                  {!collapsedWorkFronts[group.key] && (
+                                    <div className="mt-3 space-y-4">
+                                      {group.tasks.map((task) => {
+                                        const material = getTaskMaterials(task.id);
+                                        const completedAt = getTaskLastCompletionDate(task.id);
+                                        return (
+                                          <div key={task.id} className="rounded-xl border border-border p-4">
+                                            <TaskCard task={task} onComplete={completeTask} minimal />
+                                            <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_220px] sm:items-center">
+                                              <div className="flex flex-wrap gap-2">
+                                                <Badge variant="outline">Arquivos vinculados: {material.relatedFiles.length}</Badge>
+                                                <Badge variant="outline">Links vinculados: {material.relatedLinks.length}</Badge>
+                                                <Badge variant="outline">Acessos vinculados: {material.relatedAccesses.length}</Badge>
+                                                <Badge variant="outline">Notas vinculadas: {material.relatedNotes.length}</Badge>
+                                              </div>
+                                              <Select
+                                                value={String(task.workFrontId || 'none')}
+                                                onValueChange={(value) => handleMoveTaskToFront(task, value === 'none' ? '' : value)}
+                                              >
+                                                <SelectTrigger><SelectValue placeholder="Sem frente" /></SelectTrigger>
+                                                <SelectContent>
+                                                  <SelectItem value="none">Sem frente</SelectItem>
+                                                  {workFronts.map((front) => (
+                                                    <SelectItem key={front.id} value={String(front.id)}>{front.name}</SelectItem>
+                                                  ))}
+                                                </SelectContent>
+                                              </Select>
+                                            </div>
+
+                                            {taskFilter === 'concluidas' && (
+                                              <div className="mt-3 rounded-lg bg-muted/30 p-3 text-xs text-muted-foreground space-y-1">
+                                                <p>Título: <span className="text-foreground">{task.title}</span></p>
+                                                <p>Projeto: <span className="text-foreground">{task.project || 'Pessoal'}</span></p>
+                                                <p>Data de conclusão: {completedAt ? formatDateTime(completedAt) : 'não registrada'}</p>
+                                                <p>Tempo registrado: {workSessions.filter((session) => session.taskId === task.id).reduce((sum, session) => sum + Number(session.durationMinutes || 0), 0)} min</p>
+                                                <p>Microtarefas concluídas: {(task.microtarefas || []).filter((item) => item.status === 'concluída').length}</p>
+                                                <div className="flex flex-wrap gap-2 pt-1">
+                                                  <Button size="sm" variant="outline" onClick={() => openReopenTaskDialog(task)}>
+                                                    Reabrir tarefa
+                                                  </Button>
+                                                </div>
+                                              </div>
+                                            )}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                </section>
+                              ))}
                             </div>
                           )}
                         </CardContent>
@@ -3651,6 +3865,122 @@ export default function ProjectsPage() {
               onSubmit={handleCreateTaskForProject}
               onCancel={() => setIsCreateTaskDialogOpen(false)}
             />
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={isManageWorkFrontsOpen} onOpenChange={setIsManageWorkFrontsOpen}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>Frentes de trabalho</DialogTitle>
+              <DialogDescription>
+                Organize as tarefas do projeto em frentes sem criar novas telas.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+                <Input
+                  value={newWorkFrontName}
+                  onChange={(event) => setNewWorkFrontName(event.target.value)}
+                  placeholder="Nome da frente"
+                />
+                <Button onClick={handleCreateWorkFront} disabled={!normalizeText(newWorkFrontName) || isCreatingWorkFront}>
+                  {isCreatingWorkFront ? 'Criando...' : 'Adicionar frente'}
+                </Button>
+              </div>
+
+              {workFronts.length === 0 ? (
+                <p className="text-sm text-muted-foreground">Nenhuma frente criada neste projeto.</p>
+              ) : (
+                <div className="space-y-2">
+                  {workFronts.map((front, index) => (
+                    <div key={front.id} className="grid gap-2 rounded-lg border border-border p-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+                      {editingWorkFrontId === front.id ? (
+                        <div className="flex gap-2">
+                          <Input
+                            value={editingWorkFrontName}
+                            onChange={(event) => setEditingWorkFrontName(event.target.value)}
+                          />
+                          <Button size="sm" onClick={handleRenameWorkFront} disabled={!normalizeText(editingWorkFrontName)}>Salvar</Button>
+                          <Button size="sm" variant="outline" onClick={() => { setEditingWorkFrontId(null); setEditingWorkFrontName(''); }}>Cancelar</Button>
+                        </div>
+                      ) : (
+                        <div>
+                          <p className="text-sm font-medium">{front.name}</p>
+                          <p className="text-xs text-muted-foreground">Ordem: {index + 1}</p>
+                        </div>
+                      )}
+                      <div className="flex flex-wrap gap-2">
+                        <Button size="sm" variant="outline" onClick={() => handleMoveWorkFront(front.id, 'up')} disabled={index === 0}>Subir</Button>
+                        <Button size="sm" variant="outline" onClick={() => handleMoveWorkFront(front.id, 'down')} disabled={index === workFronts.length - 1}>Descer</Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            setEditingWorkFrontId(front.id);
+                            setEditingWorkFrontName(front.name);
+                          }}
+                        >
+                          Renomear
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          onClick={() => {
+                            setDeletingWorkFront(front);
+                            setDeleteWorkFrontStrategy('unassign');
+                            setDeleteWorkFrontTargetId('none');
+                          }}
+                        >
+                          Excluir
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={Boolean(deletingWorkFront)} onOpenChange={(open) => !open && setDeletingWorkFront(null)}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Excluir frente de trabalho</DialogTitle>
+              <DialogDescription>
+                Escolha o destino das tarefas da frente {deletingWorkFront?.name ? `"${deletingWorkFront.name}"` : ''}.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3">
+              <Select value={deleteWorkFrontStrategy} onValueChange={setDeleteWorkFrontStrategy}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="unassign">Manter tarefas sem frente</SelectItem>
+                  <SelectItem value="transfer">Transferir tarefas para outra frente</SelectItem>
+                </SelectContent>
+              </Select>
+              {deleteWorkFrontStrategy === 'transfer' && (
+                <Select value={deleteWorkFrontTargetId} onValueChange={setDeleteWorkFrontTargetId}>
+                  <SelectTrigger><SelectValue placeholder="Escolher frente de destino" /></SelectTrigger>
+                  <SelectContent>
+                    {workFronts
+                      .filter((front) => Number(front.id) !== Number(deletingWorkFront?.id))
+                      .map((front) => (
+                        <SelectItem key={front.id} value={String(front.id)}>{front.name}</SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setDeletingWorkFront(null)}>Cancelar</Button>
+              <Button
+                variant="destructive"
+                onClick={handleDeleteWorkFront}
+                disabled={deleteWorkFrontStrategy === 'transfer' && deleteWorkFrontTargetId === 'none'}
+              >
+                Confirmar exclusão
+              </Button>
+            </DialogFooter>
           </DialogContent>
         </Dialog>
 

@@ -197,6 +197,11 @@ export default function TaskCard({ task, minimal }) {
                   {task.project}
                 </span>
               )}
+              {task.workFrontName && (
+                <span className="text-xs font-medium px-2 py-1 rounded-md border border-border text-muted-foreground">
+                  {task.workFrontName}
+                </span>
+              )}
               {task.timeEstimate && (
                 <span className={`text-xs flex items-center gap-1 text-muted-foreground border border-border px-2 py-1 rounded-md ${lowStimulationMode ? 'secondary-badge' : ''}`}>
                   <Clock className="w-3 h-3" /> {task.timeEstimate} min

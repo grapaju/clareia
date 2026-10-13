@@ -22,6 +22,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import ProjectSelect from '@/components/ProjectSelect.jsx';
+import WorkFrontSelect from '@/components/WorkFrontSelect.jsx';
 
 const TASK_TYPES = ['Cobrança', 'Reunião', 'Desenvolvimento', 'Site', 'Google Ads', 'Atendimento', 'Administrativo', 'Pessoal'];
 const PERIODS = ['Manhã', 'Tarde', 'Noite', 'Horário específico'];
@@ -72,6 +73,8 @@ export default function EditTaskModal({ task, isOpen, onClose }) {
       setFormData({
         title: task.title || '',
         project: task.project || '',
+        workFrontId: String(task.workFrontId || ''),
+        workFrontName: task.workFrontName || '',
         taskType: task.taskType || 'Desenvolvimento',
         nextAction: task.nextAction || '',
         timeEstimate: task.timeEstimate || '',
@@ -193,7 +196,30 @@ export default function EditTaskModal({ task, isOpen, onClose }) {
 
               <div className="space-y-2">
                 <Label>Projeto (opcional)</Label>
-                <ProjectSelect value={formData.project || ''} onChange={value => handleChange('project', value)} />
+                <ProjectSelect
+                  value={formData.project || ''}
+                  onChange={(value) => {
+                    const hasProjectChanged = value !== (formData.project || '');
+                    handleChange('project', value);
+                    if (!value || hasProjectChanged) {
+                      handleChange('workFrontId', '');
+                      handleChange('workFrontName', '');
+                    }
+                  }}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label>Frente de trabalho (opcional)</Label>
+                <WorkFrontSelect
+                  projectName={formData.project || ''}
+                  value={String(formData.workFrontId || '')}
+                  onChange={(frontId) => {
+                    handleChange('workFrontId', frontId);
+                    if (!frontId) handleChange('workFrontName', '');
+                  }}
+                  disabled={!formData.project}
+                />
               </div>
 
               <div className="space-y-2">

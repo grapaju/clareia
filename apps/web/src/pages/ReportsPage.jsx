@@ -127,6 +127,7 @@ export default function ReportsPage() {
   const [taskTypeFilter, setTaskTypeFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [sourceFilter, setSourceFilter] = useState('all');
+  const [groupByWorkFront, setGroupByWorkFront] = useState(false);
   const [journeyStatusFilter, setJourneyStatusFilter] = useState('all');
   const [professionalData, setProfessionalData] = useState({ journeys: [], pauses: [], activities: [] });
   const [isManualTimeOpen, setIsManualTimeOpen] = useState(false);
@@ -266,6 +267,7 @@ export default function ReportsPage() {
         return {
           ...session,
           taskTitle: task?.title || 'Sem tarefa',
+          workFrontName: String(session.workFrontName || task?.workFrontName || '').trim(),
           taskType: task?.taskType || 'Sem tipo',
           taskStatus: task ? normalizeTaskStatus(task.status) : 'sem_status'
         };
@@ -355,15 +357,26 @@ export default function ReportsPage() {
     const completedByProject = new Map();
     completedEvents.forEach((event) => {
       const project = event.projectId || 'Pessoal';
-      const ids = completedByProject.get(project) || new Set();
+      const task = taskById.get(event.taskId);
+      const workFrontName = String(task?.workFrontName || '').trim();
+      const key = groupByWorkFront
+        ? `${project}::${workFrontName.toLocaleLowerCase('pt-BR')}`
+        : project;
+      const ids = completedByProject.get(key) || new Set();
       ids.add(event.taskId);
-      completedByProject.set(project, ids);
+      completedByProject.set(key, ids);
     });
-    return taskTimeReport.byProject.map((row) => ({
-      ...row,
-      tasksDone: completedByProject.get(row.project)?.size || 0,
-    }));
-  }, [completedEvents, taskTimeReport.byProject]);
+    const sourceRows = groupByWorkFront ? taskTimeReport.byProjectFront : taskTimeReport.byProject;
+    return sourceRows.map((row) => {
+      const key = groupByWorkFront
+        ? `${row.project}::${String(row.workFrontName || '').trim().toLocaleLowerCase('pt-BR')}`
+        : row.project;
+      return {
+        ...row,
+        tasksDone: completedByProject.get(key)?.size || 0,
+      };
+    });
+  }, [completedEvents, groupByWorkFront, taskById, taskTimeReport.byProject, taskTimeReport.byProjectFront]);
 
   const perTaskRows = taskTimeReport.byTask;
 
@@ -768,6 +781,7 @@ export default function ReportsPage() {
       writeLine(`Projeto: ${projectFilter === 'all' ? 'Todos' : projectFilter}`);
       writeLine(`Tipo de tarefa: ${taskTypeFilter === 'all' ? 'Todos' : taskTypeFilter}`);
       writeLine(`Status: ${statusFilter === 'all' ? 'Todos' : statusFilter}`);
+      writeLine(`Agrupamento de horas: ${groupByWorkFront ? 'Projeto e frente' : 'Projeto'}`);
 
       if (professionalJourneyRows.length > 0) {
         divider();
@@ -787,12 +801,13 @@ export default function ReportsPage() {
       writeLine(`Projetos com tempo registrado: ${taskTotals.projectsWorked}`);
 
       divider();
-      writeLine('Total por projeto', { fontSize: 12, bold: true });
+      writeLine(groupByWorkFront ? 'Total por projeto e frente' : 'Total por projeto', { fontSize: 12, bold: true });
       if (perProjectRows.length === 0) {
         writeLine('Sem dados no período selecionado.');
       } else {
         perProjectRows.forEach((row) => {
-          writeLine(`${row.project} - ${formatDurationFriendly(row.minutes)} - ${pluralizeCount(row.tasksDone, 'tarefa concluída', 'tarefas concluídas')} - ${pluralizeCount(row.sessions, 'sessão', 'sessões')}`);
+          const label = row.workFrontName ? `${row.project} / ${row.workFrontName}` : row.project;
+          writeLine(`${label} - ${formatDurationFriendly(row.minutes)} - ${pluralizeCount(row.tasksDone, 'tarefa concluída', 'tarefas concluídas')} - ${pluralizeCount(row.sessions, 'sessão', 'sessões')}`);
         });
       }
 
@@ -897,6 +912,17 @@ export default function ReportsPage() {
                     <div className="space-y-1">
                       <Label>Período final</Label>
                       <Input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} />
+                    </div>
+                    <div className="space-y-1">
+                      <Label>Agrupamento de horas</Label>
+                      <label className="flex h-10 items-center gap-2 rounded-md border border-input bg-background px-3 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={groupByWorkFront}
+                          onChange={(event) => setGroupByWorkFront(event.target.checked)}
+                        />
+                        Agrupar por frente
+                      </label>
                     </div>
                     <div className="space-y-1">
                       <Label>Tipo de tarefa</Label>
@@ -1094,14 +1120,14 @@ export default function ReportsPage() {
 
               <Card className="bg-card border-border shadow-sm">
                 <CardContent className="p-6 space-y-3">
-                  <h2 className="text-lg font-medium text-foreground">Total por projeto</h2>
+                  <h2 className="text-lg font-medium text-foreground">{groupByWorkFront ? 'Total por projeto e frente' : 'Total por projeto'}</h2>
                   {perProjectRows.length === 0 ? (
                     <p className="text-sm text-muted-foreground">Ainda não há horas registradas neste período. Ajuste os filtros ou volte quando houver novos registros.</p>
                   ) : (
                     <div className="space-y-2">
                       {perProjectRows.map((row) => (
-                        <div key={row.project} className="rounded-lg border border-border p-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                          <p className="text-sm font-medium text-foreground">{row.project}</p>
+                        <div key={`${row.project}-${row.workFrontName || 'sem-frente'}`} className="rounded-lg border border-border p-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                          <p className="text-sm font-medium text-foreground">{row.workFrontName ? `${row.project} / ${row.workFrontName}` : row.project}</p>
                           <p className="text-sm text-muted-foreground">{formatDurationFriendly(row.minutes)} - {pluralizeCount(row.tasksDone, 'tarefa concluída', 'tarefas concluídas')} - {pluralizeCount(row.sessions, 'sessão', 'sessões')}</p>
                         </div>
                       ))}

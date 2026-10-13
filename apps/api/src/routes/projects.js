@@ -60,6 +60,48 @@ function mapProject(row) {
 	};
 }
 
+function mapWorkFront(row) {
+	return {
+		id: Number(row.id),
+		projectName: row.project_name,
+		name: row.name,
+		displayOrder: Number(row.display_order || 0),
+		createdAt: row.created_at,
+		updatedAt: row.updated_at,
+	};
+}
+
+function normalizeFrontName(value) {
+	return normalizeText(value);
+}
+
+function parseFrontId(value) {
+	const parsed = Number(value);
+	if (!Number.isInteger(parsed) || parsed < 1) return null;
+	return parsed;
+}
+
+function normalizeFrontOrder(value, fallback = 0) {
+	const parsed = Number(value);
+	if (!Number.isFinite(parsed)) return fallback;
+	return Math.max(0, Math.round(parsed));
+}
+
+async function projectExistsForUser(client, userId, projectName) {
+	const result = await client.query(
+		`SELECT 1
+		 FROM project_profiles
+		 WHERE user_id = $1 AND lower(name) = lower($2)
+		 UNION
+		 SELECT 1
+		 FROM tasks
+		 WHERE user_id = $1 AND lower(COALESCE(data->>'project', '')) = lower($2)
+		 LIMIT 1`,
+		[userId, projectName]
+	);
+	return Boolean(result.rows[0]);
+}
+
 router.use(requireAuth);
 
 router.get('/', async (req, res) => {
@@ -115,6 +157,220 @@ router.post('/', async (req, res) => {
 	res.status(201).json({ item: mapProject(created.rows[0]) });
 });
 
+router.get('/:name/work-fronts', async (req, res) => {
+	const projectName = normalizeText(req.params?.name);
+	if (!projectName) {
+		return res.status(400).json({ message: 'Nome do projeto e obrigatorio.' });
+	}
+
+	const fronts = await runQuery(
+		`SELECT id, project_name, name, display_order, created_at, updated_at
+		 FROM project_work_fronts
+		 WHERE user_id = $1 AND lower(project_name) = lower($2)
+		 ORDER BY display_order ASC, lower(name) ASC, created_at ASC`,
+		[req.userId, projectName]
+	);
+
+	return res.json({ items: fronts.rows.map(mapWorkFront) });
+});
+
+router.post('/:name/work-fronts', async (req, res) => {
+	const projectName = normalizeText(req.params?.name);
+	const name = normalizeFrontName(req.body?.name);
+	const displayOrder = normalizeFrontOrder(req.body?.displayOrder, 0);
+
+	if (!projectName) {
+		return res.status(400).json({ message: 'Nome do projeto e obrigatorio.' });
+	}
+	if (!name) {
+		return res.status(400).json({ message: 'Nome da frente e obrigatorio.' });
+	}
+
+	try {
+		const created = await withTransaction(async (client) => {
+			const exists = await projectExistsForUser(client, req.userId, projectName);
+			if (!exists) {
+				const error = new Error('Projeto nao encontrado.');
+				error.status = 404;
+				throw error;
+			}
+
+			const result = await client.query(
+				`INSERT INTO project_work_fronts (user_id, project_name, name, display_order)
+				 VALUES ($1, $2, $3, $4)
+				 RETURNING id, project_name, name, display_order, created_at, updated_at`,
+				[req.userId, projectName, name, displayOrder]
+			);
+			return result.rows[0];
+		});
+
+		return res.status(201).json({ item: mapWorkFront(created) });
+	} catch (error) {
+		if (error?.code === '23505') {
+			return res.status(409).json({ message: 'Ja existe uma frente com esse nome neste projeto.' });
+		}
+		throw error;
+	}
+});
+
+router.patch('/:name/work-fronts/:frontId', async (req, res) => {
+	const projectName = normalizeText(req.params?.name);
+	const frontId = parseFrontId(req.params?.frontId);
+	const hasName = Object.hasOwn(req.body || {}, 'name');
+	const hasDisplayOrder = Object.hasOwn(req.body || {}, 'displayOrder');
+	const nextName = normalizeFrontName(req.body?.name);
+
+	if (!projectName) {
+		return res.status(400).json({ message: 'Nome do projeto e obrigatorio.' });
+	}
+	if (!frontId) {
+		return res.status(400).json({ message: 'Frente invalida.' });
+	}
+	if (hasName && !nextName) {
+		return res.status(400).json({ message: 'Nome da frente e obrigatorio.' });
+	}
+	if (!hasName && !hasDisplayOrder) {
+		return res.status(400).json({ message: 'Nada para atualizar.' });
+	}
+
+	try {
+		const updated = await runQuery(
+			`UPDATE project_work_fronts
+			 SET
+			   name = CASE WHEN $1::boolean THEN $2 ELSE name END,
+			   display_order = CASE WHEN $3::boolean THEN $4 ELSE display_order END,
+			   updated_at = now()
+			 WHERE id = $5 AND user_id = $6 AND lower(project_name) = lower($7)
+			 RETURNING id, project_name, name, display_order, created_at, updated_at`,
+			[
+				hasName, nextName,
+				hasDisplayOrder, normalizeFrontOrder(req.body?.displayOrder, 0),
+				frontId, req.userId, projectName,
+			]
+		);
+		if (!updated.rows[0]) {
+			return res.status(404).json({ message: 'Frente nao encontrada.' });
+		}
+
+		const front = updated.rows[0];
+		await runQuery(
+			`UPDATE tasks
+			 SET data = jsonb_set(
+			   data,
+			   '{workFrontName}',
+			   to_jsonb($1::text),
+			   true
+			 ),
+			 updated_at = now()
+			 WHERE user_id = $2
+			   AND lower(COALESCE(data->>'project', '')) = lower($3)
+			   AND COALESCE(data->>'workFrontId', '') = $4`,
+			[front.name, req.userId, projectName, String(front.id)]
+		);
+
+		return res.json({ item: mapWorkFront(front) });
+	} catch (error) {
+		if (error?.code === '23505') {
+			return res.status(409).json({ message: 'Ja existe uma frente com esse nome neste projeto.' });
+		}
+		throw error;
+	}
+});
+
+router.delete('/:name/work-fronts/:frontId', async (req, res) => {
+	const projectName = normalizeText(req.params?.name);
+	const frontId = parseFrontId(req.params?.frontId);
+	const strategy = normalizeText(req.body?.strategy).toLowerCase() || 'unassign';
+	const targetFrontId = parseFrontId(req.body?.targetFrontId);
+
+	if (!projectName) {
+		return res.status(400).json({ message: 'Nome do projeto e obrigatorio.' });
+	}
+	if (!frontId) {
+		return res.status(400).json({ message: 'Frente invalida.' });
+	}
+	if (!['unassign', 'transfer'].includes(strategy)) {
+		return res.status(400).json({ message: 'Estrategia invalida.' });
+	}
+	if (strategy === 'transfer' && !targetFrontId) {
+		return res.status(400).json({ message: 'Frente de destino obrigatoria.' });
+	}
+	if (strategy === 'transfer' && targetFrontId === frontId) {
+		return res.status(400).json({ message: 'A frente de destino deve ser diferente.' });
+	}
+
+	const result = await withTransaction(async (client) => {
+		const sourceFrontQuery = await client.query(
+			`SELECT id, project_name, name
+			 FROM project_work_fronts
+			 WHERE id = $1 AND user_id = $2 AND lower(project_name) = lower($3)
+			 FOR UPDATE`,
+			[frontId, req.userId, projectName]
+		);
+		const sourceFront = sourceFrontQuery.rows[0];
+		if (!sourceFront) {
+			const error = new Error('Frente nao encontrada.');
+			error.status = 404;
+			throw error;
+		}
+
+		let targetFront = null;
+		if (strategy === 'transfer') {
+			const targetQuery = await client.query(
+				`SELECT id, name
+				 FROM project_work_fronts
+				 WHERE id = $1 AND user_id = $2 AND lower(project_name) = lower($3)
+				 FOR UPDATE`,
+				[targetFrontId, req.userId, projectName]
+			);
+			targetFront = targetQuery.rows[0];
+			if (!targetFront) {
+				const error = new Error('Frente de destino nao encontrada.');
+				error.status = 404;
+				throw error;
+			}
+		}
+
+		const moved = strategy === 'transfer'
+			? await client.query(
+				`UPDATE tasks
+				 SET data = jsonb_set(
+				   jsonb_set(data, '{workFrontId}', to_jsonb($1::text), true),
+				   '{workFrontName}',
+				   to_jsonb($2::text),
+				   true
+				 ),
+				 updated_at = now()
+				 WHERE user_id = $3
+				   AND lower(COALESCE(data->>'project', '')) = lower($4)
+				   AND COALESCE(data->>'workFrontId', '') = $5`,
+				[String(targetFront.id), targetFront.name, req.userId, projectName, String(sourceFront.id)]
+			)
+			: await client.query(
+				`UPDATE tasks
+				 SET data = (data - 'workFrontId' - 'workFrontName'),
+				     updated_at = now()
+				 WHERE user_id = $1
+				   AND lower(COALESCE(data->>'project', '')) = lower($2)
+				   AND COALESCE(data->>'workFrontId', '') = $3`,
+				[req.userId, projectName, String(sourceFront.id)]
+			);
+
+		await client.query(
+			`DELETE FROM project_work_fronts
+			 WHERE id = $1 AND user_id = $2`,
+			[sourceFront.id, req.userId]
+		);
+
+		return {
+			movedTasks: moved.rowCount || 0,
+			strategy,
+		};
+	});
+
+	return res.json(result);
+});
+
 router.post('/merge', async (req, res) => {
 	const source = normalizeText(req.body?.source);
 	const target = normalizeText(req.body?.target);
@@ -150,7 +406,8 @@ router.post('/merge', async (req, res) => {
 
 		const tasks = await client.query(
 			`UPDATE tasks
-			 SET data = jsonb_set(data, '{project}', to_jsonb($1::text), true), updated_at = now()
+			 SET data = (jsonb_set(data, '{project}', to_jsonb($1::text), true) - 'workFrontId' - 'workFrontName'),
+			     updated_at = now()
 			 WHERE user_id = $2 AND lower(COALESCE(data->>'project', '')) = lower($3)
 			 RETURNING id`,
 			[canonicalTarget, req.userId, source]
@@ -217,6 +474,11 @@ router.post('/merge', async (req, res) => {
 			 SET project_id = $1, project_name = $1, updated_at = now()
 			 WHERE user_id = $2 AND lower(project_id) = lower($3)`,
 			[canonicalTarget, req.userId, source]
+		);
+		await client.query(
+			`DELETE FROM project_work_fronts
+			 WHERE user_id = $1 AND lower(project_name) = lower($2)`,
+			[req.userId, source]
 		);
 
 		await client.query(
@@ -327,6 +589,12 @@ router.patch('/:name', async (req, res) => {
 			 WHERE user_id = $2 AND lower(project_name) = lower($3)`,
 			[nextName, req.userId, currentName]
 		);
+		await client.query(
+			`UPDATE project_work_fronts
+			 SET project_name = $1, updated_at = now()
+			 WHERE user_id = $2 AND lower(project_name) = lower($3)`,
+			[nextName, req.userId, currentName]
+		);
 
 		return updated.rows[0];
 	});
@@ -351,6 +619,11 @@ router.delete('/:name', async (req, res) => {
 		await client.query(
 			`DELETE FROM google_drive_project_folders
 			 WHERE user_id = $1 AND project_id = $2`,
+			[req.userId, name]
+		);
+		await client.query(
+			`DELETE FROM project_work_fronts
+			 WHERE user_id = $1 AND lower(project_name) = lower($2)`,
 			[req.userId, name]
 		);
 

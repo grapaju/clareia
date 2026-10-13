@@ -242,6 +242,7 @@ export default function TaskDetailsModal({ task, isOpen, onClose }) {
                 <h3 className="text-lg font-medium text-foreground mb-2">{task.title}</h3>
                 <div className="flex flex-wrap gap-2">
                   <Badge variant="secondary">{task.project || 'Pessoal'}</Badge>
+                  {task.workFrontName && <Badge variant="outline">{task.workFrontName}</Badge>}
                   <Badge variant="outline">{task.timeEstimate || 30} min</Badge>
                   <Badge variant="outline">{task.energiaNecessaria || 'Média'} energia</Badge>
                   {task.executionDifficulty && <Badge variant="outline">{task.executionDifficulty}</Badge>}

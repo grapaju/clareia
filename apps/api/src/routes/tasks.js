@@ -27,6 +27,63 @@ function normalizeTaskDates(data = {}, changedData = data) {
   return { ...data, dueDate, scheduledDate };
 }
 
+function removeTaskWorkFront(data = {}) {
+  const next = { ...data };
+  delete next.workFrontId;
+  delete next.workFrontName;
+  return next;
+}
+
+async function resolveTaskWorkFront(queryable, userId, taskData = {}, changedData = {}) {
+  const projectName = normalizeText(taskData?.project);
+  if (!projectName) return removeTaskWorkFront(taskData);
+
+  const hasFrontIdChange = Object.prototype.hasOwnProperty.call(changedData || {}, 'workFrontId');
+  const hasFrontNameChange = Object.prototype.hasOwnProperty.call(changedData || {}, 'workFrontName');
+  const changedFrontId = normalizeText(changedData?.workFrontId);
+  const changedFrontName = normalizeText(changedData?.workFrontName);
+
+  if (hasFrontIdChange && !changedFrontId && !changedFrontName) {
+    return removeTaskWorkFront(taskData);
+  }
+
+  const candidateFrontId = normalizeText(taskData?.workFrontId);
+  const candidateFrontName = normalizeText(taskData?.workFrontName);
+  if (!candidateFrontId && !candidateFrontName) {
+    return removeTaskWorkFront(taskData);
+  }
+
+  let found = null;
+  if (candidateFrontId && /^\d+$/.test(candidateFrontId)) {
+    const byId = await queryable.query(
+      `SELECT id, name
+       FROM project_work_fronts
+       WHERE user_id = $1 AND lower(project_name) = lower($2) AND id = $3
+       LIMIT 1`,
+      [userId, projectName, Number(candidateFrontId)]
+    );
+    found = byId.rows[0] || null;
+  }
+
+  if (!found && candidateFrontName) {
+    const byName = await queryable.query(
+      `SELECT id, name
+       FROM project_work_fronts
+       WHERE user_id = $1 AND lower(project_name) = lower($2) AND lower(name) = lower($3)
+       LIMIT 1`,
+      [userId, projectName, candidateFrontName]
+    );
+    found = byName.rows[0] || null;
+  }
+
+  if (!found) return removeTaskWorkFront(taskData);
+  return {
+    ...taskData,
+    workFrontId: String(found.id),
+    workFrontName: found.name,
+  };
+}
+
 function buildTaskRecord(row) {
   const data = normalizeTaskDates(row.data || {});
   return {
@@ -114,7 +171,8 @@ router.post('/', async (req, res) => {
 
   const id = `task-${Date.now()}-${randomUUID().slice(0, 8)}`;
   const accountId = normalizeText(req.authUser?.accountId);
-  const payload = normalizeTaskDates({ ...(req.body || {}), id, userId: req.userId, accountId });
+  const normalizedPayload = normalizeTaskDates({ ...(req.body || {}), id, userId: req.userId, accountId });
+  const payload = await resolveTaskWorkFront({ query: runQuery }, req.userId, normalizedPayload, req.body || {});
 
   const created = await runQuery(
     `INSERT INTO tasks (id, user_id, account_id, data)
@@ -448,6 +506,7 @@ router.patch('/:id', async (req, res) => {
     userId: req.userId,
     accountId: normalizeText(req.authUser?.accountId),
   }, req.body || {});
+  const payload = await resolveTaskWorkFront({ query: runQuery }, req.userId, mergedData, req.body || {});
 
   const nextAccountId = normalizeText(req.authUser?.accountId);
 
@@ -458,7 +517,7 @@ router.patch('/:id', async (req, res) => {
          updated_at = now()
      WHERE id = $3 AND user_id = $4
      RETURNING id, user_id, account_id, data, created_at, updated_at`,
-    [nextAccountId, JSON.stringify(mergedData), taskId, req.userId]
+    [nextAccountId, JSON.stringify(payload), taskId, req.userId]
   );
 
   res.json({ item: buildTaskRecord(updated.rows[0]) });

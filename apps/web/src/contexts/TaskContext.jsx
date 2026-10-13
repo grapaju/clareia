@@ -433,6 +433,8 @@ export function TaskProvider({ children }) {
       if (customMinutes > 0) {
         const manualSession = addManualWorkSession({
           projectId: workingTask?.project || 'Pessoal',
+          workFrontId: workingTask?.workFrontId || '',
+          workFrontName: workingTask?.workFrontName || '',
           taskId: id,
           durationMinutes: customMinutes,
           title: `Conclusão: ${workingTask?.title || 'Tarefa'}`,
@@ -635,6 +637,8 @@ export function TaskProvider({ children }) {
       }
       await startTimerWorkSession({
         projectId: task.project || 'Pessoal',
+        workFrontId: task.workFrontId || '',
+        workFrontName: task.workFrontName || '',
         taskId: task.id,
         title: task.title || 'Sessão de trabalho'
       });

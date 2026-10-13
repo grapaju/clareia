@@ -82,7 +82,7 @@ import { createOrReusePlanDraft } from '@/services/planDraftService.js';
 import { listProjectProfilesApi } from '@/services/projectProfilesApiService.js';
 import { createProjectFile } from '@/services/projectFileService.js';
 import { createProjectLink } from '@/services/projectLinkService.js';
-import { readUserPreferences } from '@/services/userPreferencesService.js';
+import { readUserPreferences, subscribeUserPreferences } from '@/services/userPreferencesService.js';
 import { createWaitingReturn, listProjectWaitingReturns, subscribeToWaitingReturns } from '@/services/waitingReturnService.js';
 import { readUserScopedJson, writeUserScopedJson } from '@/lib/userScopedStorage.js';
 import { buildProjectMaterialReferences, collectProjectMaterials, toReferencePreferenceKey } from '@/lib/myDeskProjectReferencesLogic.js';
@@ -2250,9 +2250,21 @@ export default function MyDesk({ open, onClose }) {
 }
 
 export function MyDeskHost({ children }) {
+  const { currentUser } = useAuth();
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
+  const [isVisible, setIsVisible] = useState(true);
   const triggerRef = useRef(null);
   const scrollRef = useRef(0);
+
+  useEffect(() => {
+    const userId = currentUser?.id || '';
+    const applyVisibility = (preferences) => {
+      setIsVisible(preferences?.showMyDeskInNavigation !== false);
+    };
+    applyVisibility(readUserPreferences(userId));
+    return subscribeUserPreferences(userId, applyVisibility);
+  }, [currentUser?.id]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -2268,17 +2280,23 @@ export function MyDeskHost({ children }) {
     };
   }, [open]);
 
+  useEffect(() => {
+    if (isVisible || !open) return;
+    setOpen(false);
+    navigate('/', { replace: true });
+  }, [isVisible, navigate, open]);
+
   return (
-    <MyDeskContext.Provider value={{ open, setOpen, triggerRef }}>
+    <MyDeskContext.Provider value={{ open, setOpen, triggerRef, isVisible }}>
       <div inert={open ? '' : undefined} aria-hidden={open ? 'true' : undefined}>{children}</div>
-      <MyDesk open={open} onClose={() => setOpen(false)} />
+      <MyDesk open={open && isVisible} onClose={() => setOpen(false)} />
     </MyDeskContext.Provider>
   );
 }
 
 export function MyDeskLauncher() {
   const desk = useContext(MyDeskContext);
-  if (!desk || desk.open) return null;
+  if (!desk || desk.open || desk.isVisible === false) return null;
 
   return (
     <TooltipProvider delayDuration={250}>

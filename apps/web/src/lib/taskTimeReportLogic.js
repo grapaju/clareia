@@ -4,6 +4,7 @@ function durationMinutes(session) {
 
 export function buildTaskTimeReport(sessions = []) {
   const byProject = new Map();
+  const byProjectFront = new Map();
   const byTask = new Map();
 
   sessions.forEach((session) => {
@@ -13,6 +14,17 @@ export function buildTaskTimeReport(sessions = []) {
     projectEntry.minutes += minutes;
     projectEntry.sessions += 1;
     byProject.set(project, projectEntry);
+    const workFrontName = String(session?.workFrontName || '').trim();
+    const projectFrontKey = `${project}::${workFrontName.toLocaleLowerCase('pt-BR')}`;
+    const projectFrontEntry = byProjectFront.get(projectFrontKey) || {
+      project,
+      workFrontName,
+      minutes: 0,
+      sessions: 0,
+    };
+    projectFrontEntry.minutes += minutes;
+    projectFrontEntry.sessions += 1;
+    byProjectFront.set(projectFrontKey, projectFrontEntry);
 
     if (!session?.taskId) return;
     const taskEntry = byTask.get(session.taskId) || {
@@ -31,6 +43,7 @@ export function buildTaskTimeReport(sessions = []) {
     taskTrackedTime: sessions.reduce((total, session) => total + durationMinutes(session), 0),
     sessionCount: sessions.length,
     byProject: [...byProject.values()].sort((left, right) => right.minutes - left.minutes),
+    byProjectFront: [...byProjectFront.values()].sort((left, right) => right.minutes - left.minutes),
     byTask: [...byTask.values()].sort((left, right) => right.minutes - left.minutes),
   };
 }
